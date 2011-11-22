@@ -1,0 +1,5 @@
+debian/mans/swift-object/swift-object-auditor.8
+debian/mans/swift-object/swift-object-info.8
+debian/mans/swift-object/swift-object-replicator.8
+debian/mans/swift-object/swift-object-server.8
+debian/mans/swift-object/swift-object-updater.8

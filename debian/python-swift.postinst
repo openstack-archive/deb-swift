@@ -1,0 +1,10 @@
+#!/bin/sh -e
+
+#DEBHELPER#
+
+if ! getent passwd swift > /dev/null ; then
+  adduser --system --quiet --disabled-login --disabled-password --no-create-home --group swift
+fi
+
+usermod -G adm swift
+

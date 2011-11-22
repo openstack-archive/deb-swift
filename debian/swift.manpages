@@ -1,0 +1,16 @@
+debian/mans/swift/swift.8
+debian/mans/swift/swauth-add-account.8
+debian/mans/swift/swauth-add-user.8
+debian/mans/swift/swauth-cleanup-tokens.8
+debian/mans/swift/swauth-delete-account.8
+debian/mans/swift/swauth-delete-user.8
+debian/mans/swift/swauth-list.8
+debian/mans/swift/swauth-prep.8
+debian/mans/swift/swauth-set-account-service.8
+debian/mans/swift/swift-account-audit.8
+debian/mans/swift/swift-bench.8
+debian/mans/swift/swift-get-nodes.8
+debian/mans/swift/swift-ring-builder.8
+debian/mans/swift/swift-stats-populate.8
+debian/mans/swift/swift-stats-report.8
+debian/mans/swift/swift-log-stats-collector.8

@@ -1,0 +1,4 @@
+debian/mans/swift-auth/swift-auth-add-user.8
+debian/mans/swift-auth/swift-auth-recreate-accounts.8
+debian/mans/swift-auth/swift-auth-server.8
+debian/mans/swift-auth/swift-auth-to-swauth.8

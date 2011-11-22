@@ -1,0 +1,44 @@
+#!/usr/bin/make -f
+
+# Verbose mode
+#export DH_VERBOSE=1
+
+%:
+	dh $@ --with python2
+
+# clean sphinx build output
+override_dh_clean:
+	dh_clean
+	rm -rf doc/build/*
+
+# build with sphinx documentation
+override_dh_auto_build:
+	dh_auto_build
+	mkdir -p doc/build
+	python setup.py build_sphinx
+
+override_dh_auto_test:
+	ls -ld /dev/log || true
+	dpkg -l || true
+#	python setup.py test 
+
+get-orig-source:
+	uscan --verbose --force-download --rename --destdir=../build-area
+
+override_dh_install:
+	dh_install
+	install -D -m 0640 $(CURDIR)/debian/account-server.conf $(CURDIR)/debian/swift-account/etc/swift/account-server.conf
+	install -D -m 0640 $(CURDIR)/debian/container-server.conf $(CURDIR)/debian/swift-container/etc/swift/container-server.conf
+	install -D -m 0640 $(CURDIR)/debian/object-server.conf $(CURDIR)/debian/swift-object/etc/swift/object-server.conf
+
+override_dh_installinit:
+	dh_installinit --no-start
+	dh_installinit --no-start -pswift-container --init-script=swift-container-replicator
+	dh_installinit --no-start -pswift-account --init-script=swift-account-replicator
+	dh_installinit --no-start -pswift-account --init-script=swift-account-reaper
+	dh_installinit --no-start -pswift-object --init-script=swift-object-auditor
+	dh_installinit --no-start -pswift-container --init-script=swift-container-auditor
+	dh_installinit --no-start -pswift-account --init-script=swift-account-auditor
+	dh_installinit --no-start -pswift-object --init-script=swift-object-updater
+	dh_installinit --no-start -pswift-object --init-script=swift-object-replicator
+	dh_installinit --no-start -pswift-container --init-script=swift-container-updater

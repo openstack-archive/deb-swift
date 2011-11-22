@@ -1,0 +1,4 @@
+etc/stats.conf-sample
+etc/drive-audit.conf-sample
+etc/swift.conf-sample
+etc/dispersion.conf-sample

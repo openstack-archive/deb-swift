@@ -1,0 +1,5 @@
+debian/mans/swift-account/swift-account-auditor.8
+debian/mans/swift-account/swift-account-reaper.8
+debian/mans/swift-account/swift-account-replicator.8
+debian/mans/swift-account/swift-account-server.8
+debian/mans/swift-account/swift-account-stats-logger.8

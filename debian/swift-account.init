@@ -1,0 +1,47 @@
+#! /bin/sh
+### BEGIN INIT INFO
+# Provides:          swift-account
+# Required-Start:    $remote_fs
+# Required-Stop:     $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Swift account server
+# Description:       Account server for swift.
+### END INIT INFO
+
+#/usr/bin/swift-init account-server $1
+
+SERVICE_NAME="account-server"
+PRINT_NAME="account server"
+
+. /lib/lsb/init-functions
+
+if ! [ -x /usr/bin/swift-init ] ; then
+	exit 0
+fi
+
+case "$1" in
+start)
+	log_daemon_msg "Starting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
+	/usr/bin/swift-init ${SERVICE_NAME} start
+	log_end_msg $?
+;;   
+stop)
+	log_daemon_msg "Stopping Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
+	/usr/bin/swift-init ${SERVICE_NAME} stop
+	log_end_msg $?
+;;
+restart|force-reload|reload)
+        log_daemon_msg "Restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
+        /usr/bin/swift-init ${SERVICE_NAME} reload
+;;
+status)
+        exec /usr/bin/swift-init ${SERVICE_NAME} status
+;;
+*)
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1
+;;  
+esac
+
+exit 0

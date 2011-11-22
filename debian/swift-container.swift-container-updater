@@ -1,0 +1,62 @@
+#! /bin/sh
+### BEGIN INIT INFO
+# Provides:          swift-container-updater
+# Required-Start:    $remote_fs
+# Required-Stop:     $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Swift container updater server
+# Description:       Container updater server for swift.
+### END INIT INFO
+
+set -e
+
+SERVICE_NAME="swift-container-updater"
+DAEMON="/usr/bin/${SERVICE_NAME}"
+DAEMON_ARGS="/etc/swift/container-server.conf"
+PRINT_NAME="Swift countainer updater"
+SWIFT_USER=swift
+SWIFT_GRP=swift
+PID_FILE=/var/run/swift/${SERVICE_NAME}.pid
+PID_DIR=`dirname $PID_FILE`
+  
+if ! [ -x "${DAEMON}" ] ; then
+	exit 0 
+fi
+
+if ! [ -r "${DAEMON_ARGS}" ] ; then
+	echo "No configuration file found in ${DAEMON_ARGS}: exiting"
+	exit 0
+fi
+              
+mkdir -p ${PID_DIR}
+chown ${SWIFT_USER} ${PID_DIR}
+
+. /lib/lsb/init-functions
+
+case "$1" in
+start)
+	log_daemon_msg "Starting ${PRINT_NAME=}" "${SERVICE_NAME}"
+	start-stop-daemon --start --chuid ${SWIFT_USER}:${SWIFT_GRP} -b -m --pidfile $PID_FILE --exec ${DAEMON} -- ${DAEMON_ARGS}
+	log_end_msg $?                     
+;;
+stop)
+	log_daemon_msg "Stopping ${PRINT_NAME}" "${SERVICE_NAME}"
+	start-stop-daemon --stop --oknodo --pidfile ${PID_FILE}
+	log_end_msg $?                          
+;;                    
+restart|force-reload|reload)
+	$0 stop             
+	sleep 1
+	$0 start
+;;
+status)
+        status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
+;;
+*)
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1                                      
+;;            
+esac
+    
+exit 0

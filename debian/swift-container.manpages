@@ -1,0 +1,4 @@
+debian/mans/swift-container/swift-container-auditor.8
+debian/mans/swift-container/swift-container-replicator.8
+debian/mans/swift-container/swift-container-server.8
+debian/mans/swift-container/swift-container-updater.8

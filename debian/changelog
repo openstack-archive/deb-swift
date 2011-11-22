@@ -1,0 +1,135 @@
+swift (1.4.3-1) unstable; urgency=low
+
+  * [984c1f2] Imported Upstream version 1.4.3
+     - Closes: #629998  no more st binary
+  * Some package cleanup and sync with ubuntu pkg
+
+ -- Ghe Rivero <ghe@debian.org>  Tue, 08 Nov 2011 08:25:40 +0100
+
+swift (1.3.0-1) unstable; urgency=low
+
+  * Added missing adduser and lsb-base dependency.
+  * Made the long description longer (it was really minimalistic).
+  * Reworked all Debian init.d scripts.
+  * Added many missing manpages.
+  * Added default container-server.conf & object-server.conf files.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 10 May 2011 09:24:33 +0000
+
+swift (1.3.0-0ubuntu1) natty; urgency=low
+
+  * New upstream release. 
+
+ -- Chuck Short <zulcss@ubuntu.com>  Fri, 15 Apr 2011 08:25:53 -0400
+
+swift (1.3-rc+bzr266-0ubuntu1) UNRELEASED; urgency=low
+
+  * New upstream release.
+
+ -- Chuck Short <zulcss@ubuntu.com>  Thu, 14 Apr 2011 09:38:42 -0400
+
+swift (1.2.0+bzr208-0ubuntu1) natty; urgency=low
+
+  * New upstream release. 
+
+ -- Chuck Short <zulcss@ubuntu.com>  Tue, 12 Apr 2011 10:32:30 -0400
+
+swift (1.2.0-0ubuntu1) natty; urgency=low
+
+  * New upstream release.
+  * Updated VC locations in control file.
+  * Set maintainer properly for Ubuntu.
+
+ -- Monty Taylor <mordred@inaugust.com>  Wed, 16 Feb 2011 08:50:48 -0800
+
+swift (1.1.0+bzr173-0ubuntu1) natty; urgency=low
+
+  * Fresh snapshot.
+  * Updated watch file to also know about the new tarballs place.
+  * Update Maintainer to point to myself.
+  * Add a get-orig-source target to debian/rules.
+
+ -- Soren Hansen <soren@ubuntu.com>  Sat, 15 Jan 2011 00:19:38 +0100
+
+swift (1.0.99+1.1.0rc1-1) unstable; urgency=low
+
+  * New upstream release.
+  * Updated to standards version 3.9.1.
+  * Use jquery package to provide jquery.js.
+  * Updated some of the control file to make lintian happy.
+
+ -- Monty Taylor <mordred@inaugust.com>  Tue, 19 Oct 2010 14:32:17 -0700
+
+swift (1.0.2-7) unstable; urgency=low
+
+  * Added swift-bench to swift package.
+
+ -- Monty Taylor <mordred@inaugust.com>  Mon, 18 Oct 2010 09:14:22 -0700
+
+swift (1.0.2-6) unstable; urgency=low
+
+  * swift-auth-create-account is now swift-auth-add-user.
+
+ -- Greg Holt <gholt@rackspace.com>  Fri, 03 Sep 2010 13:32:20 +0000
+
+swift (1.0.2-5) unstable; urgency=low
+
+  * Add a step in debian/rules to create doc/build if it doesn't exist.
+
+ -- Monty Taylor <mordred@inaugust.com>  Wed, 25 Aug 2010 08:55:45 -0700
+
+swift (1.0.2-4) unstable; urgency=low
+
+  * Fixed the depend on sphinx - it actually only needs to be >= 1.0.
+  * Added paste-deploy as a depend.
+
+ -- Monty Taylor <mordred@inaugust.com>  Tue, 24 Aug 2010 12:02:31 -0700
+
+swift (1.0.2-3) unstable; urgency=low
+
+  [ Greg Holt ]
+  * Added a png to the docs.
+
+  [ Monty Taylor ]
+  * Add rsync and remove duplicate net-tools dependency.
+  * Added Jay Payne to uploaders.
+  * Added Greg Holt to uploaders.
+  * Updated VCS location to use UDD locations. 
+  * We actually depend on 1.0 of sphinx.
+
+ -- Monty Taylor <mordred@inaugust.com>  Tue, 24 Aug 2010 00:02:00 -0700
+
+swift (1.0.2-2) unstable; urgency=low
+
+  * Created python-swift package and actually put the python files in it.
+  * Added python build dep.
+  * Added debhelper token to postinst script. Also removed the
+    byte-compiling of the files, since python-support should do that for us.
+  * Cleaned up control file - removed homepage entries in description,
+    removed trailing periods.
+  * Changed provides in swift-proxy to match policy.
+
+ -- Monty Taylor <mordred@inaugust.com>  Wed, 28 Jul 2010 13:32:55 -0700
+
+swift (1.0.2-1) unstable; urgency=low
+
+  * New upstream release.
+  * Added VCS info to control file.
+
+ -- Monty Taylor <mordred@inaugust.com>  Thu, 22 Jul 2010 18:32:02 -0500
+
+swift (1.0.1-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Monty Taylor <mordred@inaugust.com>  Mon, 19 Jul 2010 11:22:41 -0500
+
+swift (1.0.0-1) unstable; urgency=low
+
+  [ Michael Barton ]
+  * Initial release
+
+  [ Monty Taylor ]
+  * Added docs to doc system.
+
+ -- Monty Taylor <mordred@inaugust.com>  Wed, 14 Jul 2010 10:41:11 -0500
