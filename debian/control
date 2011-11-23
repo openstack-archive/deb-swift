@@ -19,9 +19,8 @@ Build-Depends: debhelper (>= 7.0.50~),
 Standards-Version: 3.9.2
 X-Python-Version: >= 2.6
 Homepage: http://launchpad.net/swift
-Vcs-Browser: http://bazaar.launchpad.net/~openstack-ubuntu-packagers/ubuntu/natty/swift/ubuntu
-Vcs-Bzr: http://bazaar.launchpad.net/~openstack-ubuntu-packagers/ubuntu/natty/swift/ubuntu
-
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/swift.git;a=summary
+Vcs-Git: git://anonscm.debian.org/openstack/swift.git
 
 Package: python-swift
 Architecture: all
