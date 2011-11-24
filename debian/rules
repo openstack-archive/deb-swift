@@ -9,6 +9,7 @@
 # clean sphinx build output
 override_dh_clean:
 	dh_clean
+	rm -rf swift.egg-info
 	rm -rf doc/build/*
 
 # build with sphinx documentation
