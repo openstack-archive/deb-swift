@@ -1,3 +1,9 @@
+swift (1.4.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Julien Danjou <acid@debian.org>  Thu, 24 Nov 2011 17:10:32 +0100
+
 swift (1.4.3-1) unstable; urgency=low
 
   * [984c1f2] Imported Upstream version 1.4.3
