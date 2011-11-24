@@ -21,7 +21,7 @@ from hashlib import sha1
 import hmac
 import base64
 
-from eventlet import TimeoutError
+from eventlet import Timeout
 from webob import Response, Request
 from webob.exc import HTTPBadRequest, HTTPForbidden, HTTPNotFound, \
     HTTPUnauthorized
@@ -39,6 +39,11 @@ class TempAuth(object):
 
         [pipeline:main]
         pipeline = catch_errors cache tempauth proxy-server
+
+    Set account auto creation to true in proxy-server.conf::
+
+        [app:proxy-server]
+        account_autocreate = true
 
     And add a tempauth filter section, such as::
 
@@ -94,7 +99,6 @@ class TempAuth(object):
                 groups = values
                 self.users[conf_key.split('_', 1)[1].replace('_', ':')] = {
                     'key': key, 'url': url, 'groups': values}
-        self.created_accounts = False
 
     def __call__(self, env, start_response):
         """
@@ -116,26 +120,6 @@ class TempAuth(object):
         will be routed through the internal auth request handler (self.handle).
         This is to handle granting tokens, etc.
         """
-        # Ensure the accounts we handle have been created
-        if not self.created_accounts and self.users:
-            newenv = {'REQUEST_METHOD': 'HEAD', 'HTTP_USER_AGENT': 'TempAuth'}
-            for name in ('swift.cache', 'HTTP_X_TRANS_ID'):
-                if name in env:
-                    newenv[name] = env[name]
-            for key, value in self.users.iteritems():
-                account_id = value['url'].rsplit('/', 1)[-1]
-                newenv['REQUEST_METHOD'] = 'HEAD'
-                resp = Request.blank('/v1/' + account_id,
-                                     environ=newenv).get_response(self.app)
-                if resp.status_int // 100 != 2:
-                    newenv['REQUEST_METHOD'] = 'PUT'
-                    resp = Request.blank('/v1/' + account_id,
-                                         environ=newenv).get_response(self.app)
-                    if resp.status_int // 100 != 2:
-                        raise Exception('Could not create account %s for user '
-                            '%s' % (account_id, key))
-            self.created_accounts = True
-
         if env.get('PATH_INFO', '').startswith(self.auth_prefix):
             return self.handle(env, start_response)
         s3 = env.get('HTTP_AUTHORIZATION')
@@ -316,7 +300,7 @@ class TempAuth(object):
                 response = self.handle_request(req)(env, start_response)
                 self.posthooklogger(env, req)
                 return response
-        except (Exception, TimeoutError):
+        except (Exception, Timeout):
             print "EXCEPTION IN handle: %s: %s" % (format_exc(), env)
             start_response('500 Server Error',
                            [('Content-Type', 'text/plain')])
@@ -481,7 +465,7 @@ class TempAuth(object):
             getattr(req, 'bytes_transferred', 0) or '-',
             getattr(response, 'bytes_transferred', 0) or '-',
             req.headers.get('etag', '-'),
-            req.headers.get('x-trans-id', '-'), logged_headers or '-',
+            req.environ.get('swift.trans_id', '-'), logged_headers or '-',
             trans_time)))
 
 

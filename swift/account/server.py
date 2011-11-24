@@ -21,10 +21,12 @@ import traceback
 from urllib import unquote
 from xml.sax import saxutils
 
+from eventlet import Timeout
 from webob import Request, Response
 from webob.exc import HTTPAccepted, HTTPBadRequest, \
     HTTPCreated, HTTPForbidden, HTTPInternalServerError, \
-    HTTPMethodNotAllowed, HTTPNoContent, HTTPNotFound, HTTPPreconditionFailed
+    HTTPMethodNotAllowed, HTTPNoContent, HTTPNotFound, \
+    HTTPPreconditionFailed, HTTPConflict
 import simplejson
 
 from swift.common.db import AccountBroker
@@ -48,6 +50,8 @@ class AccountController(object):
                               ('true', 't', '1', 'on', 'yes', 'y')
         self.replicator_rpc = ReplicatorRpc(self.root, DATADIR, AccountBroker,
             self.mount_check, logger=self.logger)
+        self.auto_create_account_prefix = \
+            conf.get('auto_create_account_prefix') or '.'
 
     def _get_account_broker(self, drive, part, account):
         hsh = hash_path(account)
@@ -88,6 +92,10 @@ class AccountController(object):
         if container:   # put account container
             if 'x-trans-id' in req.headers:
                 broker.pending_timeout = 3
+            if account.startswith(self.auto_create_account_prefix) and \
+                    not os.path.exists(broker.db_file):
+                broker.initialize(normalize_timestamp(
+                    req.headers.get('x-timestamp') or time.time()))
             if req.headers.get('x-account-override-deleted', 'no').lower() != \
                     'yes' and broker.is_deleted():
                 return HTTPNotFound(request=req)
@@ -305,7 +313,7 @@ class AccountController(object):
                     res = getattr(self, req.method)(req)
                 else:
                     res = HTTPMethodNotAllowed()
-            except Exception:
+            except (Exception, Timeout):
                 self.logger.exception(_('ERROR __call__ error with %(method)s'
                     ' %(path)s '), {'method': req.method, 'path': req.path})
                 res = HTTPInternalServerError(body=traceback.format_exc())

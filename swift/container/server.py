@@ -23,8 +23,7 @@ from xml.sax import saxutils
 from datetime import datetime
 
 import simplejson
-from eventlet.timeout import Timeout
-from eventlet import TimeoutError
+from eventlet import Timeout
 from webob import Request, Response
 from webob.exc import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
     HTTPCreated, HTTPInternalServerError, HTTPNoContent, \
@@ -61,6 +60,8 @@ class ContainerController(object):
             if h.strip()]
         self.replicator_rpc = ReplicatorRpc(self.root, DATADIR,
             ContainerBroker, self.mount_check, logger=self.logger)
+        self.auto_create_account_prefix = \
+            conf.get('auto_create_account_prefix') or '.'
 
     def _get_container_broker(self, drive, part, account, container):
         """
@@ -123,7 +124,7 @@ class ContainerController(object):
                              'device': account_device,
                              'status': account_response.status,
                              'reason': account_response.reason})
-            except (Exception, TimeoutError):
+            except (Exception, Timeout):
                 self.logger.exception(_('ERROR account update failed with '
                     '%(ip)s:%(port)s/%(device)s (will retry later)'),
                     {'ip': account_ip, 'port': account_port,
@@ -145,6 +146,10 @@ class ContainerController(object):
         if self.mount_check and not check_mount(self.root, drive):
             return Response(status='507 %s is not mounted' % drive)
         broker = self._get_container_broker(drive, part, account, container)
+        if account.startswith(self.auto_create_account_prefix) and obj and \
+                not os.path.exists(broker.db_file):
+            broker.initialize(normalize_timestamp(
+                req.headers.get('x-timestamp') or time.time()))
         if not os.path.exists(broker.db_file):
             return HTTPNotFound()
         if obj:     # delete object
@@ -188,6 +193,9 @@ class ContainerController(object):
         timestamp = normalize_timestamp(req.headers['x-timestamp'])
         broker = self._get_container_broker(drive, part, account, container)
         if obj:     # put container object
+            if account.startswith(self.auto_create_account_prefix) and \
+                    not os.path.exists(broker.db_file):
+                broker.initialize(timestamp)
             if not os.path.exists(broker.db_file):
                 return HTTPNotFound()
             broker.put_object(obj, timestamp, int(req.headers['x-size']),
@@ -421,7 +429,7 @@ class ContainerController(object):
                     res = getattr(self, req.method)(req)
                 else:
                     res = HTTPMethodNotAllowed()
-            except Exception:
+            except (Exception, Timeout):
                 self.logger.exception(_('ERROR __call__ error with %(method)s'
                     ' %(path)s '), {'method': req.method, 'path': req.path})
                 res = HTTPInternalServerError(body=traceback.format_exc())

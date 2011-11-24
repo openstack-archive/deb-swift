@@ -7,13 +7,14 @@
 # swift_dir = /etc/swift
 # devices = /srv/node
 # mount_check = true
+# expiring_objects_container_divisor = 86400
 # You can specify default log routing here if you want:
 # log_name = swift
 # log_facility = LOG_LOCAL0
 # log_level = INFO
 
 [pipeline:main]
-pipeline = object-server
+pipeline = recon object-server
 
 [app:object-server]
 use = egg:swift#object
@@ -33,7 +34,11 @@ use = egg:swift#object
 # Comma separated list of headers that can be set in metadata on an object.
 # This list is in addition to X-Object-Meta-* headers and cannot include
 # Content-Type, etag, Content-Length, or deleted
-# allowed_headers = Content-Encoding, Content-Disposition, X-Object-Manifest
+# allowed_headers = Content-Disposition, Content-Encoding, X-Delete-At, X-Object-Manifest
+
+[filter:recon]
+use = egg:swift#recon
+recon_cache_path = /var/cache/swift
 
 [object-replicator]
 # You can override the default log routing for this app here (don't use set!):
@@ -55,6 +60,9 @@ use = egg:swift#object
 # lockup_timeout = 1800
 # The replicator also performs reclamation
 # reclaim_age = 604800
+# enable logging of replication stats for recon
+# recon_enable = no
+# recon_cache_path = /var/cache/swift
 
 [object-updater]
 # You can override the default log routing for this app here (don't use set!):

@@ -127,6 +127,12 @@ def run_wsgi(conf_file, app_section, *args, **kwargs):
 
     def run_server():
         wsgi.HttpProtocol.default_request_version = "HTTP/1.0"
+        # Turn off logging requests by the underlying WSGI software.
+        wsgi.HttpProtocol.log_request = lambda *a: None
+        # Redirect logging other messages by the underlying WSGI software.
+        wsgi.HttpProtocol.log_message = \
+            lambda s, f, *a: logger.error('ERROR WSGI: ' + f % a)
+        wsgi.WRITE_TIMEOUT = int(conf.get('client_timeout') or 60)
         eventlet.hubs.use_hub('poll')
         eventlet.patcher.monkey_patch(all=False, socket=True)
         monkey_patch_mimetools()
@@ -204,10 +210,11 @@ def make_pre_authed_request(env, method, path, body=None, headers=None,
     :param headers: Extra HTTP headers of new request; None by default
 
     :returns: webob.Request object
+
     (Stolen from Swauth: https://github.com/gholt/swauth)
     """
     newenv = {'REQUEST_METHOD': method, 'HTTP_USER_AGENT': agent}
-    for name in ('swift.cache', 'HTTP_X_TRANS_ID'):
+    for name in ('swift.cache', 'swift.trans_id'):
         if name in env:
             newenv[name] = env[name]
     newenv['swift.authorize'] = lambda req: None

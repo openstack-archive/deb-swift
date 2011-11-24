@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from eventlet import Timeout
 from webob import Request
 from webob.exc import HTTPServerError
 import uuid
@@ -22,7 +23,8 @@ from swift.common.utils import get_logger
 
 class CatchErrorMiddleware(object):
     """
-    Middleware that provides high-level error handling.
+    Middleware that provides high-level error handling and ensures that a
+    transaction id will be set for every request.
     """
 
     def __init__(self, app, conf):
@@ -30,10 +32,12 @@ class CatchErrorMiddleware(object):
         self.logger = get_logger(conf, log_route='catch-errors')
 
     def __call__(self, env, start_response):
-        trans_id = env.get('HTTP_X_TRANS_ID')
-        if not trans_id:
-            trans_id = 'tx' + uuid.uuid4().hex
-            env['HTTP_X_TRANS_ID'] = trans_id
+        """
+        If used, this should be the first middleware in pipeline.
+        """
+        trans_id = 'tx' + uuid.uuid4().hex
+        env['swift.trans_id'] = trans_id
+        self.logger.txn_id = trans_id
         try:
 
             def my_start_response(status, response_headers, exc_info=None):
@@ -41,7 +45,7 @@ class CatchErrorMiddleware(object):
                 response_headers.append(trans_header)
                 return start_response(status, response_headers, exc_info)
             return self.app(env, my_start_response)
-        except Exception, err:
+        except (Exception, Timeout), err:
             self.logger.exception(_('Error: %s'), err)
             resp = HTTPServerError(request=Request(env),
                                    body='An error occurred',

@@ -303,8 +303,7 @@ class LogAdapter(logging.LoggerAdapter, object):
     client ip.
     """
 
-    _txn_id = threading.local()
-    _client_ip = threading.local()
+    _cls_thread_local = threading.local()
 
     def __init__(self, logger, server):
         logging.LoggerAdapter.__init__(self, logger, {})
@@ -313,21 +312,21 @@ class LogAdapter(logging.LoggerAdapter, object):
 
     @property
     def txn_id(self):
-        if hasattr(self._txn_id, 'value'):
-            return self._txn_id.value
+        if hasattr(self._cls_thread_local, 'txn_id'):
+            return self._cls_thread_local.txn_id
 
     @txn_id.setter
     def txn_id(self, value):
-        self._txn_id.value = value
+        self._cls_thread_local.txn_id = value
 
     @property
     def client_ip(self):
-        if hasattr(self._client_ip, 'value'):
-            return self._client_ip.value
+        if hasattr(self._cls_thread_local, 'client_ip'):
+            return self._cls_thread_local.client_ip
 
     @client_ip.setter
     def client_ip(self, value):
-        self._client_ip.value = value
+        self._cls_thread_local.client_ip = value
 
     def getEffectiveLevel(self):
         return self.logger.getEffectiveLevel()
@@ -794,11 +793,13 @@ def cache_from_env(env):
     return item_from_env(env, 'swift.cache')
 
 
-def readconf(conf, section_name=None, log_name=None, defaults=None, raw=False):
+def readconf(conffile, section_name=None, log_name=None, defaults=None,
+             raw=False):
     """
     Read config file and return config items as a dict
 
-    :param conf: path to config file, or a file-like object (hasattr readline)
+    :param conffile: path to config file, or a file-like object (hasattr
+                     readline)
     :param section_name: config section to read (will return all sections if
                      not defined)
     :param log_name: name to be used with logging (will use section_name if
@@ -812,18 +813,18 @@ def readconf(conf, section_name=None, log_name=None, defaults=None, raw=False):
         c = RawConfigParser(defaults)
     else:
         c = ConfigParser(defaults)
-    if hasattr(conf, 'readline'):
-        c.readfp(conf)
+    if hasattr(conffile, 'readline'):
+        c.readfp(conffile)
     else:
-        if not c.read(conf):
-            print _("Unable to read config file %s") % conf
+        if not c.read(conffile):
+            print _("Unable to read config file %s") % conffile
             sys.exit(1)
     if section_name:
         if c.has_section(section_name):
             conf = dict(c.items(section_name))
         else:
             print _("Unable to find %s config section in %s") % \
-                 (section_name, conf)
+                 (section_name, conffile)
             sys.exit(1)
         if "log_name" not in conf:
             if log_name is not None:
@@ -836,6 +837,7 @@ def readconf(conf, section_name=None, log_name=None, defaults=None, raw=False):
             conf.update({s: dict(c.items(s))})
         if 'log_name' not in conf:
             conf['log_name'] = log_name
+    conf['__file__'] = conffile
     return conf
 
 
