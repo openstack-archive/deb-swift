@@ -18,9 +18,6 @@ override_dh_auto_build:
 	mkdir -p doc/build
 	python setup.py build_sphinx
 
-get-orig-source:
-	uscan --verbose --force-download --rename --destdir=../build-area
-
 override_dh_install:
 	dh_install
 	install -D -m 0640 $(CURDIR)/debian/account-server.conf $(CURDIR)/debian/swift-account/etc/swift/account-server.conf
