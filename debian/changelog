@@ -1,8 +1,9 @@
 swift (1.4.4-1) unstable; urgency=low
 
   * New upstream release.
+  * Remove useless provides in control.
 
- -- Julien Danjou <acid@debian.org>  Thu, 24 Nov 2011 17:10:32 +0100
+ -- Julien Danjou <acid@debian.org>  Thu, 24 Nov 2011 17:17:46 +0100
 
 swift (1.4.3-1) unstable; urgency=low
 
