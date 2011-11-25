@@ -36,7 +36,7 @@ Depends: adduser, ${python:Depends}, ${misc:Depends},
  python-netifaces,
  python-greenlet (>= 0.3.1),
  python-eventlet (>= 0.9.8),
-Description: OpenStack Object Storage (Python libraries)
+Description: OpenStack Object Storage - libraries
  OpenStack Object Storage (code-named Swift) is open source software for
  creating redundant, scalable object storage using clusters of standardized
  servers to store petabytes of accessible data. It is not a file system or
@@ -62,7 +62,7 @@ Description: OpenStack Object Storage (Python libraries)
 Package: swift
 Architecture: all
 Depends: python-swift (=${binary:Version}), ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
-Description: OpenStack Object Storage (common files)
+Description: OpenStack Object Storage - common files
  OpenStack Object Storage (code-named Swift) is open source software for
  creating redundant, scalable object storage using clusters of standardized
  servers to store petabytes of accessible data. It is not a file system or
@@ -87,7 +87,7 @@ Description: OpenStack Object Storage (common files)
 Package: swift-proxy
 Architecture: all
 Depends: swift, python-swift (=${binary:Version}), ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
-Description: OpenStack Object Storage (proxy server)
+Description: OpenStack Object Storage - proxy server
  OpenStack Object Storage (code-named Swift) is open source software for
  creating redundant, scalable object storage using clusters of standardized
  servers to store petabytes of accessible data. It is not a file system or
@@ -113,7 +113,7 @@ Description: OpenStack Object Storage (proxy server)
 Package: swift-object
 Architecture: all
 Depends: swift, python-swift (=${binary:Version}), rsync, ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
-Description: OpenStack Object Storage (object server)
+Description: OpenStack Object Storage - object server
  OpenStack Object Storage (code-named Swift) is open source software for
  creating redundant, scalable object storage using clusters of standardized
  servers to store petabytes of accessible data. It is not a file system or
@@ -138,7 +138,7 @@ Description: OpenStack Object Storage (object server)
 Package: swift-container
 Architecture: all
 Depends: swift, python-swift (=${binary:Version}), rsync, ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
-Description: OpenStack Object Storage (container server)
+Description: OpenStack Object Storage - container server
  OpenStack Object Storage (code-named Swift) is open source software for
  creating redundant, scalable object storage using clusters of standardized
  servers to store petabytes of accessible data. It is not a file system or
@@ -163,7 +163,7 @@ Description: OpenStack Object Storage (container server)
 Package: swift-account
 Architecture: all
 Depends: swift, python-swift (=${binary:Version}), rsync, ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
-Description: OpenStack Object Storage (account server)
+Description: OpenStack Object Storage - account server
  OpenStack Object Storage (code-named Swift) is open source software for
  creating redundant, scalable object storage using clusters of standardized
  servers to store petabytes of accessible data. It is not a file system or
@@ -189,7 +189,7 @@ Package: swift-doc
 Architecture: all
 Section: doc
 Depends: libjs-jquery, ${misc:Depends}
-Description: OpenStack Object Storage (documentation)
+Description: OpenStack Object Storage - documentation
  OpenStack Object Storage (code-named Swift) is open source software for
  creating redundant, scalable object storage using clusters of standardized
  servers to store petabytes of accessible data. It is not a file system or
