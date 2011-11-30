@@ -11,8 +11,6 @@ override_dh_clean:
 	dh_clean
 	rm -rf swift.egg-info
 	rm -rf doc/build/*
-	rm -rf test/unit/common/corrupted_example.db
-	rm -rf test/unit/common/malformed_example.db
 
 # build with sphinx documentation
 override_dh_auto_build:
