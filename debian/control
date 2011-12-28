@@ -188,7 +188,7 @@ Description: OpenStack Object Storage - account server
 Package: swift-doc
 Architecture: all
 Section: doc
-Depends: libjs-jquery, ${misc:Depends}
+Depends: libjs-jquery, ${misc:Depends}, libjs-underscore
 Description: OpenStack Object Storage - documentation
  OpenStack Object Storage (code-named Swift) is open source software for
  creating redundant, scalable object storage using clusters of standardized
