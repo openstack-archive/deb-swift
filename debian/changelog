@@ -1,3 +1,9 @@
+swift (1.4.4+git135-g913cfcf-1) experimental; urgency=low
+
+  * New snapshot release.
+
+ -- Ghe Rivero <ghe@debian.org>  Wed, 28 Dec 2011 08:35:37 +0100
+
 swift (1.4.4-2) unstable; urgency=low
 
   * Do not install test (Closes: #649908)
