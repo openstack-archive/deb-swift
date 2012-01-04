@@ -1,3 +1,9 @@
+swift (1.4.4+git145-g89ef1f4-1) experimental; urgency=low
+
+  * New snapshot release.
+
+ -- Ghe Rivero <ghe@debian.org>  Wed, 04 Jan 2012 09:56:14 +0100
+
 swift (1.4.4+git135-g913cfcf-1) experimental; urgency=low
 
   * New snapshot release.
