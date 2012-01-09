@@ -1,3 +1,9 @@
+swift (1.4.5-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Ghe Rivero <ghe@debian.org>  Mon, 09 Jan 2012 16:18:17 +0100
+
 swift (1.4.4-2) unstable; urgency=low
 
   * Do not install test (Closes: #649908)
