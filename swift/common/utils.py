@@ -19,17 +19,14 @@ import errno
 import fcntl
 import os
 import pwd
-import signal
 import sys
 import time
-import mimetools
 from hashlib import md5
 from random import shuffle
 from urllib import quote
 from contextlib import contextmanager
 import ctypes
 import ctypes.util
-import struct
 from ConfigParser import ConfigParser, NoSectionError, NoOptionError, \
     RawConfigParser
 from optparse import OptionParser
@@ -43,8 +40,8 @@ import glob
 from urlparse import urlparse as stdlib_urlparse, ParseResult
 
 import eventlet
-from eventlet import greenio, GreenPool, sleep, Timeout, listen
-from eventlet.green import socket, subprocess, ssl, thread, threading
+from eventlet import GreenPool, sleep
+from eventlet.green import socket, threading
 import netifaces
 
 from swift.common.exceptions import LockTimeout, MessageTimeout
@@ -468,6 +465,8 @@ def drop_privileges(user):
     :param user: User name to change privileges to
     """
     user = pwd.getpwnam(user)
+    if os.geteuid() == 0:
+        os.setgroups([])
     os.setgid(user[3])
     os.setuid(user[2])
     try:
@@ -475,7 +474,7 @@ def drop_privileges(user):
     except OSError:
         pass
     os.chdir('/')  # in case you need to rmdir on where you started the daemon
-    os.umask(0)  # ensure files are created with the correct privileges
+    os.umask(022)  # ensure files are created with the correct privileges
 
 
 def capture_stdio(logger, **kwargs):
@@ -566,12 +565,15 @@ def whataremyips():
     """
     addresses = []
     for interface in netifaces.interfaces():
-        iface_data = netifaces.ifaddresses(interface)
-        for family in iface_data:
-            if family not in (netifaces.AF_INET, netifaces.AF_INET6):
-                continue
-            for address in iface_data[family]:
-                addresses.append(address['addr'])
+        try:
+            iface_data = netifaces.ifaddresses(interface)
+            for family in iface_data:
+                if family not in (netifaces.AF_INET, netifaces.AF_INET6):
+                    continue
+                for address in iface_data[family]:
+                    addresses.append(address['addr'])
+        except ValueError:
+            pass
     return addresses
 
 

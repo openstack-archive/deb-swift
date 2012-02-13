@@ -17,10 +17,7 @@
 Cloud Files client library used internally
 """
 import socket
-from cStringIO import StringIO
-from re import compile, DOTALL
-from tokenize import generate_tokens, STRING, NAME, OP
-from urllib import quote as _quote, unquote
+from urllib import quote as _quote
 from urlparse import urlparse, urlunparse
 
 try:
@@ -57,37 +54,8 @@ try:
     # simplejson is popular and pretty good
     from simplejson import loads as json_loads
 except ImportError:
-    try:
-        # 2.6 will have a json module in the stdlib
-        from json import loads as json_loads
-    except ImportError:
-        # fall back on local parser otherwise
-        comments = compile(r'/\*.*\*/|//[^\r\n]*', DOTALL)
-
-        def json_loads(string):
-            '''
-            Fairly competent json parser exploiting the python tokenizer and
-            eval(). -- From python-cloudfiles
-
-            _loads(serialized_json) -> object
-            '''
-            try:
-                res = []
-                consts = {'true': True, 'false': False, 'null': None}
-                string = '(' + comments.sub('', string) + ')'
-                for type, val, _junk, _junk, _junk in \
-                        generate_tokens(StringIO(string).readline):
-                    if (type == OP and val not in '[]{}:,()-') or \
-                            (type == NAME and val not in consts):
-                        raise AttributeError()
-                    elif type == STRING:
-                        res.append('u')
-                        res.append(val.replace('\\/', '/'))
-                    else:
-                        res.append(val)
-                return eval(''.join(res), {}, consts)
-            except Exception:
-                raise AttributeError()
+    # 2.6 will have a json module in the stdlib
+    from json import loads as json_loads
 
 
 class ClientException(Exception):
