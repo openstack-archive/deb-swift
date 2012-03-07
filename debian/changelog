@@ -1,3 +1,15 @@
+swift (1.4.6-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Mon, 13 Feb 2012 11:28:38 +0100
+
+swift (1.4.5-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Ghe Rivero <ghe@debian.org>  Mon, 09 Jan 2012 16:18:17 +0100
+
 swift (1.4.4+git145-g89ef1f4-1) experimental; urgency=low
 
   * New snapshot release.
