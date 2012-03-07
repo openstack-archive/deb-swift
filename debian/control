@@ -17,7 +17,7 @@ Build-Depends: debhelper (>= 7.0.50~),
  python-nose,
  python-pastedeploy,
  python-sphinx (>= 1.0)
-Standards-Version: 3.9.2
+Standards-Version: 3.9.3
 X-Python-Version: >= 2.6
 Homepage: http://launchpad.net/swift
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/swift.git;a=summary

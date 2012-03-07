@@ -1,8 +1,6 @@
 usr/bin/swift-bench
 usr/bin/swift-ring-builder
 usr/bin/swift-get-nodes
-usr/bin/swift-stats-populate
-usr/bin/swift-stats-report
 usr/bin/swift
 usr/bin/swift-dispersion-populate
 usr/bin/swift-dispersion-report
