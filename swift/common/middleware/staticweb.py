@@ -116,13 +116,22 @@ except ImportError:
 
 import cgi
 import time
-from urllib import unquote, quote
+from urllib import unquote, quote as urllib_quote
 
 from webob import Response, Request
 from webob.exc import HTTPMovedPermanently, HTTPNotFound
 
 from swift.common.utils import cache_from_env, get_logger, human_readable, \
                                split_path, TRUE_VALUES
+
+
+def quote(value, safe='/'):
+    """
+    Patched version of urllib.quote that encodes utf-8 strings before quoting
+    """
+    if isinstance(value, unicode):
+        value = value.encode('utf-8')
+    return urllib_quote(value, safe)
 
 
 class StaticWeb(object):
@@ -289,7 +298,7 @@ class StaticWeb(object):
         if not listing:
             resp = HTTPNotFound()(env, self._start_response)
             return self._error_response(resp, env, start_response)
-        headers = {'Content-Type': 'text/html'}
+        headers = {'Content-Type': 'text/html; charset=UTF-8'}
         body = '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 ' \
                 'Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">\n' \
                '<html>\n' \
@@ -298,8 +307,7 @@ class StaticWeb(object):
                cgi.escape(env['PATH_INFO'])
         if self._listings_css:
             body += '  <link rel="stylesheet" type="text/css" ' \
-                        'href="%s%s" />\n' % \
-                    ('../' * prefix.count('/'), quote(self._listings_css))
+                        'href="%s" />\n' % (self._build_css_path(prefix))
         else:
             body += '  <style type="text/css">\n' \
                     '   h1 {font-size: 1em; font-weight: bold;}\n' \
@@ -356,6 +364,19 @@ class StaticWeb(object):
         resp = Response(headers=headers, body=body)
         self._log_response(env, resp.status_int)
         return resp(env, start_response)
+
+    def _build_css_path(self, prefix=''):
+        """
+        Constructs a relative path from a given prefix within the container.
+        URLs and paths starting with '/' are not modified.
+
+        :param prefix: The prefix for the container listing.
+        """
+        if self._listings_css.startswith(('/', 'http://', 'https://')):
+            css_path = quote(self._listings_css, ':/')
+        else:
+            css_path = '../' * prefix.count('/') + quote(self._listings_css)
+        return css_path
 
     def _handle_container(self, env, start_response):
         """

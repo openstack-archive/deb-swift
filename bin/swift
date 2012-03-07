@@ -16,7 +16,7 @@
 
 from errno import EEXIST, ENOENT
 from hashlib import md5
-from optparse import OptionParser
+from optparse import OptionParser, SUPPRESS_HELP
 from os import environ, listdir, makedirs, utime
 from os.path import basename, dirname, getmtime, getsize, isdir, join
 from Queue import Empty, Queue
@@ -71,38 +71,9 @@ try:
     from simplejson import loads as json_loads
     from simplejson import dumps as json_dumps
 except ImportError:
-    try:
-        # 2.6 will have a json module in the stdlib
-        from json import loads as json_loads
-        from json import dumps as json_dumps
-    except ImportError:
-        # fall back on local parser otherwise
-        comments = compile(r'/\*.*\*/|//[^\r\n]*', DOTALL)
-
-        def json_loads(string):
-            '''
-            Fairly competent json parser exploiting the python tokenizer and
-            eval(). -- From python-cloudfiles
-
-            _loads(serialized_json) -> object
-            '''
-            try:
-                res = []
-                consts = {'true': True, 'false': False, 'null': None}
-                string = '(' + comments.sub('', string) + ')'
-                for type, val, _junk, _junk, _junk in \
-                        generate_tokens(StringIO(string).readline):
-                    if (type == OP and val not in '[]{}:,()-') or \
-                            (type == NAME and val not in consts):
-                        raise AttributeError()
-                    elif type == STRING:
-                        res.append('u')
-                        res.append(val.replace('\\/', '/'))
-                    else:
-                        res.append(val)
-                return eval(''.join(res), {}, consts)
-            except Exception:
-                raise AttributeError()
+    # 2.6 will have a json module in the stdlib
+    from json import loads as json_loads
+    from json import dumps as json_dumps
 
 
 class ClientException(Exception):
@@ -248,11 +219,11 @@ def _get_auth_v2_0(url, user, key, snet):
         url = None
         catalogs = body['access']['serviceCatalog']
         for service in catalogs:
-            if service['name'] == 'swift':
+            if service['type'] == 'object-store':
                 url = service['endpoints'][0]['publicURL']
         token_id = body['access']['token']['id']
         if not url:
-            raise ClientException("There is no swift endpoint " \
+            raise ClientException("There is no object-store endpoint " \
                                   "on this auth server.")
     except(KeyError, IndexError):
         raise ClientException("Error while getting answers from auth server")
@@ -1583,11 +1554,7 @@ def st_post(options, args, print_queue, error_queue):
         exit('-r, -w, -t, and -k options only allowed for containers')
     conn = get_conn(options)
     if not args:
-        headers = {}
-        for item in options.meta:
-            split_item = item.split(':')
-            headers['X-Account-Meta-' + split_item[0]] = \
-                len(split_item) > 1 and split_item[1]
+        headers = split_headers(options.meta, 'X-Account-Meta-', error_queue)
         try:
             conn.post_account(headers=headers)
         except ClientException, err:
@@ -1599,11 +1566,7 @@ def st_post(options, args, print_queue, error_queue):
             print >> stderr, 'WARNING: / in container name; you might have ' \
                              'meant %r instead of %r.' % \
                              (args[0].replace('/', ' ', 1), args[0])
-        headers = {}
-        for item in options.meta:
-            split_item = item.split(':')
-            headers['X-Container-Meta-' + split_item[0]] = \
-                len(split_item) > 1 and split_item[1]
+        headers = split_headers(options.meta, 'X-Container-Meta-', error_queue)
         if options.read_acl is not None:
             headers['X-Container-Read'] = options.read_acl
         if options.write_acl is not None:
@@ -1619,11 +1582,7 @@ def st_post(options, args, print_queue, error_queue):
                 raise
             conn.put_container(args[0], headers=headers)
     elif len(args) == 2:
-        headers = {}
-        for item in options.meta:
-            split_item = item.split(':')
-            headers['X-Object-Meta-' + split_item[0]] = \
-                len(split_item) > 1 and split_item[1]
+        headers = split_headers(options.meta, 'X-Object-Meta-', error_queue)
         try:
             conn.post_object(args[0], args[1], headers=headers)
         except ClientException, err:
@@ -1853,10 +1812,51 @@ def st_upload(options, args, print_queue, error_queue):
         error_queue.put('Account not found')
 
 
+def split_headers(options, prefix='', error_queue=None):
+    """
+    Splits 'Key: Value' strings and returns them as a dictionary.
+
+    :param options: An array of 'Key: Value' strings
+    :param prefix: String to prepend to all of the keys in the dictionary.
+    :param error_queue: Queue for thread safe error reporting.
+    """
+    headers = {}
+    for item in options:
+        split_item = item.split(':', 1)
+        if len(split_item) == 2:
+            headers[prefix + split_item[0]] = split_item[1]
+        else:
+            error_string = "Metadata parameter %s must contain a ':'.\n%s" \
+                           % (item, st_post_help)
+            if error_queue != None:
+                error_queue.put(error_string)
+            else:
+                exit(error_string)
+    return headers
+
+
 def parse_args(parser, args, enforce_requires=True):
     if not args:
         args = ['-h']
     (options, args) = parser.parse_args(args)
+
+    if (not (options.auth and options.user and options.key) or
+            environ.get('OS_AUTH_URL')):
+        # Use 2.0 auth if none of the old args are present
+        options.auth_version = "2.0"
+
+    # Use new-style args if old ones not present
+    if not options.auth and options.auth_url:
+        options.auth = options.auth_url
+    if not options.user and options.username:
+        options.user = options.username
+    if not options.key and options.password:
+        options.key = options.password
+
+    # Handle trailing '/' in URL
+    if options.auth and not options.auth.endswith('/'):
+        options.auth += '/'
+
     if enforce_requires and \
             not (options.auth and options.user and options.key):
         exit('''
@@ -1901,6 +1901,15 @@ Example:
     parser.add_option('-K', '--key', dest='key',
                       default=environ.get('ST_KEY'),
                       help='Key for obtaining an auth token')
+    parser.add_option('--auth_url', dest='auth_url',
+                      default=environ.get('OS_AUTH_URL'),
+                      help=SUPPRESS_HELP)
+    parser.add_option('--username', dest='username',
+                      default=environ.get('OS_USERNAME'),
+                      help=SUPPRESS_HELP)
+    parser.add_option('--password', dest='password',
+                      default=environ.get('OS_PASSWORD'),
+                      help=SUPPRESS_HELP)
     parser.disable_interspersed_args()
     (options, args) = parse_args(parser, argv[1:], enforce_requires=False)
     parser.enable_interspersed_args()

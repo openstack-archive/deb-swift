@@ -483,7 +483,7 @@ class TestController(unittest.TestCase):
             cache_key = proxy_server.get_container_memcache_key(self.account,
                 self.container)
             cache_value = self.memcache.get(cache_key)
-            self.assertEquals(dict, type(cache_value))
+            self.assertTrue(isinstance(cache_value, dict))
             self.assertEquals(200, cache_value.get('status'))
 
             proxy_server.http_connect = fake_http_connect()
@@ -506,7 +506,7 @@ class TestController(unittest.TestCase):
             cache_key = proxy_server.get_container_memcache_key(self.account,
                 self.container)
             cache_value = self.memcache.get(cache_key)
-            self.assertEquals(dict, type(cache_value))
+            self.assertTrue(isinstance(cache_value, dict))
             self.assertEquals(404, cache_value.get('status'))
 
             proxy_server.http_connect = fake_http_connect()
@@ -705,6 +705,23 @@ class TestProxyServer(unittest.TestCase):
         app.update_request(req)
         resp = app.handle_request(req)
         self.assert_(called[0])
+
+    def test_negative_content_length(self):
+        swift_dir = mkdtemp()
+        try:
+            baseapp = proxy_server.BaseApplication({'swift_dir': swift_dir},
+                FakeMemcache(), NullLoggingHandler(), FakeRing(), FakeRing(),
+                FakeRing())
+            resp = baseapp.handle_request(
+                Request.blank('/', environ={'CONTENT_LENGTH': '-1'}))
+            self.assertEquals(resp.status, '400 Bad Request')
+            self.assertEquals(resp.body, 'Invalid Content-Length')
+            resp = baseapp.handle_request(
+                Request.blank('/', environ={'CONTENT_LENGTH': '-123'}))
+            self.assertEquals(resp.status, '400 Bad Request')
+            self.assertEquals(resp.body, 'Invalid Content-Length')
+        finally:
+            rmtree(swift_dir, ignore_errors=True)
 
 
 class TestObjectController(unittest.TestCase):

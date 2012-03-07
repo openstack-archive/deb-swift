@@ -202,13 +202,13 @@ def get_hashes(partition_dir, recalculate=[], do_listdir=False,
 def tpooled_get_hashes(*args, **kwargs):
     """
     Hack to work around Eventlet's tpool not catching and reraising Timeouts.
-    We return the Timeout, None if it's raised, the caller looks for it
+    We return the Timeout, Timeout if it's raised, the caller looks for it
     and reraises it if found.
     """
     try:
         return get_hashes(*args, **kwargs)
     except Timeout, err:
-        return err, None
+        return err, err
 
 
 class ObjectReplicator(Daemon):
@@ -455,7 +455,8 @@ class ObjectReplicator(Daemon):
         Logs various stats for the currently running replication pass.
         """
         if self.replication_count:
-            rate = self.replication_count / (time.time() - self.start)
+            elapsed = (time.time() - self.start) or 0.000001
+            rate = self.replication_count / elapsed
             self.logger.info(_("%(replicated)d/%(total)d (%(percentage).2f%%)"
                 " partitions replicated in %(time).2fs (%(rate).2f/sec, "
                 "%(remaining)s remaining)"),
