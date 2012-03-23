@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2011 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack, LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -179,7 +179,7 @@ class TestRingBuilder(unittest.TestCase):
         max_run = 0
         run = 0
         last_part = 0
-        for part in parts:
+        for part, _ in parts:
             if part > last_part:
                 run += 1
             else:

@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2011 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack, LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -274,7 +274,7 @@ class DatabaseBroker(object):
         elif 'file is encrypted or is not a database' in str(exc_value):
             exc_hint = 'corrupted'
         else:
-            raise exc_type, exc_value, exc_traceback
+            raise exc_type(*exc_value.args), None, exc_traceback
         prefix_path = os.path.dirname(self.db_dir)
         partition_path = os.path.dirname(prefix_path)
         dbs_path = os.path.dirname(partition_path)

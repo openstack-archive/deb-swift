@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2011 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack, LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,32 +16,12 @@
 # TODO: More tests
 import socket
 import unittest
-from StringIO import StringIO
 from urlparse import urlparse
 
 # TODO: mock http connection class with more control over headers
 from test.unit.proxy.test_server import fake_http_connect
 
 from swift.common import client as c
-
-
-class TestHttpHelpers(unittest.TestCase):
-
-    def test_quote(self):
-        value = 'standard string'
-        self.assertEquals('standard%20string', c.quote(value))
-        value = u'\u0075nicode string'
-        self.assertEquals('unicode%20string', c.quote(value))
-
-    def test_http_connection(self):
-        url = 'http://www.test.com'
-        _junk, conn = c.http_connection(url)
-        self.assertTrue(isinstance(conn, c.HTTPConnection))
-        url = 'https://www.test.com'
-        _junk, conn = c.http_connection(url)
-        self.assertTrue(isinstance(conn, c.HTTPSConnection))
-        url = 'ftp://www.test.com'
-        self.assertRaises(c.ClientException, c.http_connection, url)
 
 
 class TestClientException(unittest.TestCase):
@@ -115,6 +95,7 @@ class MockHttpTest(unittest.TestCase):
     def setUp(self):
         def fake_http_connection(*args, **kwargs):
             _orig_http_connection = c.http_connection
+            return_read = kwargs.get('return_read')
 
             def wrapper(url, proxy=None):
                 parsed, _conn = _orig_http_connection(url, proxy=proxy)
@@ -130,7 +111,7 @@ class MockHttpTest(unittest.TestCase):
                 def read(*args, **kwargs):
                     conn.has_been_read = True
                     return _orig_read(*args, **kwargs)
-                conn.read = read
+                conn.read = return_read or read
 
                 return parsed, conn
             return wrapper
@@ -138,6 +119,36 @@ class MockHttpTest(unittest.TestCase):
 
     def tearDown(self):
         reload(c)
+
+
+class TestHttpHelpers(MockHttpTest):
+
+    def test_quote(self):
+        value = 'standard string'
+        self.assertEquals('standard%20string', c.quote(value))
+        value = u'\u0075nicode string'
+        self.assertEquals('unicode%20string', c.quote(value))
+
+    def test_http_connection(self):
+        url = 'http://www.test.com'
+        _junk, conn = c.http_connection(url)
+        self.assertTrue(isinstance(conn, c.HTTPConnection))
+        url = 'https://www.test.com'
+        _junk, conn = c.http_connection(url)
+        self.assertTrue(isinstance(conn, c.HTTPSConnection))
+        url = 'ftp://www.test.com'
+        self.assertRaises(c.ClientException, c.http_connection, url)
+
+    def test_json_request(self):
+        def read(*args, **kwargs):
+            body = {'a': '1',
+                    'b': '2'}
+            return c.json_dumps(body)
+        c.http_connection = self.fake_http_connection(200, return_read=read)
+        url = 'http://www.test.com'
+        _junk, conn = c.json_request('GET', url, body={'username': 'user1',
+                                                       'password': 'secure'})
+        self.assertTrue(type(conn) is dict)
 
 # TODO: following tests are placeholders, need more tests, better coverage
 
@@ -149,6 +160,27 @@ class TestGetAuth(MockHttpTest):
         url, token = c.get_auth('http://www.test.com', 'asdf', 'asdf')
         self.assertEquals(url, None)
         self.assertEquals(token, None)
+
+    def test_auth_v1(self):
+        c.http_connection = self.fake_http_connection(200)
+        url, token = c.get_auth('http://www.test.com', 'asdf', 'asdf',
+                                auth_version="1.0")
+        self.assertEquals(url, None)
+        self.assertEquals(token, None)
+
+    def test_auth_v2(self):
+        def read(*args, **kwargs):
+            acct_url = 'http://127.0.01/AUTH_FOO'
+            body = {'access': {'serviceCatalog':
+                                   [{u'endpoints': [{'publicURL': acct_url}],
+                                     'type': 'object-store'}],
+                               'token': {'id': 'XXXXXXX'}}}
+            return c.json_dumps(body)
+        c.http_connection = self.fake_http_connection(200, return_read=read)
+        url, token = c.get_auth('http://www.test.com', 'asdf', 'asdf',
+                                auth_version="2.0")
+        self.assertTrue(url.startswith("http"))
+        self.assertTrue(token)
 
 
 class TestGetAccount(MockHttpTest):
@@ -170,9 +202,15 @@ class TestHeadAccount(MockHttpTest):
         self.assertEquals(type(value), dict)
 
     def test_server_error(self):
-        c.http_connection = self.fake_http_connection(500)
+        body = 'c' * 65
+        c.http_connection = self.fake_http_connection(500, body=body)
         self.assertRaises(c.ClientException, c.head_account,
                           'http://www.tests.com', 'asdf')
+        try:
+            value = c.head_account('http://www.tests.com', 'asdf')
+        except c.ClientException as e:
+            new_body = "[first 60 chars of response] " + body[0:60]
+            self.assertEquals(e.__str__()[-89:], new_body)
 
 
 class TestGetContainer(MockHttpTest):
@@ -186,10 +224,15 @@ class TestGetContainer(MockHttpTest):
 class TestHeadContainer(MockHttpTest):
 
     def test_server_error(self):
-        c.http_connection = self.fake_http_connection(500)
+        body = 'c' * 60
+        c.http_connection = self.fake_http_connection(500, body=body)
         self.assertRaises(c.ClientException, c.head_container,
                          'http://www.test.com', 'asdf', 'asdf',
                          )
+        try:
+            value = c.head_container('http://www.test.com', 'asdf', 'asdf')
+        except c.ClientException as e:
+            self.assertEquals(e.http_response_content, body)
 
 
 class TestPutContainer(MockHttpTest):
@@ -198,6 +241,17 @@ class TestPutContainer(MockHttpTest):
         c.http_connection = self.fake_http_connection(200)
         value = c.put_container('http://www.test.com', 'asdf', 'asdf')
         self.assertEquals(value, None)
+
+    def test_server_error(self):
+        body = 'c' * 60
+        c.http_connection = self.fake_http_connection(500, body=body)
+        self.assertRaises(c.ClientException, c.put_container,
+                         'http://www.test.com', 'asdf', 'asdf',
+                         )
+        try:
+            value = c.put_container('http://www.test.com', 'asdf', 'asdf')
+        except c.ClientException as e:
+            self.assertEquals(e.http_response_content, body)
 
 
 class TestDeleteContainer(MockHttpTest):
@@ -233,9 +287,14 @@ class TestPutObject(MockHttpTest):
         self.assertTrue(isinstance(value, basestring))
 
     def test_server_error(self):
-        c.http_connection = self.fake_http_connection(500)
+        body = 'c' * 60
+        c.http_connection = self.fake_http_connection(500, body=body)
         args = ('http://www.test.com', 'asdf', 'asdf', 'asdf', 'asdf')
         self.assertRaises(c.ClientException, c.put_object, *args)
+        try:
+            value = c.put_object(*args)
+        except c.ClientException as e:
+            self.assertEquals(e.http_response_content, body)
 
 
 class TestPostObject(MockHttpTest):
@@ -246,9 +305,14 @@ class TestPostObject(MockHttpTest):
         value = c.post_object(*args)
 
     def test_server_error(self):
-        c.http_connection = self.fake_http_connection(500)
-        self.assertRaises(c.ClientException, c.post_object,
-                          'http://www.test.com', 'asdf', 'asdf', 'asdf', {})
+        body = 'c' * 60
+        c.http_connection = self.fake_http_connection(500, body=body)
+        args = ('http://www.test.com', 'asdf', 'asdf', 'asdf', {})
+        self.assertRaises(c.ClientException, c.post_object, *args)
+        try:
+            value = c.post_object(*args)
+        except c.ClientException as e:
+            self.assertEquals(e.http_response_content, body)
 
 
 class TestDeleteObject(MockHttpTest):

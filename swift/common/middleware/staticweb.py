@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2011 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack, LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -387,6 +387,8 @@ class StaticWeb(object):
         """
         self._get_container_info(env, start_response)
         if not self._listings and not self._index:
+            if env.get('HTTP_X_WEB_MODE', 'f').lower() in TRUE_VALUES:
+                return HTTPNotFound()(env, start_response)
             return self.app(env, start_response)
         if env['PATH_INFO'][-1] != '/':
             resp = HTTPMovedPermanently(

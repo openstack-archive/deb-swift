@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2011 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack, LLC.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from array import array
+from collections import defaultdict
 from random import randint, shuffle
 from time import time
 
@@ -73,7 +74,7 @@ class RingBuilder(object):
     def weighted_parts(self):
         try:
             return self.parts * self.replicas / \
-                     sum(d['weight'] for d in self.devs if d is not None)
+                     sum(d['weight'] for d in self._iter_devs())
         except ZeroDivisionError:
             raise exceptions.EmptyRingError('There are no devices in this '
                                             'ring, or all devices have been '
@@ -148,9 +149,7 @@ class RingBuilder(object):
         """
         if not self._ring:
             devs = [None] * len(self.devs)
-            for dev in self.devs:
-                if dev is None:
-                    continue
+            for dev in self._iter_devs():
                 devs[dev['id']] = dict((k, v) for k, v in dev.items()
                                        if k not in ('parts', 'parts_wanted'))
             if not self._replica2part2dev:
@@ -287,11 +286,11 @@ class RingBuilder(object):
                   (None, None)
         :raises RingValidationError: problem was found with the ring.
         """
-        if sum(d['parts'] for d in self.devs if d is not None) != \
+        if sum(d['parts'] for d in self._iter_devs()) != \
                 self.parts * self.replicas:
             raise exceptions.RingValidationError(
                 'All partitions are not double accounted for: %d != %d' %
-                (sum(d['parts'] for d in self.devs if d is not None),
+                (sum(d['parts'] for d in self._iter_devs()),
                  self.parts * self.replicas))
         if stats:
             dev_usage = array('I', (0 for _junk in xrange(len(self.devs))))
@@ -313,9 +312,7 @@ class RingBuilder(object):
         if stats:
             weighted_parts = self.weighted_parts()
             worst = 0
-            for dev in self.devs:
-                if dev is None:
-                    continue
+            for dev in self._iter_devs():
                 if not dev['weight']:
                     if dev_usage[dev['id']]:
                         worst = 999.99
@@ -341,9 +338,7 @@ class RingBuilder(object):
         """
         balance = 0
         weighted_parts = self.weighted_parts()
-        for dev in self.devs:
-            if dev is None:
-                continue
+        for dev in self._iter_devs():
             if not dev['weight']:
                 if dev['parts']:
                     balance = 999.99
@@ -373,6 +368,11 @@ class RingBuilder(object):
         """
         return [self.devs[r[part]] for r in self._replica2part2dev]
 
+    def _iter_devs(self):
+        for dev in self.devs:
+            if dev is not None:
+                yield dev
+
     def _set_parts_wanted(self):
         """
         Sets the parts_wanted key for each of the devices to the number of
@@ -382,13 +382,12 @@ class RingBuilder(object):
         """
         weighted_parts = self.weighted_parts()
 
-        for dev in self.devs:
-            if dev is not None:
-                if not dev['weight']:
-                    dev['parts_wanted'] = self.parts * -2
-                else:
-                    dev['parts_wanted'] = \
-                        int(weighted_parts * dev['weight']) - dev['parts']
+        for dev in self._iter_devs():
+            if not dev['weight']:
+                dev['parts_wanted'] = self.parts * -2
+            else:
+                dev['parts_wanted'] = \
+                    int(weighted_parts * dev['weight']) - dev['parts']
 
     def _initial_balance(self):
         """
@@ -399,11 +398,10 @@ class RingBuilder(object):
         assigning them to the next "most wanted" device, with distinct zone
         restrictions.
         """
-        for dev in self.devs:
-            if dev is not None:
-                dev['sort_key'] = \
-                    '%08x.%04x' % (dev['parts_wanted'], randint(0, 0xffff))
-        available_devs = sorted((d for d in self.devs if d is not None),
+        for dev in self._iter_devs():
+            dev['sort_key'] = \
+                '%08x.%04x' % (dev['parts_wanted'], randint(0, 0xffff))
+        available_devs = sorted((d for d in self._iter_devs()),
                                 key=lambda x: x['sort_key'])
         self._replica2part2dev = \
             [array('H') for _junk in xrange(self.replicas)]
@@ -431,9 +429,8 @@ class RingBuilder(object):
                 other_zones.append(dev['zone'])
         self._last_part_moves = array('B', (0 for _junk in xrange(self.parts)))
         self._last_part_moves_epoch = int(time())
-        for dev in self.devs:
-            if dev is not None:
-                del dev['sort_key']
+        for dev in self._iter_devs():
+            del dev['sort_key']
 
     def _update_last_part_moves(self):
         """
@@ -449,11 +446,11 @@ class RingBuilder(object):
 
     def _gather_reassign_parts(self):
         """
-        Returns an array('I') of partitions to be reassigned by gathering them
-        from removed devices and overweight devices.
+        Returns a list of (partition, replicas) pairs to be reassigned
+        by gathering them from removed devices and overweight devices.
         """
-        removed_dev_parts = set()
-        reassign_parts = array('I')
+        reassign_parts = defaultdict(list)
+        removed_dev_parts = defaultdict(list)
         if self._remove_devs:
             dev_ids = [d['id'] for d in self._remove_devs if d['parts']]
             if dev_ids:
@@ -461,9 +458,8 @@ class RingBuilder(object):
                     part2dev = self._replica2part2dev[replica]
                     for part in xrange(self.parts):
                         if part2dev[part] in dev_ids:
-                            part2dev[part] = 0xffff
                             self._last_part_moves[part] = 0
-                            removed_dev_parts.add(part)
+                            removed_dev_parts[part].append(replica)
 
         start = self._last_part_gather_start / 4 + randint(0, self.parts / 2)
         self._last_part_gather_start = start
@@ -477,15 +473,16 @@ class RingBuilder(object):
                         continue
                     dev = self.devs[part2dev[part]]
                     if dev['parts_wanted'] < 0:
-                        part2dev[part] = 0xffff
                         self._last_part_moves[part] = 0
                         dev['parts_wanted'] += 1
                         dev['parts'] -= 1
-                        reassign_parts.append(part)
+                        reassign_parts[part].append(replica)
 
-        reassign_parts.extend(removed_dev_parts)
-        shuffle(reassign_parts)
-        return reassign_parts
+        reassign_parts.update(removed_dev_parts)
+
+        reassign_parts_list = list(reassign_parts.iteritems())
+        shuffle(reassign_parts_list)
+        return reassign_parts_list
 
     def _reassign_parts(self, reassign_parts):
         """
@@ -495,18 +492,18 @@ class RingBuilder(object):
         gathered partitions are iterated through, assigning them to devices
         according to the "most wanted" and distinct zone restrictions.
         """
-        for dev in self.devs:
-            if dev is not None:
-                dev['sort_key'] = '%08x.%04x' % (self.parts +
-                                    dev['parts_wanted'], randint(0, 0xffff))
+        for dev in self._iter_devs():
+            dev['sort_key'] = '%08x.%04x' % (self.parts +
+                                dev['parts_wanted'], randint(0, 0xffff))
         available_devs = \
-            sorted((d for d in self.devs if d is not None and d['weight']),
+            sorted((d for d in self._iter_devs() if d['weight']),
                    key=lambda x: x['sort_key'])
-        for part in reassign_parts:
+
+        for part, replace_replicas in reassign_parts:
             other_zones = array('H')
             replace = []
             for replica in xrange(self.replicas):
-                if self._replica2part2dev[replica][part] == 0xffff:
+                if replica in replace_replicas:
                     replace.append(replica)
                 else:
                     other_zones.append(self.devs[
@@ -533,6 +530,5 @@ class RingBuilder(object):
                     else:
                         index = mid + 1
                 available_devs.insert(index, dev)
-        for dev in self.devs:
-            if dev is not None:
-                del dev['sort_key']
+        for dev in self._iter_devs():
+            del dev['sort_key']
