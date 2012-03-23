@@ -1,3 +1,9 @@
+swift (1.4.8-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Ghe Rivero <ghe.rivero@stackops.com>  Fri, 23 Mar 2012 08:09:54 +0100
+
 swift (1.4.6-1) unstable; urgency=low
 
   * New upstream release
