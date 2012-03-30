@@ -20,6 +20,7 @@ from struct import unpack_from
 
 from eventlet import sleep, Timeout
 
+import swift.common.db
 from swift.container import server as container_server
 from swift.common.client import ClientException, delete_object, put_object, \
     quote
@@ -172,13 +173,14 @@ class ContainerSync(Daemon):
         self.reported = time()
         swift_dir = conf.get('swift_dir', '/etc/swift')
         #: swift.common.ring.Ring for locating containers.
-        self.container_ring = container_ring or \
-            Ring(os.path.join(swift_dir, 'container.ring.gz'))
+        self.container_ring = container_ring or Ring(swift_dir,
+                ring_name='container')
         #: swift.common.ring.Ring for locating objects.
-        self.object_ring = object_ring or \
-            Ring(os.path.join(swift_dir, 'object.ring.gz'))
+        self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self._myips = whataremyips()
         self._myport = int(conf.get('bind_port', 6001))
+        swift.common.db.DB_PREALLOCATION = \
+            conf.get('db_preallocation', 't').lower() in TRUE_VALUES
 
     def run_forever(self):
         """

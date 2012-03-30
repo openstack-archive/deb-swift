@@ -14,6 +14,10 @@
 # log_name = swift
 # log_facility = LOG_LOCAL0
 # log_level = INFO
+# Normally Swift will try to preallocate disk space for new SQLite databases to
+# decrease fragmentation (at the cost of disk usage). You may turn this feature
+# off here.
+# db_preallocation = on
 
 [pipeline:main]
 pipeline = container-server
@@ -27,6 +31,7 @@ use = egg:swift#container
 # set log_requests = True
 # node_timeout = 3
 # conn_timeout = 0.5
+# allow_versions = False
 
 [container-replicator]
 # You can override the default log routing for this app here (don't use set!):
