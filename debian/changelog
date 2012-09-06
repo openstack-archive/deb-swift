@@ -1,3 +1,10 @@
+swift (1.4.8-2) unstable; urgency=high
+
+  * CVE-2012-4406: Do not use pickle for serialization in memcache, but JSON
+  (Closes: #686812).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 06 Sep 2012 08:40:18 +0000
+
 swift (1.4.8-1) unstable; urgency=low
 
   * New upstream release.
