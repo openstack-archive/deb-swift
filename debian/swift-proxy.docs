@@ -1,2 +1,3 @@
 etc/proxy-server.conf-sample
 etc/mime.types-sample
+etc/memcache.conf-sample

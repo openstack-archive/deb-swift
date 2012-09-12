@@ -1,2 +1,3 @@
 etc/object-server.conf-sample
 etc/rsyncd.conf-sample
+etc/object-expirer.conf-sample

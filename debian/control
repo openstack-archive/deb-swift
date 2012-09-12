@@ -4,7 +4,8 @@ Priority: optional
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders: Julien Danjou <acid@debian.org>,
            Thomas Goirand <zigo@debian.org>,
-           Ghe Rivero <ghe.rivero@stackops.com>
+           Ghe Rivero <ghe.rivero@stackops.com>,
+           Mehdi Abaakouk <sileht@sileht.net>
 Build-Depends: debhelper (>= 7.0.50~),
  python-all (>=2.6.6-3~),
  python-setuptools,
@@ -16,7 +17,8 @@ Build-Depends: debhelper (>= 7.0.50~),
  python-eventlet (>= 0.9.8),
  python-nose,
  python-pastedeploy,
- python-sphinx (>= 1.0)
+ python-sphinx (>= 1.0),
+ python-swiftclient
 Standards-Version: 3.9.3
 X-Python-Version: >= 2.6
 Homepage: http://launchpad.net/swift
@@ -29,6 +31,7 @@ Section: python
 Depends: adduser, ${python:Depends}, ${misc:Depends},
  python-openssl,
  python-setuptools,
+ python-paste,
  python-pastedeploy,
  python-webob (>= 0.9.7.1~hg20100111-1~racklabs1),
  python-simplejson,
