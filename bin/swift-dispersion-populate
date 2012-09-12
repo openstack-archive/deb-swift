@@ -25,7 +25,7 @@ from uuid import uuid4
 from eventlet import GreenPool, patcher, sleep
 from eventlet.pools import Pool
 
-from swift.common.client import Connection, get_auth
+from swiftclient import Connection, get_auth
 from swift.common.ring import Ring
 from swift.common.utils import compute_eta, get_time_units
 
@@ -96,7 +96,8 @@ if __name__ == '__main__':
     retries_done = 0
 
     url, token = get_auth(conf['auth_url'], conf['auth_user'],
-                          conf['auth_key'])
+                          conf['auth_key'],
+                          auth_version=conf.get('auth_version', '1.0'))
     account = url.rsplit('/', 1)[1]
     connpool = Pool(max_size=concurrency)
     connpool.create = lambda: Connection(conf['auth_url'],
@@ -130,7 +131,7 @@ if __name__ == '__main__':
 
     container = 'dispersion_objects'
     put_container(connpool, container, None)
-    object_ring = Ring(swift_dir, ring_name='object'))
+    object_ring = Ring(swift_dir, ring_name='object')
     parts_left = dict((x, x) for x in xrange(object_ring.partition_count))
     item_type = 'objects'
     created = 0

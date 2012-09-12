@@ -31,14 +31,16 @@ from webob.exc import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
 
 import swift.common.db
 from swift.common.db import ContainerBroker
-from swift.common.utils import get_logger, get_param, hash_path, \
+from swift.common.utils import get_logger, get_param, hash_path, public, \
     normalize_timestamp, storage_directory, split_path, validate_sync_to, \
-    TRUE_VALUES
+    TRUE_VALUES, validate_device_partition
 from swift.common.constraints import CONTAINER_LISTING_LIMIT, \
-    check_mount, check_float, check_utf8
+    check_mount, check_float, check_utf8, FORMAT2CONTENT_TYPE
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.db_replicator import ReplicatorRpc
+from swift.common.http import HTTP_NOT_FOUND, is_success, \
+    HTTPInsufficientStorage
 
 DATADIR = 'containers'
 
@@ -67,7 +69,7 @@ class ContainerController(object):
         if conf.get('allow_versions', 'f').lower() in TRUE_VALUES:
             self.save_headers.append('x-versions-location')
         swift.common.db.DB_PREALLOCATION = \
-            conf.get('db_preallocation', 't').lower() in TRUE_VALUES
+            conf.get('db_preallocation', 'f').lower() in TRUE_VALUES
 
     def _get_container_broker(self, drive, part, account, container):
         """
@@ -119,10 +121,9 @@ class ContainerController(object):
                 with Timeout(self.node_timeout):
                     account_response = conn.getresponse()
                     account_response.read()
-                    if account_response.status == 404:
+                    if account_response.status == HTTP_NOT_FOUND:
                         return HTTPNotFound(request=req)
-                    elif account_response.status < 200 or \
-                            account_response.status > 299:
+                    elif not is_success(account_response.status):
                         self.logger.error(_('ERROR Account update failed '
                             'with %(ip)s:%(port)s/%(device)s (will retry '
                             'later): Response %(status)s %(reason)s'),
@@ -137,65 +138,83 @@ class ContainerController(object):
                      'device': account_device})
         return None
 
+    @public
     def DELETE(self, req):
         """Handle HTTP DELETE request."""
+        start_time = time.time()
         try:
             drive, part, account, container, obj = split_path(
                 unquote(req.path), 4, 5, True)
+            validate_device_partition(drive, part)
         except ValueError, err:
+            self.logger.increment('DELETE.errors')
             return HTTPBadRequest(body=str(err), content_type='text/plain',
                                 request=req)
         if 'x-timestamp' not in req.headers or \
                     not check_float(req.headers['x-timestamp']):
+            self.logger.increment('DELETE.errors')
             return HTTPBadRequest(body='Missing timestamp', request=req,
                         content_type='text/plain')
         if self.mount_check and not check_mount(self.root, drive):
-            return Response(status='507 %s is not mounted' % drive)
+            self.logger.increment('DELETE.errors')
+            return HTTPInsufficientStorage(drive=drive, request=req)
         broker = self._get_container_broker(drive, part, account, container)
         if account.startswith(self.auto_create_account_prefix) and obj and \
                 not os.path.exists(broker.db_file):
             broker.initialize(normalize_timestamp(
                 req.headers.get('x-timestamp') or time.time()))
         if not os.path.exists(broker.db_file):
+            self.logger.timing_since('DELETE.timing', start_time)
             return HTTPNotFound()
         if obj:     # delete object
             broker.delete_object(obj, req.headers.get('x-timestamp'))
+            self.logger.timing_since('DELETE.timing', start_time)
             return HTTPNoContent(request=req)
         else:
             # delete container
             if not broker.empty():
+                self.logger.increment('DELETE.errors')
                 return HTTPConflict(request=req)
             existed = float(broker.get_info()['put_timestamp']) and \
                       not broker.is_deleted()
             broker.delete_db(req.headers['X-Timestamp'])
             if not broker.is_deleted():
+                self.logger.increment('DELETE.errors')
                 return HTTPConflict(request=req)
             resp = self.account_update(req, account, container, broker)
+            self.logger.timing_since('DELETE.timing', start_time)
             if resp:
                 return resp
             if existed:
                 return HTTPNoContent(request=req)
             return HTTPNotFound()
 
+    @public
     def PUT(self, req):
         """Handle HTTP PUT request."""
+        start_time = time.time()
         try:
             drive, part, account, container, obj = split_path(
                 unquote(req.path), 4, 5, True)
+            validate_device_partition(drive, part)
         except ValueError, err:
+            self.logger.increment('PUT.errors')
             return HTTPBadRequest(body=str(err), content_type='text/plain',
                                 request=req)
         if 'x-timestamp' not in req.headers or \
                     not check_float(req.headers['x-timestamp']):
+            self.logger.increment('PUT.errors')
             return HTTPBadRequest(body='Missing timestamp', request=req,
                         content_type='text/plain')
         if 'x-container-sync-to' in req.headers:
             err = validate_sync_to(req.headers['x-container-sync-to'],
                                    self.allowed_sync_hosts)
             if err:
+                self.logger.increment('PUT.errors')
                 return HTTPBadRequest(err)
         if self.mount_check and not check_mount(self.root, drive):
-            return Response(status='507 %s is not mounted' % drive)
+            self.logger.increment('PUT.errors')
+            return HTTPInsufficientStorage(drive=drive, request=req)
         timestamp = normalize_timestamp(req.headers['x-timestamp'])
         broker = self._get_container_broker(drive, part, account, container)
         if obj:     # put container object
@@ -203,9 +222,11 @@ class ContainerController(object):
                     not os.path.exists(broker.db_file):
                 broker.initialize(timestamp)
             if not os.path.exists(broker.db_file):
+                self.logger.timing_since('PUT.timing', start_time)
                 return HTTPNotFound()
             broker.put_object(obj, timestamp, int(req.headers['x-size']),
                 req.headers['x-content-type'], req.headers['x-etag'])
+            self.logger.timing_since('PUT.timing', start_time)
             return HTTPCreated(request=req)
         else:   # put container
             if not os.path.exists(broker.db_file):
@@ -215,6 +236,7 @@ class ContainerController(object):
                 created = broker.is_deleted()
                 broker.update_put_timestamp(timestamp)
                 if broker.is_deleted():
+                    self.logger.increment('PUT.errors')
                     return HTTPConflict(request=req)
             metadata = {}
             metadata.update((key, (value, timestamp))
@@ -229,6 +251,7 @@ class ContainerController(object):
                         broker.set_x_container_sync_points(-1, -1)
                 broker.update_metadata(metadata)
             resp = self.account_update(req, account, container, broker)
+            self.logger.timing_since('PUT.timing', start_time)
             if resp:
                 return resp
             if created:
@@ -236,20 +259,26 @@ class ContainerController(object):
             else:
                 return HTTPAccepted(request=req)
 
+    @public
     def HEAD(self, req):
         """Handle HTTP HEAD request."""
+        start_time = time.time()
         try:
             drive, part, account, container, obj = split_path(
                 unquote(req.path), 4, 5, True)
+            validate_device_partition(drive, part)
         except ValueError, err:
+            self.logger.increment('HEAD.errors')
             return HTTPBadRequest(body=str(err), content_type='text/plain',
                                 request=req)
         if self.mount_check and not check_mount(self.root, drive):
-            return Response(status='507 %s is not mounted' % drive)
+            self.logger.increment('HEAD.errors')
+            return HTTPInsufficientStorage(drive=drive, request=req)
         broker = self._get_container_broker(drive, part, account, container)
         broker.pending_timeout = 0.1
         broker.stale_reads_ok = True
         if broker.is_deleted():
+            self.logger.timing_since('HEAD.timing', start_time)
             return HTTPNotFound(request=req)
         info = broker.get_info()
         headers = {
@@ -262,22 +291,29 @@ class ContainerController(object):
             for key, (value, timestamp) in broker.metadata.iteritems()
             if value != '' and (key.lower() in self.save_headers or
                                 key.lower().startswith('x-container-meta-')))
+        self.logger.timing_since('HEAD.timing', start_time)
         return HTTPNoContent(request=req, headers=headers)
 
+    @public
     def GET(self, req):
         """Handle HTTP GET request."""
+        start_time = time.time()
         try:
             drive, part, account, container, obj = split_path(
                 unquote(req.path), 4, 5, True)
+            validate_device_partition(drive, part)
         except ValueError, err:
+            self.logger.increment('GET.errors')
             return HTTPBadRequest(body=str(err), content_type='text/plain',
                                 request=req)
         if self.mount_check and not check_mount(self.root, drive):
-            return Response(status='507 %s is not mounted' % drive)
+            self.logger.increment('GET.errors')
+            return HTTPInsufficientStorage(drive=drive, request=req)
         broker = self._get_container_broker(drive, part, account, container)
         broker.pending_timeout = 0.1
         broker.stale_reads_ok = True
         if broker.is_deleted():
+            self.logger.timing_since('GET.timing', start_time)
             return HTTPNotFound(request=req)
         info = broker.get_info()
         resp_headers = {
@@ -308,16 +344,19 @@ class ContainerController(object):
                         body='Maximum limit is %d' % CONTAINER_LISTING_LIMIT)
             query_format = get_param(req, 'format')
         except UnicodeDecodeError, err:
+            self.logger.increment('GET.errors')
             return HTTPBadRequest(body='parameters not utf8',
                                   content_type='text/plain', request=req)
         if query_format:
-            req.accept = 'application/%s' % query_format.lower()
+            req.accept = FORMAT2CONTENT_TYPE.get(query_format.lower(),
+                                                 FORMAT2CONTENT_TYPE['plain'])
         try:
             out_content_type = req.accept.best_match(
                                     ['text/plain', 'application/json',
                                      'application/xml', 'text/xml'],
                                     default_match='text/plain')
         except AssertionError, err:
+            self.logger.increment('GET.errors')
             return HTTPBadRequest(body='bad accept header: %s' % req.accept,
                                   content_type='text/plain', request=req)
         container_list = broker.list_objects_iter(limit, marker, end_marker,
@@ -370,53 +409,70 @@ class ContainerController(object):
                 ''.join(xml_output), '</container>'])
         else:
             if not container_list:
+                self.logger.timing_since('GET.timing', start_time)
                 return HTTPNoContent(request=req, headers=resp_headers)
             container_list = '\n'.join(r[0] for r in container_list) + '\n'
         ret = Response(body=container_list, request=req, headers=resp_headers)
         ret.content_type = out_content_type
         ret.charset = 'utf-8'
+        self.logger.timing_since('GET.timing', start_time)
         return ret
 
+    @public
     def REPLICATE(self, req):
         """
         Handle HTTP REPLICATE request (json-encoded RPC calls for replication.)
         """
+        start_time = time.time()
         try:
             post_args = split_path(unquote(req.path), 3)
+            drive, partition, hash = post_args
+            validate_device_partition(drive, partition)
         except ValueError, err:
+            self.logger.increment('REPLICATE.errors')
             return HTTPBadRequest(body=str(err), content_type='text/plain',
                                 request=req)
-        drive, partition, hash = post_args
         if self.mount_check and not check_mount(self.root, drive):
-            return Response(status='507 %s is not mounted' % drive)
+            self.logger.increment('REPLICATE.errors')
+            return HTTPInsufficientStorage(drive=drive, request=req)
         try:
             args = simplejson.load(req.environ['wsgi.input'])
         except ValueError, err:
+            self.logger.increment('REPLICATE.errors')
             return HTTPBadRequest(body=str(err), content_type='text/plain')
         ret = self.replicator_rpc.dispatch(post_args, args)
         ret.request = req
+        self.logger.timing_since('REPLICATE.timing', start_time)
         return ret
 
+    @public
     def POST(self, req):
         """Handle HTTP POST request."""
+        start_time = time.time()
         try:
             drive, part, account, container = split_path(unquote(req.path), 4)
+            validate_device_partition(drive, part)
         except ValueError, err:
+            self.logger.increment('POST.errors')
             return HTTPBadRequest(body=str(err), content_type='text/plain',
                                   request=req)
         if 'x-timestamp' not in req.headers or \
                 not check_float(req.headers['x-timestamp']):
+            self.logger.increment('POST.errors')
             return HTTPBadRequest(body='Missing or bad timestamp',
                 request=req, content_type='text/plain')
         if 'x-container-sync-to' in req.headers:
             err = validate_sync_to(req.headers['x-container-sync-to'],
                                    self.allowed_sync_hosts)
             if err:
+                self.logger.increment('POST.errors')
                 return HTTPBadRequest(err)
         if self.mount_check and not check_mount(self.root, drive):
-            return Response(status='507 %s is not mounted' % drive)
+            self.logger.increment('POST.errors')
+            return HTTPInsufficientStorage(drive=drive, request=req)
         broker = self._get_container_broker(drive, part, account, container)
         if broker.is_deleted():
+            self.logger.timing_since('POST.timing', start_time)
             return HTTPNotFound(request=req)
         timestamp = normalize_timestamp(req.headers['x-timestamp'])
         metadata = {}
@@ -431,6 +487,7 @@ class ContainerController(object):
                         broker.metadata['X-Container-Sync-To'][0]:
                     broker.set_x_container_sync_points(-1, -1)
             broker.update_metadata(metadata)
+        self.logger.timing_since('POST.timing', start_time)
         return HTTPNoContent(request=req)
 
     def __call__(self, env, start_response):
@@ -441,10 +498,14 @@ class ContainerController(object):
             res = HTTPPreconditionFailed(body='Invalid UTF8')
         else:
             try:
-                if hasattr(self, req.method):
-                    res = getattr(self, req.method)(req)
-                else:
+                # disallow methods which have not been marked 'public'
+                try:
+                    method = getattr(self, req.method)
+                    getattr(method, 'publicly_accessible')
+                except AttributeError:
                     res = HTTPMethodNotAllowed()
+                else:
+                    res = method(req)
             except (Exception, Timeout):
                 self.logger.exception(_('ERROR __call__ error with %(method)s'
                     ' %(path)s '), {'method': req.method, 'path': req.path})

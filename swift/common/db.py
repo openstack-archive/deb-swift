@@ -47,6 +47,10 @@ PICKLE_PROTOCOL = 2
 PENDING_CAP = 131072
 
 
+def utf8encode(*args):
+    return [(s.encode('utf8') if isinstance(s, unicode) else s) for s in args]
+
+
 class DatabaseConnectionError(sqlite3.DatabaseError):
     """More friendly error messages for DB Errors."""
 
@@ -1062,6 +1066,8 @@ class ContainerBroker(DatabaseBroker):
         :returns: list of tuples of (name, created_at, size, content_type,
                   etag)
         """
+        (marker, end_marker, prefix, delimiter, path) = utf8encode(
+            marker, end_marker, prefix, delimiter, path)
         try:
             self._commit_puts()
         except LockTimeout:
@@ -1555,6 +1561,8 @@ class AccountBroker(DatabaseBroker):
 
         :returns: list of tuples of (name, object_count, bytes_used, 0)
         """
+        (marker, end_marker, prefix, delimiter) = utf8encode(
+            marker, end_marker, prefix, delimiter)
         try:
             self._commit_puts()
         except LockTimeout:
@@ -1572,7 +1580,7 @@ class AccountBroker(DatabaseBroker):
                     WHERE deleted = 0 AND """
                 query_args = []
                 if end_marker:
-                    query += ' name <= ? AND'
+                    query += ' name < ? AND'
                     query_args.append(end_marker)
                 if marker and marker >= prefix:
                     query += ' name > ? AND'

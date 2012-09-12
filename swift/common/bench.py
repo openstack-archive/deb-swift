@@ -22,8 +22,9 @@ import eventlet.pools
 from eventlet.green.httplib import CannotSendRequest
 
 from swift.common.utils import TRUE_VALUES
-from swift.common import client
+import swiftclient as client
 from swift.common import direct_client
+from swift.common.http import HTTP_CONFLICT
 
 
 class ConnectionPool(eventlet.pools.Pool):
@@ -44,8 +45,11 @@ class Bench(object):
         self.key = conf.key
         self.auth_url = conf.auth
         self.use_proxy = conf.use_proxy.lower() in TRUE_VALUES
+        self.auth_version = conf.auth_version
+        self.logger.info("Auth version: %s" % self.auth_version)
         if self.use_proxy:
-            url, token = client.get_auth(self.auth_url, self.user, self.key)
+            url, token = client.get_auth(self.auth_url, self.user, self.key,
+                                         auth_version=self.auth_version)
             self.token = token
             self.account = url.split('/')[-1]
             if conf.url == '':
@@ -152,7 +156,7 @@ class BenchDELETE(Bench):
             try:
                 client.delete_container(self.url, self.token, container)
             except client.ClientException, e:
-                if e.http_status != 409:
+                if e.http_status != HTTP_CONFLICT:
                     self._log_status("Unable to delete container '%s'. " \
                         "Got http status '%d'." % (container, e.http_status))
 

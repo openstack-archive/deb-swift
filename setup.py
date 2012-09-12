@@ -41,7 +41,6 @@ setup(
         ],
     install_requires=[],  # removed for better compat
     scripts=[
-        'bin/swift',
         'bin/swift-account-audit',
         'bin/swift-account-auditor',
         'bin/swift-account-reaper',
@@ -87,13 +86,15 @@ setup(
             'cname_lookup=swift.common.middleware.cname_lookup:filter_factory',
             'catch_errors=swift.common.middleware.catch_errors:filter_factory',
             'domain_remap=swift.common.middleware.domain_remap:filter_factory',
-            'swift3=swift.common.middleware.swift3:filter_factory',
             'staticweb=swift.common.middleware.staticweb:filter_factory',
             'tempauth=swift.common.middleware.tempauth:filter_factory',
+            'keystoneauth=swift.common.middleware.keystoneauth:filter_factory',
             'recon=swift.common.middleware.recon:filter_factory',
             'tempurl=swift.common.middleware.tempurl:filter_factory',
             'formpost=swift.common.middleware.formpost:filter_factory',
             'name_check=swift.common.middleware.name_check:filter_factory',
+            'proxy_logging=swift.common.middleware.proxy_logging:'
+                'filter_factory',
             ],
         },
     )

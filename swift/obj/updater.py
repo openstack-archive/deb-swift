@@ -25,9 +25,12 @@ from eventlet import patcher, Timeout
 from swift.common.bufferedhttp import http_connect
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.ring import Ring
-from swift.common.utils import get_logger, renamer, write_pickle
+from swift.common.utils import get_logger, renamer, write_pickle, \
+    dump_recon_cache
 from swift.common.daemon import Daemon
 from swift.obj.server import ASYNCDIR
+from swift.common.http import is_success, HTTP_NOT_FOUND, \
+    HTTP_INTERNAL_SERVER_ERROR
 
 
 class ObjectUpdater(Daemon):
@@ -48,6 +51,9 @@ class ObjectUpdater(Daemon):
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         self.successes = 0
         self.failures = 0
+        self.recon_cache_path = conf.get('recon_cache_path',
+                                         '/var/cache/swift')
+        self.rcache = os.path.join(self.recon_cache_path, 'object.recon')
 
     def get_container_ring(self):
         """Get the container ring.  Load it, if it hasn't been yet."""
@@ -67,6 +73,7 @@ class ObjectUpdater(Daemon):
             for device in os.listdir(self.devices):
                 if self.mount_check and not \
                         os.path.ismount(os.path.join(self.devices, device)):
+                    self.logger.increment('errors')
                     self.logger.warn(
                         _('Skipping %s as it is not mounted'), device)
                     continue
@@ -94,6 +101,8 @@ class ObjectUpdater(Daemon):
             elapsed = time.time() - begin
             self.logger.info(_('Object update sweep completed: %.02fs'),
                     elapsed)
+            dump_recon_cache({'object_updater_sweep': elapsed},
+                             self.rcache, self.logger)
             if elapsed < self.interval:
                 time.sleep(self.interval - elapsed)
 
@@ -106,6 +115,7 @@ class ObjectUpdater(Daemon):
         for device in os.listdir(self.devices):
             if self.mount_check and \
                     not os.path.ismount(os.path.join(self.devices, device)):
+                self.logger.increment('errors')
                 self.logger.warn(
                     _('Skipping %s as it is not mounted'), device)
                 continue
@@ -115,6 +125,8 @@ class ObjectUpdater(Daemon):
             '%(elapsed).02fs, %(success)s successes, %(fail)s failures'),
             {'elapsed': elapsed, 'success': self.successes,
              'fail': self.failures})
+        dump_recon_cache({'object_updater_sweep': elapsed},
+                         self.rcache, self.logger)
 
     def object_sweep(self, device):
         """
@@ -122,6 +134,7 @@ class ObjectUpdater(Daemon):
 
         :param device: path to device
         """
+        start_time = time.time()
         async_pending = os.path.join(device, ASYNCDIR)
         if not os.path.isdir(async_pending):
             return
@@ -137,6 +150,7 @@ class ObjectUpdater(Daemon):
                 try:
                     obj_hash, timestamp = update.split('-')
                 except ValueError:
+                    self.logger.increment('errors')
                     self.logger.error(
                         _('ERROR async pending file with unexpected name %s')
                         % (update_path))
@@ -151,6 +165,7 @@ class ObjectUpdater(Daemon):
                 os.rmdir(prefix_path)
             except OSError:
                 pass
+        self.logger.timing_since('timing', start_time)
 
     def process_object_update(self, update_path, device):
         """
@@ -164,6 +179,7 @@ class ObjectUpdater(Daemon):
         except Exception:
             self.logger.exception(
                 _('ERROR Pickle problem, quarantining %s'), update_path)
+            self.logger.increment('quarantines')
             renamer(update_path, os.path.join(device,
                 'quarantined', 'objects', os.path.basename(update_path)))
             return
@@ -178,18 +194,20 @@ class ObjectUpdater(Daemon):
             if node['id'] not in successes:
                 status = self.object_update(node, part, update['op'], obj,
                                         update['headers'])
-                if not (200 <= status < 300) and status != 404:
+                if not is_success(status) and status != HTTP_NOT_FOUND:
                     success = False
                 else:
                     successes.append(node['id'])
                     new_successes = True
         if success:
             self.successes += 1
+            self.logger.increment('successes')
             self.logger.debug(_('Update sent for %(obj)s %(path)s'),
                 {'obj': obj, 'path': update_path})
             os.unlink(update_path)
         else:
             self.failures += 1
+            self.logger.increment('failures')
             self.logger.debug(_('Update failed for %(obj)s %(path)s'),
                 {'obj': obj, 'path': update_path})
             if new_successes:
@@ -217,4 +235,4 @@ class ObjectUpdater(Daemon):
         except (Exception, Timeout):
             self.logger.exception(_('ERROR with remote server '
                 '%(ip)s:%(port)s/%(device)s'), node)
-        return 500
+        return HTTP_INTERNAL_SERVER_ERROR

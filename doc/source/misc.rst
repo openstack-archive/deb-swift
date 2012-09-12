@@ -60,22 +60,22 @@ WSGI
     :members:
     :show-inheritance:
 
-.. _client:
-
-Client
-======
-
-.. automodule:: swift.common.client
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 .. _direct_client:
 
 Direct Client
 =============
 
 .. automodule:: swift.common.direct_client
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+.. _internal_client:
+
+Internal Client
+===============
+
+.. automodule:: swift.common.internal_client
     :members:
     :undoc-members:
     :show-inheritance:
@@ -130,13 +130,6 @@ Ratelimit
     :members:
     :show-inheritance:
 
-Swift3
-======
-
-.. automodule:: swift.common.middleware.swift3
-    :members:
-    :show-inheritance:
-
 StaticWeb
 =========
 
@@ -155,5 +148,26 @@ FormPost
 ========
 
 .. automodule:: swift.common.middleware.formpost
+    :members:
+    :show-inheritance:
+
+Domain Remap
+============
+
+.. automodule:: swift.common.middleware.domain_remap
+    :members:
+    :show-inheritance:
+
+CNAME Lookup
+============
+
+.. automodule:: swift.common.middleware.cname_lookup
+    :members:
+    :show-inheritance:
+
+Proxy Logging
+=============
+
+.. automodule:: swift.common.middleware.proxy_logging
     :members:
     :show-inheritance:

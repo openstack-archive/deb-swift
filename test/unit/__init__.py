@@ -1,11 +1,21 @@
 """ Swift tests """
 
+import sys
 import os
+import copy
+import logging
+from sys import exc_info
 from contextlib import contextmanager
 from tempfile import NamedTemporaryFile
 from eventlet.green import socket
 from tempfile import mkdtemp
 from shutil import rmtree
+from test import get_config
+from ConfigParser import MissingSectionHeaderError
+from StringIO import StringIO
+from swift.common.utils import readconf, TRUE_VALUES
+from logging import Handler
+import logging.handlers
 
 
 def readuntil2crlfs(fd):
@@ -91,11 +101,24 @@ def temptree(files, contents=''):
         rmtree(tempdir)
 
 
+class NullLoggingHandler(logging.Handler):
+
+    def emit(self, record):
+        pass
+
+
 class FakeLogger(object):
     # a thread safe logger
 
     def __init__(self, *args, **kwargs):
-        self.log_dict = dict(error=[], info=[], warning=[], debug=[])
+        self._clear()
+        self.level = logging.NOTSET
+        if 'facility' in kwargs:
+            self.facility = kwargs['facility']
+
+    def _clear(self):
+        self.log_dict = dict(
+            error=[], info=[], warning=[], debug=[], exception=[])
 
     def error(self, *args, **kwargs):
         self.log_dict['error'].append((args, kwargs))
@@ -109,12 +132,72 @@ class FakeLogger(object):
     def debug(self, *args, **kwargs):
         self.log_dict['debug'].append((args, kwargs))
 
+    def exception(self, *args, **kwargs):
+        self.log_dict['exception'].append((args, kwargs, str(exc_info()[1])))
+
+    # mock out the StatsD logging methods:
+    def set_statsd_prefix(self, *a, **kw):
+        pass
+
+    increment = decrement = timing = timing_since = update_stats = \
+            set_statsd_prefix
+
+    def setFormatter(self, obj):
+        self.formatter = obj
+
+    def close(self):
+        self._clear()
+
+    def set_name(self, name):
+        # don't touch _handlers
+        self._name = name
+
+    def acquire(self):
+        pass
+
+    def release(self):
+        pass
+
+    def createLock(self):
+        pass
+
+    def emit(self, record):
+        pass
+
+    def handle(self, record):
+        pass
+
+    def flush(self):
+        pass
+
+    def handleError(self, record):
+        pass
+
+
+original_syslog_handler = logging.handlers.SysLogHandler
+
+
+def fake_syslog_handler():
+    for attr in dir(original_syslog_handler):
+        if attr.startswith('LOG'):
+            setattr(FakeLogger, attr,
+                    copy.copy(getattr(logging.handlers.SysLogHandler, attr)))
+    FakeLogger.priority_map = \
+        copy.deepcopy(logging.handlers.SysLogHandler.priority_map)
+
+    logging.handlers.SysLogHandler = FakeLogger
+
+
+if get_config('unit_test').get('fake_syslog', 'False').lower() in TRUE_VALUES:
+    fake_syslog_handler()
+
 
 class MockTrue(object):
     """
     Instances of MockTrue evaluate like True
-    Any attr accessed on an instance of MockTrue will return a MockTrue instance
-    Any method called on an instance of MockTrue will return a MockTrue instance
+    Any attr accessed on an instance of MockTrue will return a MockTrue
+    instance. Any method called on an instance of MockTrue will return
+    a MockTrue instance.
 
     >>> thing = MockTrue()
     >>> thing
@@ -140,11 +223,15 @@ class MockTrue(object):
 
     def __getattribute__(self, *args, **kwargs):
         return self
+
     def __call__(self, *args, **kwargs):
         return self
+
     def __repr__(*args, **kwargs):
         return repr(True)
+
     def __eq__(self, other):
         return other is True
+
     def __ne__(self, other):
         return other is not True

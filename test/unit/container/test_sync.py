@@ -15,9 +15,11 @@
 
 import unittest
 
+import re
+from test.unit import FakeLogger
 from swift.container import sync
 from swift.common import utils
-from swift.common.client import ClientException
+from swiftclient import ClientException
 
 
 utils.HASH_PATH_SUFFIX = 'endcap'
@@ -26,7 +28,6 @@ utils.HASH_PATH_SUFFIX = 'endcap'
 class FakeRing(object):
 
     def __init__(self):
-        self.replica_count = 3
         self.devs = [{'ip': '10.0.0.%s' % x, 'port': 1000 + x, 'device': 'sda'}
                      for x in xrange(3)]
 
@@ -766,18 +767,6 @@ class TestContainerSync(unittest.TestCase):
                                 contents=None, proxy=None):
                 raise ClientException('test client exception', http_status=401)
 
-            class FakeLogger(object):
-
-                def __init__(self):
-                    self.err = ''
-                    self.exc = ''
-
-                def info(self, err, *args, **kwargs):
-                    self.err = err
-
-                def exception(self, exc, *args, **kwargs):
-                    self.exc = exc
-
             sync.direct_get_object = fake_direct_get_object
             sync.put_object = fake_put_object
             cs.logger = FakeLogger()
@@ -787,7 +776,8 @@ class TestContainerSync(unittest.TestCase):
                 'key', FakeContainerBroker('broker'), {'account': 'a',
                 'container': 'c'}))
             self.assertEquals(cs.container_puts, 2)
-            self.assertTrue(cs.logger.err.startswith('Unauth '))
+            self.assert_(re.match('Unauth ',
+                                  cs.logger.log_dict['info'][0][0][0]))
 
             def fake_put_object(sync_to, name=None, headers=None,
                                 contents=None, proxy=None):
@@ -795,12 +785,14 @@ class TestContainerSync(unittest.TestCase):
 
             sync.put_object = fake_put_object
             # Fail due to 404
+            cs.logger = FakeLogger()
             self.assertFalse(cs.container_sync_row({'deleted': False,
                 'name': 'object', 'created_at': '1.2'}, 'http://sync/to/path',
                 'key', FakeContainerBroker('broker'), {'account': 'a',
                 'container': 'c'}))
             self.assertEquals(cs.container_puts, 2)
-            self.assertTrue(cs.logger.err.startswith('Not found '))
+            self.assert_(re.match('Not found ',
+                                  cs.logger.log_dict['info'][0][0][0]))
 
             def fake_put_object(sync_to, name=None, headers=None,
                                 contents=None, proxy=None):
@@ -813,7 +805,9 @@ class TestContainerSync(unittest.TestCase):
                 'key', FakeContainerBroker('broker'), {'account': 'a',
                 'container': 'c'}))
             self.assertEquals(cs.container_puts, 2)
-            self.assertTrue(cs.logger.exc.startswith('ERROR Syncing '))
+            self.assertTrue(
+                cs.logger.log_dict['exception'][0][0][0].startswith(
+                    'ERROR Syncing '))
         finally:
             sync.shuffle = orig_shuffle
             sync.put_object = orig_put_object

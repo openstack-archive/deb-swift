@@ -33,9 +33,10 @@ from eventlet.support.greenlets import GreenletExit
 from swift.common.ring import Ring
 from swift.common.utils import whataremyips, unlink_older_than, lock_path, \
         compute_eta, get_logger, write_pickle, renamer, dump_recon_cache, \
-        TRUE_VALUES
+        rsync_ip
 from swift.common.bufferedhttp import http_connect
 from swift.common.daemon import Daemon
+from swift.common.http import HTTP_OK, HTTP_INSUFFICIENT_STORAGE
 
 hubs.use_hub('poll')
 
@@ -246,11 +247,9 @@ class ObjectReplicator(Daemon):
         self.rsync_io_timeout = conf.get('rsync_io_timeout', '30')
         self.http_timeout = int(conf.get('http_timeout', 60))
         self.lockup_timeout = int(conf.get('lockup_timeout', 1800))
-        self.recon_enable = conf.get(
-                'recon_enable', 'no').lower() in TRUE_VALUES
-        self.recon_cache_path = conf.get(
-                'recon_cache_path', '/var/cache/swift')
-        self.recon_object = os.path.join(self.recon_cache_path, "object.recon")
+        self.recon_cache_path = conf.get('recon_cache_path',
+                                         '/var/cache/swift')
+        self.rcache = os.path.join(self.recon_cache_path, "object.recon")
 
     def _rsync(self, args):
         """
@@ -317,10 +316,11 @@ class ObjectReplicator(Daemon):
             '--timeout=%s' % self.rsync_io_timeout,
             '--contimeout=%s' % self.rsync_io_timeout,
         ]
+        node_ip = rsync_ip(node['ip'])
         if self.vm_test_mode:
-            rsync_module = '[%s]::object%s' % (node['ip'], node['port'])
+            rsync_module = '%s::object%s' % (node_ip, node['port'])
         else:
-            rsync_module = '[%s]::object' % node['ip']
+            rsync_module = '%s::object' % node_ip
         had_any = False
         for suffix in suffixes:
             spath = join(job['path'], suffix)
@@ -357,6 +357,7 @@ class ObjectReplicator(Daemon):
             return [suff for suff in os.listdir(path)
                     if len(suff) == 3 and isdir(join(path, suff))]
         self.replication_count += 1
+        self.logger.increment('partition.delete.count.%s' % (job['device'],))
         begin = time.time()
         try:
             responses = []
@@ -372,13 +373,14 @@ class ObjectReplicator(Daemon):
                           headers={'Content-Length': '0'}).getresponse().read()
                     responses.append(success)
             if not suffixes or (len(responses) == \
-                        self.object_ring.replica_count and all(responses)):
+                        len(job['nodes']) and all(responses)):
                 self.logger.info(_("Removing partition: %s"), job['path'])
                 tpool.execute(shutil.rmtree, job['path'], ignore_errors=True)
         except (Exception, Timeout):
             self.logger.exception(_("Error syncing handoff partition"))
         finally:
             self.partition_times.append(time.time() - begin)
+            self.logger.timing_since('partition.delete.timing', begin)
 
     def update(self, job):
         """
@@ -387,6 +389,7 @@ class ObjectReplicator(Daemon):
         :param job: a dict containing info about the partition to be replicated
         """
         self.replication_count += 1
+        self.logger.increment('partition.update.count.%s' % (job['device'],))
         begin = time.time()
         try:
             hashed, local_hash = tpool.execute(tpooled_get_hashes, job['path'],
@@ -396,7 +399,8 @@ class ObjectReplicator(Daemon):
             if isinstance(hashed, BaseException):
                 raise hashed
             self.suffix_hash += hashed
-            attempts_left = self.object_ring.replica_count - 1
+            self.logger.update_stats('suffix.hashes', hashed)
+            attempts_left = len(job['nodes'])
             nodes = itertools.chain(job['nodes'],
                         self.object_ring.get_more_nodes(int(job['partition'])))
             while attempts_left > 0:
@@ -408,12 +412,12 @@ class ObjectReplicator(Daemon):
                         resp = http_connect(node['ip'], node['port'],
                                 node['device'], job['partition'], 'REPLICATE',
                             '', headers={'Content-Length': '0'}).getresponse()
-                        if resp.status == 507:
+                        if resp.status == HTTP_INSUFFICIENT_STORAGE:
                             self.logger.error(_('%(ip)s/%(device)s responded'
                                     ' as unmounted'), node)
                             attempts_left += 1
                             continue
-                        if resp.status != 200:
+                        if resp.status != HTTP_OK:
                             self.logger.error(_("Invalid response %(resp)s "
                                 "from %(ip)s"),
                                 {'resp': resp.status, 'ip': node['ip']})
@@ -430,6 +434,7 @@ class ObjectReplicator(Daemon):
                     # See tpooled_get_hashes "Hack".
                     if isinstance(hashed, BaseException):
                         raise hashed
+                    self.logger.update_stats('suffix.hashes', hashed)
                     local_hash = recalc_hash
                     suffixes = [suffix for suffix in local_hash if
                             local_hash[suffix] != remote_hash.get(suffix, -1)]
@@ -441,6 +446,7 @@ class ObjectReplicator(Daemon):
                             headers={'Content-Length': '0'})
                         conn.getresponse().read()
                     self.suffix_sync += len(suffixes)
+                    self.logger.update_stats('suffix.syncs', len(suffixes))
                 except (Exception, Timeout):
                     self.logger.exception(_("Error syncing with node: %s") %
                                             node)
@@ -449,6 +455,7 @@ class ObjectReplicator(Daemon):
             self.logger.exception(_("Error syncing partition"))
         finally:
             self.partition_times.append(time.time() - begin)
+            self.logger.timing_since('partition.update.timing', begin)
 
     def stats_line(self):
         """
@@ -532,12 +539,14 @@ class ObjectReplicator(Daemon):
                 continue
             for partition in os.listdir(obj_path):
                 try:
-                    nodes = [node for node in
+                    part_nodes = \
                         self.object_ring.get_part_nodes(int(partition))
+                    nodes = [node for node in part_nodes
                              if node['id'] != local_dev['id']]
                     jobs.append(dict(path=join(obj_path, partition),
+                        device=local_dev['device'],
                         nodes=nodes,
-                        delete=len(nodes) > self.object_ring.replica_count - 1,
+                        delete=len(nodes) > len(part_nodes) - 1,
                         partition=partition))
                 except ValueError:
                     continue
@@ -563,6 +572,10 @@ class ObjectReplicator(Daemon):
             self.run_pool = GreenPool(size=self.concurrency)
             jobs = self.collect_jobs()
             for job in jobs:
+                dev_path = join(self.devices_dir, job['device'])
+                if self.mount_check and not os.path.ismount(dev_path):
+                    self.logger.warn(_('%s is not mounted'), job['device'])
+                    continue
                 if not self.check_ring():
                     self.logger.info(_("Ring change detected. Aborting "
                             "current replication pass."))
@@ -588,12 +601,8 @@ class ObjectReplicator(Daemon):
         total = (time.time() - start) / 60
         self.logger.info(
             _("Object replication complete. (%.02f minutes)"), total)
-        if self.recon_enable:
-            try:
-                dump_recon_cache('object_replication_time', total, \
-                    self.recon_object)
-            except (Exception, Timeout):
-                self.logger.exception(_('Exception dumping recon cache'))
+        dump_recon_cache({'object_replication_time': total},
+                         self.rcache, self.logger)
 
     def run_forever(self, *args, **kwargs):
         self.logger.info(_("Starting object replicator in daemon mode."))
@@ -606,12 +615,8 @@ class ObjectReplicator(Daemon):
             total = (time.time() - start) / 60
             self.logger.info(
                 _("Object replication complete. (%.02f minutes)"), total)
-            if self.recon_enable:
-                try:
-                    dump_recon_cache('object_replication_time', total, \
-                        self.recon_object)
-                except (Exception, Timeout):
-                    self.logger.exception(_('Exception dumping recon cache'))
+            dump_recon_cache({'object_replication_time': total},
+                             self.rcache, self.logger)
             self.logger.debug(_('Replication sleeping for %s seconds.'),
                 self.run_pause)
             sleep(self.run_pause)

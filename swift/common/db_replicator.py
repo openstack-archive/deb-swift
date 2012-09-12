@@ -29,8 +29,10 @@ from webob import Response
 from webob.exc import HTTPNotFound, HTTPNoContent, HTTPAccepted, \
     HTTPInsufficientStorage, HTTPBadRequest
 
+import swift.common.db
 from swift.common.utils import get_logger, whataremyips, storage_directory, \
-    renamer, mkdirs, lock_parent_directory, unlink_older_than
+    renamer, mkdirs, lock_parent_directory, TRUE_VALUES, unlink_older_than, \
+    dump_recon_cache, rsync_ip
 from swift.common import ring
 from swift.common.bufferedhttp import BufferedHTTPConnection
 from swift.common.exceptions import DriveNotMounted, ConnectionTimeout
@@ -120,7 +122,14 @@ class Replicator(Daemon):
         self.node_timeout = int(conf.get('node_timeout', 10))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         self.reclaim_age = float(conf.get('reclaim_age', 86400 * 7))
+        swift.common.db.DB_PREALLOCATION = \
+            conf.get('db_preallocation', 'f').lower() in TRUE_VALUES
         self._zero_stats()
+        self.recon_cache_path = conf.get('recon_cache_path',
+                                         '/var/cache/swift')
+        self.recon_replicator = '%s.recon' % self.server_type
+        self.rcache = os.path.join(self.recon_cache_path,
+                                   self.recon_replicator)
 
     def _zero_stats(self):
         """Zero out the stats."""
@@ -141,6 +150,9 @@ class Replicator(Daemon):
         self.logger.info(_('Removed %(remove)d dbs') % self.stats)
         self.logger.info(_('%(success)s successes, %(failure)s failures')
             % self.stats)
+        dump_recon_cache({'replication_stats': self.stats,
+                          'replication_time': time.time() - self.stats['start']
+                         }, self.rcache, self.logger)
         self.logger.info(' '.join(['%s:%s' % item for item in
              self.stats.items() if item[0] in
              ('no_change', 'hashmatch', 'rsync', 'diff', 'ts_repl', 'empty',
@@ -181,12 +193,13 @@ class Replicator(Daemon):
         :param replicate_method: remote operation to perform after rsync
         :param replicate_timeout: timeout to wait in seconds
         """
+        device_ip = rsync_ip(device['ip'])
         if self.vm_test_mode:
-            remote_file = '[%s]::%s%s/%s/tmp/%s' % (device['ip'],
+            remote_file = '%s::%s%s/%s/tmp/%s' % (device_ip,
                     self.server_type, device['port'], device['device'],
                     local_id)
         else:
-            remote_file = '[%s]::%s/%s/tmp/%s' % (device['ip'],
+            remote_file = '%s::%s/%s/tmp/%s' % (device_ip,
                     self.server_type, device['device'], local_id)
         mtime = os.path.getmtime(broker.db_file)
         if not self._rsync_file(broker.db_file, remote_file):
@@ -215,6 +228,7 @@ class Replicator(Daemon):
         :returns: boolean indicating completion and success
         """
         self.stats['diff'] += 1
+        self.logger.increment('diffs')
         self.logger.debug(_('Syncing chunks with %s'), http.host)
         sync_table = broker.get_syncs()
         objects = broker.get_items_since(point, self.per_diff)
@@ -236,6 +250,7 @@ class Replicator(Daemon):
                 '%s rows behind; moving on and will try again next pass.') %
                 (broker.db_file, self.max_diffs * self.per_diff))
             self.stats['diff_capped'] += 1
+            self.logger.increment('diff_caps')
         else:
             with Timeout(self.node_timeout):
                 response = http.replicate('merge_syncs', sync_table)
@@ -259,9 +274,11 @@ class Replicator(Daemon):
         """
         if max(rinfo['point'], local_sync) >= info['max_row']:
             self.stats['no_change'] += 1
+            self.logger.increment('no_changes')
             return True
         if rinfo['hash'] == info['hash']:
             self.stats['hashmatch'] += 1
+            self.logger.increment('hashmatches')
             broker.merge_syncs([{'remote_id': rinfo['id'],
                 'sync_point': rinfo['point']}], incoming=False)
             return True
@@ -306,6 +323,7 @@ class Replicator(Daemon):
             return False
         elif response.status == HTTPNotFound.code:  # completely missing, rsync
             self.stats['rsync'] += 1
+            self.logger.increment('rsyncs')
             return self._rsync_db(broker, node, http, info['id'])
         elif response.status == HTTPInsufficientStorage.code:
             raise DriveNotMounted()
@@ -318,6 +336,7 @@ class Replicator(Daemon):
             # more than 50%, rsync then do a remote merge.
             if rinfo['max_row'] / float(info['max_row']) < 0.5:
                 self.stats['remote_merge'] += 1
+                self.logger.increment('remote_merges')
                 return self._rsync_db(broker, node, http, info['id'],
                         replicate_method='rsync_then_merge',
                         replicate_timeout=(info['count'] / 2000))
@@ -334,13 +353,16 @@ class Replicator(Daemon):
         :param object_file: DB file name to be replicated
         :param node_id: node id of the node to be replicated to
         """
+        start_time = time.time()
         self.logger.debug(_('Replicating db %s'), object_file)
         self.stats['attempted'] += 1
+        self.logger.increment('attempts')
         try:
             broker = self.brokerclass(object_file, pending_timeout=30)
             broker.reclaim(time.time() - self.reclaim_age,
                            time.time() - (self.reclaim_age * 2))
             info = broker.get_replication_info()
+            full_info = broker.get_info()
         except (Exception, Timeout), e:
             if 'no such table' in str(e):
                 self.logger.error(_('Quarantining DB %s'), object_file)
@@ -348,6 +370,7 @@ class Replicator(Daemon):
             else:
                 self.logger.exception(_('ERROR reading db %s'), object_file)
             self.stats['failure'] += 1
+            self.logger.increment('failures')
             return
         # The db is considered deleted if the delete_timestamp value is greater
         # than the put_timestamp, and there are no objects.
@@ -364,9 +387,12 @@ class Replicator(Daemon):
         if delete_timestamp < (time.time() - self.reclaim_age) and \
                 delete_timestamp > put_timestamp and \
                 info['count'] in (None, '', 0, '0'):
-            with lock_parent_directory(object_file):
-                shutil.rmtree(os.path.dirname(object_file), True)
-                self.stats['remove'] += 1
+            if self.report_up_to_date(full_info):
+                with lock_parent_directory(object_file):
+                    shutil.rmtree(os.path.dirname(object_file), True)
+                    self.stats['remove'] += 1
+                    self.logger.increment('removes')
+            self.logger.timing_since('timing', start_time)
             return
         responses = []
         nodes = self.ring.get_part_nodes(int(partition))
@@ -388,6 +414,7 @@ class Replicator(Daemon):
                 self.logger.exception(_('ERROR syncing %(file)s with node'
                         ' %(node)s'), {'file': object_file, 'node': node})
             self.stats['success' if success else 'failure'] += 1
+            self.logger.increment('successes' if success else 'failures')
             responses.append(success)
         if not shouldbehere and all(responses):
             # If the db shouldn't be on this node and has been successfully
@@ -395,6 +422,11 @@ class Replicator(Daemon):
             with lock_parent_directory(object_file):
                 shutil.rmtree(os.path.dirname(object_file), True)
                 self.stats['remove'] += 1
+                self.logger.increment('removes')
+        self.logger.timing_since('timing', start_time)
+
+    def report_up_to_date(self, full_info):
+        return True
 
     def roundrobin_datadirs(self, datadirs):
         """

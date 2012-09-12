@@ -21,7 +21,8 @@ from subprocess import call, Popen
 from time import sleep
 from uuid import uuid4
 
-from swift.common import client, direct_client
+from swiftclient import client
+from swift.common import direct_client
 
 from test.probe.common import kill_pids, reset_environment
 
@@ -99,7 +100,7 @@ class TestObjectHandoff(unittest.TestCase):
             exc = True
         if not exc:
             raise Exception('Previously downed object server had test object')
-        # Run the extra server last so it'll remove it's extra partition
+        # Run the extra server last so it'll remove its extra partition
         ps = []
         for n in onodes:
             ps.append(Popen(['swift-object-replicator',
@@ -151,7 +152,7 @@ class TestObjectHandoff(unittest.TestCase):
 #       if oheaders.get('x-object-meta-probe') == 'value':
 #           raise Exception('Previously downed object server had the new '
 #                           'metadata when it should not have it')
-#       # Run the extra server last so it'll remove it's extra partition
+#       # Run the extra server last so it'll remove its extra partition
 #       ps = []
 #       for n in onodes:
 #           ps.append(Popen(['swift-object-replicator',
@@ -196,7 +197,7 @@ class TestObjectHandoff(unittest.TestCase):
         sleep(2)
         direct_client.direct_get_object(onode, opart, self.account, container,
                                         obj)
-        # Run the extra server last so it'll remove it's extra partition
+        # Run the extra server last so it'll remove its extra partition
         ps = []
         for n in onodes:
             ps.append(Popen(['swift-object-replicator',

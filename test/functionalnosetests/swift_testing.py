@@ -9,9 +9,9 @@ from ConfigParser import MissingSectionHeaderError
 
 from test import get_config
 
-from swift.common.client import get_auth, http_connection
+from swiftclient import get_auth, http_connection
 
-conf = get_config()
+conf = get_config('func_test')
 
 # If no conf was read, we will fall back to old school env vars
 swift_test_auth = os.environ.get('SWIFT_TEST_AUTH')

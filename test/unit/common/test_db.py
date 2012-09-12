@@ -100,9 +100,9 @@ class TestDatabaseBroker(unittest.TestCase):
     def test_DB_PREALLOCATION_setting(self):
         u = uuid4().hex
         b = DatabaseBroker(u)
-        self.assertRaises(OSError, b._preallocate)
-        swift.common.db.DB_PREALLOCATION = False
         b._preallocate()
+        swift.common.db.DB_PREALLOCATION = True
+        self.assertRaises(OSError, b._preallocate)
 
     def tearDown(self):
         rmtree(self.testdir, ignore_errors=1)
@@ -1814,9 +1814,9 @@ class TestAccountBroker(unittest.TestCase):
         self.assertEquals(listing[-1][0], '0/0099')
 
         listing = broker.list_containers_iter(100, '', '0/0050', None, '')
-        self.assertEquals(len(listing), 51)
+        self.assertEquals(len(listing), 50)
         self.assertEquals(listing[0][0], '0/0000')
-        self.assertEquals(listing[-1][0], '0/0050')
+        self.assertEquals(listing[-1][0], '0/0049')
 
         listing = broker.list_containers_iter(100, '0/0099', None, None, '')
         self.assertEquals(len(listing), 100)

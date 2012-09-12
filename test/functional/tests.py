@@ -14,31 +14,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import array
 from datetime import datetime
 import locale
-import os
-import os.path
 import random
 import StringIO
-import sys
 import time
 import threading
 import uuid
 import unittest
-import urllib
+from nose import SkipTest
 
 from test import get_config
-from swift import Account, AuthenticationFailed, Connection, Container, \
-     File, ResponseError
+from test.functional.swift import Account, Connection, File, ResponseError
 
-config = get_config()
+config = get_config('func_test')
 
 locale.setlocale(locale.LC_COLLATE, config.get('collate', 'C'))
 
-
-class Base:
-    pass
 
 def chunks(s, length=3):
     i, j = 0, length
@@ -1086,6 +1078,17 @@ class TestFile(Base):
 
         hdrs = {'Range': '0-4'}
         self.assert_(file.read(hdrs=hdrs) == data, range_string)
+
+    def testRangedGetsWithLWSinHeader(self):
+        #Skip this test until webob 1.2 can tolerate LWS in Range header.
+        from webob.byterange import Range
+        if not isinstance(Range.parse('bytes =  0-99 '), Range):
+            raise SkipTest
+
+        file_length = 10000
+        range_size = file_length/10
+        file = self.env.container.file(Utils.create_name())
+        data = file.write_random(file_length)
 
         for r in ('BYTES=0-999', 'bytes = 0-999', 'BYTES = 0 - 999',
             'bytes = 0 - 999', 'bytes=0 - 999', 'bytes=0-999 '):

@@ -20,7 +20,6 @@ import os
 import sys
 import shutil
 import unittest
-from nose import SkipTest
 from shutil import rmtree
 from StringIO import StringIO
 from time import gmtime, sleep, strftime, time
@@ -91,6 +90,18 @@ class TestDiskFile(unittest.TestCase):
                                     'o', FakeLogger()).mkstemp():
             self.assert_(os.path.exists(tmpdir))
 
+    def test_iter_hook(self):
+        hook_call_count = [0]
+        def hook():
+            hook_call_count[0] += 1
+
+        df = self._get_data_file(fsize=65, csize=8, iter_hook=hook)
+        print repr(df.__dict__)
+        for _ in df:
+            pass
+
+        self.assertEquals(hook_call_count[0], 9)
+
     def test_quarantine(self):
         df = object_server.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
                                     FakeLogger())
@@ -137,7 +148,8 @@ class TestDiskFile(unittest.TestCase):
         self.assert_('-' in os.path.basename(double_uuid_path))
 
     def _get_data_file(self, invalid_type=None, obj_name='o',
-                       fsize=1024, csize=8, extension='.data', ts=None):
+                       fsize=1024, csize=8, extension='.data', ts=None,
+                       iter_hook=None):
         '''returns a DiskFile'''
         df = object_server.DiskFile(self.testdir, 'sda1', '0', 'a', 'c',
                                     obj_name, FakeLogger())
@@ -169,7 +181,8 @@ class TestDiskFile(unittest.TestCase):
 
         df = object_server.DiskFile(self.testdir, 'sda1', '0', 'a', 'c',
                                     obj_name, FakeLogger(),
-                                    keep_data_fp=True, disk_chunk_size=csize)
+                                    keep_data_fp=True, disk_chunk_size=csize,
+                                    iter_hook=iter_hook)
         if invalid_type == 'Zero-Byte':
             os.remove(df.data_file)
             fp = open(df.data_file, 'w')
@@ -1325,6 +1338,30 @@ class TestObjectController(unittest.TestCase):
                                          'wsgi.multithread': False,
                                          'wsgi.multiprocess': False,
                                          'wsgi.run_once': False},
+                                        start_response)
+        self.assertEquals(errbuf.getvalue(), '')
+        self.assertEquals(outbuf.getvalue()[:4], '405 ')
+
+    def test_invalid_method_doesnt_exist(self):
+        inbuf = StringIO()
+        errbuf = StringIO()
+        outbuf = StringIO()
+        def start_response(*args):
+            outbuf.writelines(args)
+        self.object_controller.__call__({'REQUEST_METHOD': 'method_doesnt_exist',
+                                         'PATH_INFO': '/sda1/p/a/c/o'},
+                                        start_response)
+        self.assertEquals(errbuf.getvalue(), '')
+        self.assertEquals(outbuf.getvalue()[:4], '405 ')
+
+    def test_invalid_method_is_not_public(self):
+        inbuf = StringIO()
+        errbuf = StringIO()
+        outbuf = StringIO()
+        def start_response(*args):
+            outbuf.writelines(args)
+        self.object_controller.__call__({'REQUEST_METHOD': '__init__',
+                                         'PATH_INFO': '/sda1/p/a/c/o'},
                                         start_response)
         self.assertEquals(errbuf.getvalue(), '')
         self.assertEquals(outbuf.getvalue()[:4], '405 ')

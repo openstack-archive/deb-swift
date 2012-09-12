@@ -26,6 +26,7 @@ from getpass import getuser
 from shutil import rmtree
 from StringIO import StringIO
 from collections import defaultdict
+from urllib import quote
 
 from eventlet import sleep
 from webob import Request
@@ -174,6 +175,17 @@ class TestWSGI(unittest.TestCase):
             wsgi.sleep = old_sleep
             wsgi.time = old_time
 
+    def test_pre_auth_wsgi_input(self):
+        oldenv = {}
+        newenv = wsgi.make_pre_authed_env(oldenv)
+        self.assertTrue('wsgi.input' in newenv)
+        self.assertEquals(newenv['wsgi.input'].read(), '')
+
+        oldenv = {'wsgi.input': StringIO('original wsgi.input')}
+        newenv = wsgi.make_pre_authed_env(oldenv)
+        self.assertTrue('wsgi.input' in newenv)
+        self.assertEquals(newenv['wsgi.input'].read(), '')
+
     def test_pre_auth_req(self):
         class FakeReq(object):
             @classmethod
@@ -187,6 +199,24 @@ class TestWSGI(unittest.TestCase):
         wsgi.make_pre_authed_request({'HTTP_X_TRANS_ID': '1234'},
                                      'PUT', '/', headers={})
         Request.blank = was_blank
+
+    def test_pre_auth_req_with_quoted_path(self):
+        r = wsgi.make_pre_authed_request(
+            {'HTTP_X_TRANS_ID': '1234'}, 'PUT', path=quote('/a space'),
+            body='tester', headers={})
+        self.assertEquals(r.path, quote('/a space'))
+
+    def test_pre_auth_req_drops_query(self):
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path')
+        self.assertEquals(r.query_string, 'original')
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path?replacement')
+        self.assertEquals(r.query_string, 'replacement')
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path?')
+        self.assertEquals(r.query_string, '')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -37,6 +37,9 @@ CONTAINER_LISTING_LIMIT = 10000
 ACCOUNT_LISTING_LIMIT = 10000
 MAX_ACCOUNT_NAME_LENGTH = 256
 MAX_CONTAINER_NAME_LENGTH = 256
+#: Query string format= values to their corresponding content-type values
+FORMAT2CONTENT_TYPE = {'plain': 'text/plain', 'json': 'application/json',
+                       'xml': 'application/xml'}
 
 
 def check_metadata(req, target_type):
@@ -159,13 +162,20 @@ def check_float(string):
 
 def check_utf8(string):
     """
-    Validate if a string is valid UTF-8.
+    Validate if a string is valid UTF-8 str or unicode
 
     :param string: string to be validated
-    :returns: True if the string is valid utf-8, False otherwise
+    :returns: True if the string is valid utf-8 str or unicode, False otherwise
     """
+    if not string:
+        return False
     try:
-        string.decode('UTF-8')
+        if isinstance(string, unicode):
+            string.encode('utf-8')
+        else:
+            string.decode('UTF-8')
         return True
-    except UnicodeDecodeError:
+    # If string is unicode, decode() will raise UnicodeEncodeError
+    # So, we should catch both UnicodeDecodeError & UnicodeEncodeError
+    except UnicodeError:
         return False

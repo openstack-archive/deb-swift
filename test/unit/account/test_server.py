@@ -390,6 +390,15 @@ class TestAccountController(unittest.TestCase):
         self.assertEquals(resp.content_type, 'text/plain')
         self.assertEquals(resp.charset, 'utf-8')
 
+        # test unknown format uses default plain
+        req = Request.blank('/sda1/p/a?format=somethinglese',
+                            environ={'REQUEST_METHOD': 'GET'})
+        resp = self.controller.GET(req)
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(resp.body.strip().split('\n'), ['c1', 'c2'])
+        self.assertEquals(resp.content_type, 'text/plain')
+        self.assertEquals(resp.charset, 'utf-8')
+
     def test_GET_with_containers_json(self):
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
             'HTTP_X_TIMESTAMP': '0'})
@@ -962,11 +971,45 @@ class TestAccountController(unittest.TestCase):
         self.assertEquals(errbuf.getvalue(), '')
         self.assertEquals(outbuf.getvalue()[:4], '400 ')
 
+    def test_invalid_method_doesnt_exist(self):
+        inbuf = StringIO()
+        errbuf = StringIO()
+        outbuf = StringIO()
+        def start_response(*args):
+            outbuf.writelines(args)
+        self.controller.__call__({'REQUEST_METHOD': 'method_doesnt_exist',
+                                  'PATH_INFO': '/sda1/p/a'},
+                                 start_response)
+        self.assertEquals(errbuf.getvalue(), '')
+        self.assertEquals(outbuf.getvalue()[:4], '405 ')
+
+    def test_invalid_method_is_not_public(self):
+        inbuf = StringIO()
+        errbuf = StringIO()
+        outbuf = StringIO()
+        def start_response(*args):
+            outbuf.writelines(args)
+        self.controller.__call__({'REQUEST_METHOD': '__init__',
+                                  'PATH_INFO': '/sda1/p/a'},
+                                 start_response)
+        self.assertEquals(errbuf.getvalue(), '')
+        self.assertEquals(outbuf.getvalue()[:4], '405 ')
+
+    def test_params_format(self):
+        self.controller.PUT(Request.blank('/sda1/p/a',
+                            headers={'X-Timestamp': normalize_timestamp(1)},
+                            environ={'REQUEST_METHOD': 'PUT'}))
+        for format in ('xml', 'json'):
+            req = Request.blank('/sda1/p/a?format=%s' % format,
+                                environ={'REQUEST_METHOD': 'GET'})
+            resp = self.controller.GET(req)
+            self.assertEquals(resp.status_int, 200)
+
     def test_params_utf8(self):
         self.controller.PUT(Request.blank('/sda1/p/a',
                             headers={'X-Timestamp': normalize_timestamp(1)},
                             environ={'REQUEST_METHOD': 'PUT'}))
-        for param in ('delimiter', 'format', 'limit', 'marker', 'prefix'):
+        for param in ('delimiter', 'limit', 'marker', 'prefix'):
             req = Request.blank('/sda1/p/a?%s=\xce' % param,
                                 environ={'REQUEST_METHOD': 'GET'})
             resp = self.controller.GET(req)

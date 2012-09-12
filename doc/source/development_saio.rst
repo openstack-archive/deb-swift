@@ -73,6 +73,8 @@ another device when creating the VM, and follow these instructions.
   #. `chown -R <your-user-name>:<your-group-name> /etc/swift /srv/[1-4]/ /var/run/swift` -- **Make sure to include the trailing slash after /srv/[1-4]/**
   #. Add to `/etc/rc.local` (before the `exit 0`)::
 
+        mkdir /var/cache/swift /var/cache/swift2 /var/cache/swift3 /var/cache/swift4
+        chown <your-user-name>:<your-group-name> /var/cache/swift*
         mkdir /var/run/swift
         chown <your-user-name>:<your-group-name> /var/run/swift
   #. Next, skip to :ref:`rsync-section`.
@@ -100,6 +102,8 @@ If you want to use a loopback device instead of another partition, follow these 
   #. `chown -R <your-user-name>:<your-group-name> /etc/swift /srv/[1-4]/ /var/run/swift` -- **Make sure to include the trailing slash after /srv/[1-4]/**
   #. Add to `/etc/rc.local` (before the `exit 0`)::
 
+        mkdir /var/cache/swift /var/cache/swift2 /var/cache/swift3 /var/cache/swift4
+        chown <your-user-name>:<your-group-name> /var/cache/swift*
         mkdir /var/run/swift
         chown <your-user-name>:<your-group-name> /var/run/swift
 
@@ -266,9 +270,12 @@ Do these commands as you on guest.
   #. Check out the swift repo with `git clone https://github.com/openstack/swift.git`
   #. Build a development installation of swift, for example:
      `cd ~/swift; sudo python setup.py develop`
+  #. Check out the python-swiftclient repo with `git clone https://github.com/openstack/python-swiftclient.git`
+  #. Build a development installation of python-swiftclient, for example:
+     `cd ~/python-swiftclient; sudo python setup.py develop`
   #. Edit `~/.bashrc` and add to the end::
 
-        export SWIFT_TEST_CONFIG_FILE=/etc/swift/func_test.conf
+        export SWIFT_TEST_CONFIG_FILE=/etc/swift/test.conf
         export PATH=${PATH}:~/bin
 
   #. `. ~/.bashrc`
@@ -287,7 +294,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         log_facility = LOG_LOCAL1
 
         [pipeline:main]
-        pipeline = healthcheck cache tempauth proxy-server
+        pipeline = healthcheck cache tempauth proxy-logging proxy-server
 
         [app:proxy-server]
         use = egg:swift#proxy
@@ -307,7 +314,12 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [filter:cache]
         use = egg:swift#memcache
 
-  #. Create `/etc/swift/swift.conf`::
+        [filter:proxy-logging]
+        use = egg:swift#proxy_logging
+
+  #. Create `/etc/swift/swift.conf`:
+
+     .. code-block:: none
 
         [swift-hash]
         # random unique string that can never change (DO NOT LOSE)
@@ -321,12 +333,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6012
         user = <your-user-name>
         log_facility = LOG_LOCAL2
+        recon_cache_path = /var/cache/swift
 
         [pipeline:main]
-        pipeline = account-server
+        pipeline = recon account-server
 
         [app:account-server]
         use = egg:swift#account
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [account-replicator]
         vm_test_mode = yes
@@ -343,12 +359,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6022
         user = <your-user-name>
         log_facility = LOG_LOCAL3
+        recon_cache_path = /var/cache/swift2
 
         [pipeline:main]
-        pipeline = account-server
+        pipeline = recon account-server
 
         [app:account-server]
         use = egg:swift#account
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [account-replicator]
         vm_test_mode = yes
@@ -365,12 +385,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6032
         user = <your-user-name>
         log_facility = LOG_LOCAL4
+        recon_cache_path = /var/cache/swift3
 
         [pipeline:main]
-        pipeline = account-server
+        pipeline = recon account-server
 
         [app:account-server]
         use = egg:swift#account
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [account-replicator]
         vm_test_mode = yes
@@ -387,12 +411,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6042
         user = <your-user-name>
         log_facility = LOG_LOCAL5
+        recon_cache_path = /var/cache/swift4
 
         [pipeline:main]
-        pipeline = account-server
+        pipeline = recon account-server
 
         [app:account-server]
         use = egg:swift#account
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [account-replicator]
         vm_test_mode = yes
@@ -409,12 +437,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6011
         user = <your-user-name>
         log_facility = LOG_LOCAL2
+        recon_cache_path = /var/cache/swift
 
         [pipeline:main]
-        pipeline = container-server
+        pipeline = recon container-server
 
         [app:container-server]
         use = egg:swift#container
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [container-replicator]
         vm_test_mode = yes
@@ -433,12 +465,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6021
         user = <your-user-name>
         log_facility = LOG_LOCAL3
+        recon_cache_path = /var/cache/swift2
 
         [pipeline:main]
-        pipeline = container-server
+        pipeline = recon container-server
 
         [app:container-server]
         use = egg:swift#container
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [container-replicator]
         vm_test_mode = yes
@@ -457,12 +493,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6031
         user = <your-user-name>
         log_facility = LOG_LOCAL4
+        recon_cache_path = /var/cache/swift3
 
         [pipeline:main]
-        pipeline = container-server
+        pipeline = recon container-server
 
         [app:container-server]
         use = egg:swift#container
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [container-replicator]
         vm_test_mode = yes
@@ -481,12 +521,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6041
         user = <your-user-name>
         log_facility = LOG_LOCAL5
+        recon_cache_path = /var/cache/swift4
 
         [pipeline:main]
-        pipeline = container-server
+        pipeline = recon container-server
 
         [app:container-server]
         use = egg:swift#container
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [container-replicator]
         vm_test_mode = yes
@@ -506,12 +550,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6010
         user = <your-user-name>
         log_facility = LOG_LOCAL2
+        recon_cache_path = /var/cache/swift
 
         [pipeline:main]
-        pipeline = object-server
+        pipeline = recon object-server
 
         [app:object-server]
         use = egg:swift#object
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [object-replicator]
         vm_test_mode = yes
@@ -528,12 +576,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6020
         user = <your-user-name>
         log_facility = LOG_LOCAL3
+        recon_cache_path = /var/cache/swift2
 
         [pipeline:main]
-        pipeline = object-server
+        pipeline = recon object-server
 
         [app:object-server]
         use = egg:swift#object
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [object-replicator]
         vm_test_mode = yes
@@ -550,12 +602,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6030
         user = <your-user-name>
         log_facility = LOG_LOCAL4
+        recon_cache_path = /var/cache/swift3
 
         [pipeline:main]
-        pipeline = object-server
+        pipeline = recon object-server
 
         [app:object-server]
         use = egg:swift#object
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [object-replicator]
         vm_test_mode = yes
@@ -572,12 +628,16 @@ Sample configuration files are provided with all defaults in line-by-line commen
         bind_port = 6040
         user = <your-user-name>
         log_facility = LOG_LOCAL5
+        recon_cache_path = /var/cache/swift4
 
         [pipeline:main]
-        pipeline = object-server
+        pipeline = recon object-server
 
         [app:object-server]
         use = egg:swift#object
+
+        [filter:recon]
+        use = egg:swift#recon
 
         [object-replicator]
         vm_test_mode = yes
@@ -607,6 +667,7 @@ Setting up scripts for running Swift
         sudo chown <your-user-name>:<your-group-name> /mnt/sdb1/*
         mkdir -p /srv/1/node/sdb1 /srv/2/node/sdb2 /srv/3/node/sdb3 /srv/4/node/sdb4
         sudo rm -f /var/log/debug /var/log/messages /var/log/rsyncd.log /var/log/syslog
+        find /var/cache/swift* -type f -name *.recon -exec -rm -f {} \;
         sudo service rsyslog restart
         sudo service memcached restart
 
@@ -656,7 +717,7 @@ Setting up scripts for running Swift
   #. Get an `X-Storage-Url` and `X-Auth-Token`: ``curl -v -H 'X-Storage-User: test:tester' -H 'X-Storage-Pass: testing' http://127.0.0.1:8080/auth/v1.0``
   #. Check that you can GET account: ``curl -v -H 'X-Auth-Token: <token-from-x-auth-token-above>' <url-from-x-storage-url-above>``
   #. Check that `swift` works: `swift -A http://127.0.0.1:8080/auth/v1.0 -U test:tester -K testing stat`
-  #. `cp ~/swift/test/functional/sample.conf /etc/swift/func_test.conf`
+  #. `cp ~/swift/test/sample.conf /etc/swift/test.conf`
   #. `cd ~/swift; ./.functests` (Note: functional tests will first delete
      everything in the configured accounts.)
   #. `cd ~/swift; ./.probetests` (Note: probe tests will reset your
@@ -689,3 +750,8 @@ If all doesn't go as planned, and tests fail, or you can't auth, or something do
    `swift-object-server /etc/swift/object-server/1.conf` will start the
    object server.  If there are problems not showing up in syslog,
    then you will likely see the traceback on startup.
+#. If you need to, you can turn off syslog for unit tests. This can be
+   useful for environments where /dev/log is unavailable, or which
+   cannot rate limit (unit tests generate a lot of logs very quickly).
+   Open the file SWIFT_TEST_CONFIG_FILE points to, and change the
+   value of fake_syslog to True.
