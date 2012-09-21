@@ -20,7 +20,9 @@ override_dh_auto_build:
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
-	nosetests test/unit || true
+	echo "[unit_test]\nfake_syslog = True" > $(CURDIR)/swift-test.conf
+	SWIFT_TEST_CONFIG_FILE=$(CURDIR)/swift-test.conf nosetests test/unit || true
+	rm -f $(CURDIR)/swift-test.conf
 endif
 
 override_dh_install:
