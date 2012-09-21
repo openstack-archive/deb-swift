@@ -10,7 +10,7 @@
 override_dh_clean:
 	dh_clean
 	rm -rf swift.egg-info
-	rm -rf doc/build/*
+	rm -rf doc/build/* swift.egg-info/SOURCES.txt
 
 # build with sphinx documentation
 override_dh_auto_build:
@@ -18,8 +18,13 @@ override_dh_auto_build:
 	mkdir -p doc/build
 	python setup.py build_sphinx
 
+ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
+override_dh_auto_test:
+	nosetests test/unit || true
+endif
+
 override_dh_install:
-	dh_install
+	dh_install --fail-missing --sourcedir=debian/tmp
 	install -D -m 0640 $(CURDIR)/debian/account-server.conf $(CURDIR)/debian/swift-account/etc/swift/account-server.conf
 	install -D -m 0640 $(CURDIR)/debian/container-server.conf $(CURDIR)/debian/swift-container/etc/swift/container-server.conf
 	install -D -m 0640 $(CURDIR)/debian/object-server.conf $(CURDIR)/debian/swift-object/etc/swift/object-server.conf
@@ -27,12 +32,13 @@ override_dh_install:
 
 override_dh_installinit:
 	dh_installinit --no-start
+
 	dh_installinit --no-start -pswift-container --init-script=swift-container-replicator
-	dh_installinit --no-start -pswift-account --init-script=swift-account-replicator
-	dh_installinit --no-start -pswift-account --init-script=swift-account-reaper
-	dh_installinit --no-start -pswift-object --init-script=swift-object-auditor
 	dh_installinit --no-start -pswift-container --init-script=swift-container-auditor
-	dh_installinit --no-start -pswift-account --init-script=swift-account-auditor
-	dh_installinit --no-start -pswift-object --init-script=swift-object-updater
-	dh_installinit --no-start -pswift-object --init-script=swift-object-replicator
 	dh_installinit --no-start -pswift-container --init-script=swift-container-updater
+	dh_installinit --no-start -pswift-account --init-script=swift-account-replicator
+	dh_installinit --no-start -pswift-account --init-script=swift-account-auditor
+	dh_installinit --no-start -pswift-account --init-script=swift-account-reaper
+	dh_installinit --no-start -pswift-object --init-script=swift-object-replicator
+	dh_installinit --no-start -pswift-object --init-script=swift-object-auditor
+	dh_installinit --no-start -pswift-object --init-script=swift-object-updater
