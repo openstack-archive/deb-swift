@@ -13,9 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import uuid
 import time
 import random
+import signal
 from contextlib import contextmanager
 
 import eventlet.pools
@@ -41,6 +43,7 @@ class Bench(object):
 
     def __init__(self, logger, conf, names):
         self.logger = logger
+        self.aborted = False
         self.user = conf.user
         self.key = conf.key
         self.auth_url = conf.auth
@@ -66,6 +69,8 @@ class Bench(object):
 
         self.object_size = int(conf.object_size)
         self.object_sources = conf.object_sources
+        self.lower_object_size = int(conf.lower_object_size)
+        self.upper_object_size = int(conf.upper_object_size)
         self.files = []
         if self.object_sources:
             self.object_sources = self.object_sources.split()
@@ -114,6 +119,8 @@ class Bench(object):
         self.failures = 0
         self.complete = 0
         for i in xrange(self.total):
+            if self.aborted:
+                break
             pool.spawn_n(self._run, i)
         pool.waitall()
         self._log_status(self.msg + ' **FINAL**')
@@ -130,15 +137,35 @@ class BenchController(object):
         self.names = []
         self.delete = conf.delete.lower() in TRUE_VALUES
         self.gets = int(conf.num_gets)
+        self.aborted = False
+
+    def sigint1(self, signum, frame):
+        if self.delete:
+            print >>sys.stderr, (
+                'SIGINT received; finishing up and running DELETE.\n'
+                'Send one more SIGINT to exit *immediately*.')
+            self.aborted = True
+            if self.running and not isinstance(self.running, BenchDELETE):
+                self.running.aborted = True
+            signal.signal(signal.SIGINT, self.sigint2)
+        else:
+            self.sigint2(signum, frame)
+
+    def sigint2(self, signum, frame):
+        sys.exit('Final SIGINT received.')
 
     def run(self):
+        signal.signal(signal.SIGINT, self.sigint1)
         puts = BenchPUT(self.logger, self.conf, self.names)
+        self.running = puts
         puts.run()
-        if self.gets:
+        if self.gets and not self.aborted:
             gets = BenchGET(self.logger, self.conf, self.names)
+            self.running = gets
             gets.run()
         if self.delete:
             dels = BenchDELETE(self.logger, self.conf, self.names)
+            self.running = dels
             dels.run()
 
 
@@ -228,6 +255,9 @@ class BenchPUT(Bench):
         name = uuid.uuid4().hex
         if self.object_sources:
             source = random.choice(self.files)
+        elif self.upper_object_size > self.lower_object_size:
+            source = '0' * random.randint(self.lower_object_size,
+                        self.upper_object_size)
         else:
             source = '0' * self.object_size
         device = random.choice(self.devices)

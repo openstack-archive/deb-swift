@@ -7,14 +7,17 @@
 # swift_dir = /etc/swift
 # devices = /srv/node
 # mount_check = true
+# disable_fallocate = false
 # expiring_objects_container_divisor = 86400
 # You can specify default log routing here if you want:
 # log_name = swift
 # log_facility = LOG_LOCAL0
 # log_level = INFO
 # log_address = /dev/log
-# You can enable default statsD logging here and/or override it in sections
-# below:
+# If set, log_udp_host will override log_address
+# log_udp_host =
+# log_udp_port = 514
+# You can enable StatsD logging here:
 # log_statsd_host = localhost
 # log_statsd_port = 8125
 # log_statsd_default_sample_rate = 1

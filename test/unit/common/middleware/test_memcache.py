@@ -47,6 +47,8 @@ class SetConfigParser(object):
         if section == 'memcache':
             if option == 'memcache_servers':
                 return '1.2.3.4:5'
+            elif option == 'memcache_serialization_support':
+                return '1'
             else:
                 raise NoOptionError(option)
         else:
@@ -86,7 +88,8 @@ class TestCacheMiddleware(unittest.TestCase):
         exc = None
         try:
             app = memcache.MemcacheMiddleware(
-                    FakeApp(), {'memcache_servers': '1.2.3.4:5'})
+                    FakeApp(), {'memcache_servers': '1.2.3.4:5',
+                                'memcache_serialization_support': '2'})
         except Exception, err:
             exc = err
         finally:
@@ -101,6 +104,8 @@ class TestCacheMiddleware(unittest.TestCase):
         finally:
             memcache.ConfigParser = orig_parser
         self.assertEquals(app.memcache_servers, '127.0.0.1:11211')
+        self.assertEquals(app.memcache._allow_pickle, False)
+        self.assertEquals(app.memcache._allow_unpickle, False)
 
     def test_conf_from_extra_conf(self):
         orig_parser = memcache.ConfigParser
@@ -110,16 +115,22 @@ class TestCacheMiddleware(unittest.TestCase):
         finally:
             memcache.ConfigParser = orig_parser
         self.assertEquals(app.memcache_servers, '1.2.3.4:5')
+        self.assertEquals(app.memcache._allow_pickle, False)
+        self.assertEquals(app.memcache._allow_unpickle, True)
 
     def test_conf_from_inline_conf(self):
         orig_parser = memcache.ConfigParser
         memcache.ConfigParser = SetConfigParser
         try:
             app = memcache.MemcacheMiddleware(
-                    FakeApp(), {'memcache_servers': '6.7.8.9:10'})
+                    FakeApp(),
+                    {'memcache_servers': '6.7.8.9:10',
+                     'serialization_format': '0'})
         finally:
             memcache.ConfigParser = orig_parser
         self.assertEquals(app.memcache_servers, '6.7.8.9:10')
+        self.assertEquals(app.memcache._allow_pickle, False)
+        self.assertEquals(app.memcache._allow_unpickle, True)
 
 
 if __name__ == '__main__':

@@ -17,8 +17,6 @@
 
 import cPickle as pickle
 import os
-import sys
-import shutil
 import unittest
 from shutil import rmtree
 from StringIO import StringIO
@@ -37,7 +35,6 @@ from swift.common import utils
 from swift.common.utils import hash_path, mkdirs, normalize_timestamp, \
                                NullLogger, storage_directory
 from swift.common.exceptions import DiskFileNotExist
-from swift.obj import replicator
 from eventlet import tpool
 
 
@@ -1641,6 +1638,41 @@ class TestObjectController(unittest.TestCase):
              'x-trans-id': '-'},
             'sda1'])
 
+    def test_delete_at_negative(self):
+        # Test negative is reset to 0
+        given_args = []
+
+        def fake_async_update(*args):
+            given_args.extend(args)
+
+        self.object_controller.async_update = fake_async_update
+        self.object_controller.delete_at_update(
+            'PUT', -2, 'a', 'c', 'o', {'x-timestamp': '1'}, 'sda1')
+        self.assertEquals(given_args, [
+            'PUT', '.expiring_objects', '0', '0-a/c/o', None, None, None,
+            {'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+             'x-content-type': 'text/plain', 'x-timestamp': '1',
+             'x-trans-id': '-'},
+            'sda1'])
+
+    def test_delete_at_cap(self):
+        # Test past cap is reset to cap
+        given_args = []
+
+        def fake_async_update(*args):
+            given_args.extend(args)
+
+        self.object_controller.async_update = fake_async_update
+        self.object_controller.delete_at_update(
+            'PUT', 12345678901, 'a', 'c', 'o', {'x-timestamp': '1'}, 'sda1')
+        self.assertEquals(given_args, [
+            'PUT', '.expiring_objects', '9999936000', '9999999999-a/c/o', None,
+            None, None,
+            {'x-size': '0', 'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+             'x-content-type': 'text/plain', 'x-timestamp': '1',
+             'x-trans-id': '-'},
+            'sda1'])
+
     def test_delete_at_update_put_with_info(self):
         given_args = []
 
@@ -2089,13 +2121,11 @@ class TestObjectController(unittest.TestCase):
         def fake_get_hashes(*args, **kwargs):
             return 0, {1: 2}
 
-        def my_tpool_execute(*args, **kwargs):
-            func = args[0]
-            args = args[1:]
+        def my_tpool_execute(func, *args, **kwargs):
             return func(*args, **kwargs)
 
-        was_get_hashes = replicator.get_hashes
-        replicator.get_hashes = fake_get_hashes
+        was_get_hashes = object_server.get_hashes
+        object_server.get_hashes = fake_get_hashes
         was_tpool_exe = tpool.execute
         tpool.execute = my_tpool_execute
         try:
@@ -2108,20 +2138,18 @@ class TestObjectController(unittest.TestCase):
             self.assertEquals(p_data, {1: 2})
         finally:
             tpool.execute = was_tpool_exe
-            replicator.get_hashes = was_get_hashes
+            object_server.get_hashes = was_get_hashes
 
     def test_REPLICATE_timeout(self):
 
         def fake_get_hashes(*args, **kwargs):
             raise Timeout()
 
-        def my_tpool_execute(*args, **kwargs):
-            func = args[0]
-            args = args[1:]
+        def my_tpool_execute(func, *args, **kwargs):
             return func(*args, **kwargs)
 
-        was_get_hashes = replicator.get_hashes
-        replicator.get_hashes = fake_get_hashes
+        was_get_hashes = object_server.get_hashes
+        object_server.get_hashes = fake_get_hashes
         was_tpool_exe = tpool.execute
         tpool.execute = my_tpool_execute
         try:
@@ -2131,7 +2159,41 @@ class TestObjectController(unittest.TestCase):
             self.assertRaises(Timeout, self.object_controller.REPLICATE, req)
         finally:
             tpool.execute = was_tpool_exe
-            replicator.get_hashes = was_get_hashes
+            object_server.get_hashes = was_get_hashes
+
+    def test_PUT_with_full_drive(self):
+
+        class IgnoredBody():
+
+            def __init__(self):
+                self.read_called = False
+
+            def read(self, size=-1):
+                if not self.read_called:
+                    self.read_called = True
+                    return 'VERIFY'
+                return ''
+
+        def fake_fallocate(fd, size):
+            raise OSError(42, 'Unable to fallocate(%d)' % size)
+
+        orig_fallocate = object_server.fallocate
+        try:
+            object_server.fallocate = fake_fallocate
+            timestamp = normalize_timestamp(time())
+            body_reader = IgnoredBody()
+            req = Request.blank('/sda1/p/a/c/o',
+                    environ={'REQUEST_METHOD': 'PUT',
+                             'wsgi.input': body_reader},
+                    headers={'X-Timestamp': timestamp,
+                             'Content-Length': '6',
+                             'Content-Type': 'application/octet-stream',
+                             'Expect': '100-continue'})
+            resp = self.object_controller.PUT(req)
+            self.assertEquals(resp.status_int, 507)
+            self.assertFalse(body_reader.read_called)
+        finally:
+            object_server.fallocate = orig_fallocate
 
 if __name__ == '__main__':
     unittest.main()

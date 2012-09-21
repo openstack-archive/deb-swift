@@ -44,8 +44,8 @@ from swift.common.constraints import check_object_creation, check_mount, \
     check_float, check_utf8
 from swift.common.exceptions import ConnectionTimeout, DiskFileError, \
     DiskFileNotExist
-from swift.obj.replicator import tpooled_get_hashes, invalidate_hash, \
-    quarantine_renamer
+from swift.obj.replicator import tpool_reraise, invalidate_hash, \
+    quarantine_renamer, get_hashes
 from swift.common.http import is_success, HTTPInsufficientStorage, \
     HTTPClientDisconnect
 
@@ -230,7 +230,6 @@ class DiskFile(object):
                 if verify_file:
                     self._handle_close_quarantine()
             except (Exception, Timeout), e:
-                import traceback
                 self.logger.error(_('ERROR DiskFile %(data_file)s in '
                      '%(data_dir)s close failure: %(exc)s : %(stack)'),
                      {'exc': e, 'stack': ''.join(traceback.format_stack()),
@@ -369,7 +368,8 @@ class ObjectController(object):
         self.keep_cache_size = int(conf.get('keep_cache_size', 5242880))
         self.keep_cache_private = \
             conf.get('keep_cache_private', 'false').lower() in TRUE_VALUES
-        self.log_requests = conf.get('log_requests', 't')[:1].lower() == 't'
+        self.log_requests = \
+            conf.get('log_requests', 'true').lower() in TRUE_VALUES
         self.max_upload_time = int(conf.get('max_upload_time', 86400))
         self.slow = int(conf.get('slow', 0))
         self.bytes_per_sync = int(conf.get('mb_per_sync', 512)) * 1024 * 1024
@@ -471,6 +471,10 @@ class ObjectController(object):
         :param headers_in: dictionary of headers from the original request
         :param objdevice: device name that the object is in
         """
+        # Quick cap that will work from now until Sat Nov 20 17:46:39 2286
+        # At that time, Swift will be so popular and pervasive I will have
+        # created income for thousands of future programmers.
+        delete_at = max(min(delete_at, 9999999999), 0)
         host = partition = contdevice = None
         headers_out = {'x-timestamp': headers_in['x-timestamp'],
                        'x-trans-id': headers_in.get('x-trans-id', '-')}
@@ -586,7 +590,11 @@ class ObjectController(object):
         last_sync = 0
         with file.mkstemp() as (fd, tmppath):
             if 'content-length' in request.headers:
-                fallocate(fd, int(request.headers['content-length']))
+                try:
+                    fallocate(fd, int(request.headers['content-length']))
+                except OSError:
+                    return HTTPInsufficientStorage(drive=device,
+                                                   request=request)
             reader = request.environ['wsgi.input'].read
             for chunk in iter(lambda: reader(self.network_chunk_size), ''):
                 upload_size += len(chunk)
@@ -860,12 +868,7 @@ class ObjectController(object):
         if not os.path.exists(path):
             mkdirs(path)
         suffixes = suffix.split('-') if suffix else []
-        _junk, hashes = tpool.execute(tpooled_get_hashes, path,
-                                      recalculate=suffixes)
-        # See tpooled_get_hashes "Hack".
-        if isinstance(hashes, BaseException):
-            self.logger.increment('REPLICATE.errors')
-            raise hashes
+        _junk, hashes = tpool_reraise(get_hashes, path, recalculate=suffixes)
         self.logger.timing_since('REPLICATE.timing', start_time)
         return Response(body=pickle.dumps(hashes))
 

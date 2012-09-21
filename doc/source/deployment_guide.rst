@@ -231,6 +231,8 @@ mount_check         true        Whether or not check if the devices are
 bind_ip             0.0.0.0     IP Address for server to bind to
 bind_port           6000        Port for server to bind to
 workers             1           Number of workers to fork
+disable_fallocate   false       Disable "fast fail" fallocate checks if the
+                                underlying filesystem does not support it.
 ==================  ==========  =============================================
 
 [object-server]
@@ -336,6 +338,8 @@ bind_ip             0.0.0.0     IP Address for server to bind to
 bind_port           6001        Port for server to bind to
 workers             1           Number of workers to fork
 user                swift       User to run as
+disable_fallocate   false       Disable "fast fail" fallocate checks if the
+                                underlying filesystem does not support it.
 ==================  ==========  ============================================
 
 [container-server]
@@ -351,6 +355,7 @@ set log_facility    LOG_LOCAL0        Syslog log facility
 set log_level       INFO              Logging level
 node_timeout        3                 Request timeout to external services
 conn_timeout        0.5               Connection timeout to external services
+allow_versions      false             Enable/Disable object versioning feature
 ==================  ================  ========================================
 
 [container-replicator]
@@ -433,6 +438,8 @@ db_preallocation    off         If you don't mind the extra disk space usage in
                                 overhead, you can turn this on to preallocate
                                 disk space with SQLite databases to decrease
                                 fragmentation.
+disable_fallocate   false       Disable "fast fail" fallocate checks if the
+                                underlying filesystem does not support it.
 ==================  ==========  =============================================
 
 [account-server]
@@ -592,7 +599,7 @@ max_containers_per_account    0                If set to a positive value,
                                                recheck_account_existence before
                                                the 403s kick in.
 max_containers_whitelist                       This is a comma separated list
-                                               of account hashes that ignore
+                                               of account names that ignore
                                                the max_containers_per_account
                                                cap.
 rate_limit_after_segment      10               Rate limit the download of
@@ -743,6 +750,11 @@ For a standard swift install, all data drives are mounted directly under
 /srv/node/sda). If you choose to mount the drives in another directory,
 be sure to set the `devices` config option in all of the server configs to
 point to the correct directory.
+
+Swift uses system calls to reserve space for new objects being written into
+the system. If your filesystem does not support `fallocate()` or
+`posix_fallocate()`, be sure to set the `disable_fallocate = true` config
+parameter in account, container, and object server configs.
 
 ---------------------
 General System Tuning

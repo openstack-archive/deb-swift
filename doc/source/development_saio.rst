@@ -73,9 +73,9 @@ another device when creating the VM, and follow these instructions.
   #. `chown -R <your-user-name>:<your-group-name> /etc/swift /srv/[1-4]/ /var/run/swift` -- **Make sure to include the trailing slash after /srv/[1-4]/**
   #. Add to `/etc/rc.local` (before the `exit 0`)::
 
-        mkdir /var/cache/swift /var/cache/swift2 /var/cache/swift3 /var/cache/swift4
+        mkdir -p /var/cache/swift /var/cache/swift2 /var/cache/swift3 /var/cache/swift4
         chown <your-user-name>:<your-group-name> /var/cache/swift*
-        mkdir /var/run/swift
+        mkdir -p /var/run/swift
         chown <your-user-name>:<your-group-name> /var/run/swift
   #. Next, skip to :ref:`rsync-section`.
 
@@ -102,9 +102,9 @@ If you want to use a loopback device instead of another partition, follow these 
   #. `chown -R <your-user-name>:<your-group-name> /etc/swift /srv/[1-4]/ /var/run/swift` -- **Make sure to include the trailing slash after /srv/[1-4]/**
   #. Add to `/etc/rc.local` (before the `exit 0`)::
 
-        mkdir /var/cache/swift /var/cache/swift2 /var/cache/swift3 /var/cache/swift4
+        mkdir -p /var/cache/swift /var/cache/swift2 /var/cache/swift3 /var/cache/swift4
         chown <your-user-name>:<your-group-name> /var/cache/swift*
-        mkdir /var/run/swift
+        mkdir -p /var/run/swift
         chown <your-user-name>:<your-group-name> /var/run/swift
 
 .. _rsync-section:
@@ -256,6 +256,7 @@ Optional: Setting up rsyslog for individual logging
 
   #. `mkdir -p /var/log/swift/hourly`
   #. `chown -R syslog.adm /var/log/swift`
+  #. `chmod -R g+w /var/log/swift`
   #. `service rsyslog restart`
 
 ------------------------------------------------
@@ -330,6 +331,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/1/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6012
         user = <your-user-name>
         log_facility = LOG_LOCAL2
@@ -356,6 +358,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/2/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6022
         user = <your-user-name>
         log_facility = LOG_LOCAL3
@@ -382,6 +385,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/3/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6032
         user = <your-user-name>
         log_facility = LOG_LOCAL4
@@ -408,6 +412,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/4/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6042
         user = <your-user-name>
         log_facility = LOG_LOCAL5
@@ -434,6 +439,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/1/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6011
         user = <your-user-name>
         log_facility = LOG_LOCAL2
@@ -462,6 +468,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/2/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6021
         user = <your-user-name>
         log_facility = LOG_LOCAL3
@@ -490,6 +497,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/3/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6031
         user = <your-user-name>
         log_facility = LOG_LOCAL4
@@ -518,6 +526,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/4/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6041
         user = <your-user-name>
         log_facility = LOG_LOCAL5
@@ -547,6 +556,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/1/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6010
         user = <your-user-name>
         log_facility = LOG_LOCAL2
@@ -573,6 +583,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/2/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6020
         user = <your-user-name>
         log_facility = LOG_LOCAL3
@@ -599,6 +610,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/3/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6030
         user = <your-user-name>
         log_facility = LOG_LOCAL4
@@ -625,6 +637,7 @@ Sample configuration files are provided with all defaults in line-by-line commen
         [DEFAULT]
         devices = /srv/4/node
         mount_check = false
+        disable_fallocate = true
         bind_port = 6040
         user = <your-user-name>
         log_facility = LOG_LOCAL5
@@ -667,7 +680,7 @@ Setting up scripts for running Swift
         sudo chown <your-user-name>:<your-group-name> /mnt/sdb1/*
         mkdir -p /srv/1/node/sdb1 /srv/2/node/sdb2 /srv/3/node/sdb3 /srv/4/node/sdb4
         sudo rm -f /var/log/debug /var/log/messages /var/log/rsyncd.log /var/log/syslog
-        find /var/cache/swift* -type f -name *.recon -exec -rm -f {} \;
+        find /var/cache/swift* -type f -name *.recon -exec rm -f {} \;
         sudo service rsyslog restart
         sudo service memcached restart
 
@@ -733,6 +746,10 @@ On Ubuntu:
 On MacOS:
   #. `sudo easy_install -U sphinx`
   #. `python setup.py build_sphinx`
+
+Install tox so you find Py26 and PEP8 problems before Jenkins does:
+  #. `sudo apt-get install python2.6-dev python-pip`
+  #. `sudo pip install tox`
 
 ----------------
 Debugging Issues
