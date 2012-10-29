@@ -1,3 +1,9 @@
+swift (1.7.4-1) experimental; urgency=low
+
+  * New upstream release
+
+ -- Mehdi Abaakouk <sileht@sileht.net>  Mon, 29 Oct 2012 14:50:37 +0100
+
 swift (1.7.2-1) experimental; urgency=low
 
   * New upstream release.
