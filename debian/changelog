@@ -12,6 +12,7 @@ swift (1.7.4-1) experimental; urgency=low
   * Added missing Provides: ${python:Provides}, uses same short desc as in
   Ubuntu, Break with versions << 1.6 (because of the python-swiftclient
   package).
+  * Imported Ubuntu patch to stop accessing network when building docs.
 
  -- Mehdi Abaakouk <sileht@sileht.net>  Mon, 29 Oct 2012 14:50:37 +0100
 
