@@ -1,20 +1,20 @@
 swift (1.7.4-1) experimental; urgency=low
 
+  [ Mehdi Abaakouk ]
   * New upstream release
+
+  [ Thomas Goirand ]
+  * Fixed wrong format URL in debian/copyright.
+  * Added missing AUTHORS file in all packages.
 
  -- Mehdi Abaakouk <sileht@sileht.net>  Mon, 29 Oct 2012 14:50:37 +0100
 
-swift (1.7.2-1) experimental; urgency=low
+swift (1.4.8-2) unstable; urgency=high
 
-  * New upstream release.
+  * CVE-2012-4406: Do not use pickle for serialization in memcache, but JSON
+  (Closes: #686812).
 
- -- Mehdi Abaakouk <sileht@sileht.net>  Fri, 21 Sep 2012 14:22:32 +0200
-
-swift (1.6.0-1) experimental; urgency=low
-
-  * New upstream release.
-
- -- Mehdi Abaakouk <sileht@sileht.net>  Wed, 12 Sep 2012 16:56:23 +0200
+ -- Thomas Goirand <zigo@debian.org>  Thu, 06 Sep 2012 08:40:18 +0000
 
 swift (1.4.8-1) unstable; urgency=low
 
