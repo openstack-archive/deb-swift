@@ -3,7 +3,7 @@ Upstream-Name: swift
 Source: https://code.launchpad.net/swift
 
 Files: *
-Copyright: See AUTHORS file
+Copyright: (c) 2010-2012, See AUTHORS file
 License: Apache-2
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
