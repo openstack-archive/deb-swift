@@ -6,6 +6,8 @@ swift (1.7.4-1) experimental; urgency=low
   [ Thomas Goirand ]
   * Fixed wrong format URL in debian/copyright.
   * Added missing AUTHORS file in all packages.
+  * Removed useless X-Python-Version: >= 2.6 in control, since we already
+  Build-Depends: on python-all (>=2.6.6-3~).
 
  -- Mehdi Abaakouk <sileht@sileht.net>  Mon, 29 Oct 2012 14:50:37 +0100
 
