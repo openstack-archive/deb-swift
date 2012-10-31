@@ -15,6 +15,11 @@ swift (1.7.4-1) experimental; urgency=low
   * Imported Ubuntu patch to stop accessing network when building docs.
   * Fixes a log_daemon_msg typo present in most swift init scripts.
 
+  [ Julien Danjou ]
+  * Add /var/cache/swift to use swift-recon
+  * Add configuration and cron job for swift-recon
+  * Move swift-recon-cron to swift-object
+
  -- Mehdi Abaakouk <sileht@sileht.net>  Mon, 29 Oct 2012 14:50:37 +0100
 
 swift (1.4.8-2) unstable; urgency=high

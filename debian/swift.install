@@ -11,3 +11,4 @@ usr/bin/swift-recon
 usr/bin/swift-recon-cron
 usr/bin/swift-temp-url
 usr/bin/swift-form-signature
+usr/bin/swift-recon
