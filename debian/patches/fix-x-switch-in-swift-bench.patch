@@ -1,0 +1,29 @@
+Description: Fixed -x switch in swift-bench command
+ inspired from the upstream commit af4b2851fc864cf4cef13588ab253141bfa92bbb
+Author: Mehdi Abaakouk <sileht@sileht.net>
+Forwarded: no
+--- a/bin/swift-bench
++++ b/bin/swift-bench
+@@ -22,7 +22,7 @@
+ from optparse import OptionParser
+ 
+ from swift.common.bench import BenchController
+-from swift.common.utils import readconf, LogAdapter
++from swift.common.utils import readconf, LogAdapter, TRUE_VALUES
+ 
+ # The defaults should be sufficient to run swift-bench on a SAIO
+ CONF_DEFAULTS = {
+@@ -126,6 +126,13 @@
+         options.get_concurrency = options.concurrency
+         options.del_concurrency = options.concurrency
+ 
++    # check boolean options vs config parameter values
++    if str(options.delete).lower() in TRUE_VALUES:
++        options.delete = 'yes'
++    else:
++        options.delete = 'no'
++
++
+     def sigterm(signum, frame):
+         sys.exit('Termination signal received.')
+     signal.signal(signal.SIGTERM, sigterm)

@@ -2,6 +2,7 @@ swift (1.7.4-1) experimental; urgency=low
 
   [ Mehdi Abaakouk ]
   * New upstream release
+  * Fixed -x switch issue in swift-bench
 
   [ Thomas Goirand ]
   * Fixed wrong format URL in debian/copyright.
