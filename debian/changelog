@@ -15,6 +15,7 @@ swift (1.7.4-1) experimental; urgency=low
   package).
   * Imported Ubuntu patch to stop accessing network when building docs.
   * Fixes a log_daemon_msg typo present in most swift init scripts.
+  * Removes useless "swift is open source software" from long description.
 
   [ Julien Danjou ]
   * Add /var/cache/swift to use swift-recon
