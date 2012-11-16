@@ -7,21 +7,22 @@ Uploaders: Julien Danjou <acid@debian.org>,
            Ghe Rivero <ghe.rivero@stackops.com>,
            Mehdi Abaakouk <sileht@sileht.net>
 Build-Depends: debhelper (>= 9),
- python-all (>=2.6.6-3~),
- python-openssl,
- python-setuptools,
- python-webob,
- python-simplejson,
- python-xattr,
- python-netifaces,
- python-greenlet (>= 0.3.1),
+ python-all (>=2.6.6-3~)
+Build-Depends-Indep: openstack,pkg-tools
  python-eventlet (>= 0.9.8),
+ python-greenlet (>= 0.3.1),
  python-mock,
- python-nose,
+ python-netifaces,
+ python-nose, 
+ python-openssl,   
  python-paste,
  python-pastedeploy,
+ python-setuptools,
+ python-simplejson,
  python-sphinx (>= 1.0),
- python-swiftclient
+ python-swiftclient,
+ python-webob,
+ python-xattr
 Standards-Version: 3.9.3
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/swift.git;a=summary
 Vcs-Git: git://anonscm.debian.org/openstack/swift.git
