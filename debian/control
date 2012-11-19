@@ -8,7 +8,7 @@ Uploaders: Julien Danjou <acid@debian.org>,
            Mehdi Abaakouk <sileht@sileht.net>
 Build-Depends: debhelper (>= 9),
  python-all (>=2.6.6-3~)
-Build-Depends-Indep: openstack,pkg-tools,
+Build-Depends-Indep: openstack-pkg-tools,
  python-eventlet (>= 0.9.8),
  python-greenlet (>= 0.3.1),
  python-mock,
