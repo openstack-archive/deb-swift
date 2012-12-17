@@ -22,7 +22,7 @@ swift (1.7.4-1) experimental; urgency=low
   * Add configuration and cron job for swift-recon
   * Move swift-recon-cron to swift-object
 
- -- Mehdi Abaakouk <sileht@sileht.net>  Mon, 29 Oct 2012 14:50:37 +0100
+ -- Thomas Goirand <zigo@debian.org>  Mon, 17 Dec 2012 15:34:54 +0000
 
 swift (1.4.8-2) unstable; urgency=high
 
