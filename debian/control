@@ -71,8 +71,6 @@ Package: swift
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: python-swift (=${binary:Version}), ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
-Replaces: swift (<< 1.6)
-Breaks: swift (<< 1.6)
 Description: distributed virtual object store - common files
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
