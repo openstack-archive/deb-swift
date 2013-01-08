@@ -18,11 +18,10 @@ from urllib import quote, unquote
 import cStringIO as StringIO
 from logging.handlers import SysLogHandler
 
-from webob import Request
-
 from test.unit import FakeLogger
 from swift.common.utils import get_logger
 from swift.common.middleware import proxy_logging
+from swift.common.swob import Request
 
 
 class FakeApp(object):
@@ -147,6 +146,7 @@ class TestProxyLogging(unittest.TestCase):
             'HEAD': 'HEAD',
             'POST': 'POST',
             'DELETE': 'DELETE',
+            'OPTIONS': 'OPTIONS',
         }
         for method, exp_method in method_map.iteritems():
             app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})

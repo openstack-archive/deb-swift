@@ -15,6 +15,10 @@
 # log_level = INFO
 # log_headers = False
 # log_address = /dev/log
+# comma separated list of functions to call to setup custom log handlers.
+# functions get passed: conf, name, log_to_console, log_route, fmt, logger,
+# adapted_logger
+# log_custom_handlers =
 # If set, log_udp_host will override log_address
 # log_udp_host =
 # log_udp_port = 514
@@ -23,6 +27,8 @@
 # log_statsd_port = 8125
 # log_statsd_default_sample_rate = 1
 # log_statsd_metric_prefix =
+# Use a comma separated list of full url (http://foo.bar:1234,https://foo.bar)
+# cors_allow_origin =
 
 [pipeline:main]
 pipeline = catch_errors healthcheck cache ratelimit tempauth proxy-logging proxy-server
@@ -106,6 +112,9 @@ use = egg:swift#tempauth
 # allow_overrides = true
 # Lastly, you need to list all the accounts/users you want here. The format is:
 #   user_<account>_<user> = <key> [group] [group] [...] [storage_url]
+# or if you want underscores in <account> or <user>, you can base64 encode them
+# (with no equal signs) and use this format:
+#   user64_<account_b64>_<user_b64> = <key> [group] [group] [...] [storage_url]
 # There are special groups of:
 #   .reseller_admin = can do anything to any account for this auth
 #   .admin = can do anything within the account
@@ -321,4 +330,4 @@ use = egg:swift#proxy_logging
 # access_log_headers = False
 # What HTTP methods are allowed for StatsD logging (comma-sep); request methods
 # not in this list will have "BAD_METHOD" for the <verb> portion of the metric.
-# log_statsd_valid_http_methods = GET,HEAD,POST,PUT,DELETE,COPY
+# log_statsd_valid_http_methods = GET,HEAD,POST,PUT,DELETE,COPY,OPTIONS

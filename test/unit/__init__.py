@@ -14,7 +14,7 @@ from shutil import rmtree
 from test import get_config
 from ConfigParser import MissingSectionHeaderError
 from StringIO import StringIO
-from swift.common.utils import readconf, TRUE_VALUES
+from swift.common.utils import readconf, config_true_value
 from logging import Handler
 import logging.handlers
 
@@ -141,6 +141,17 @@ class FakeLogger(object):
     update_stats = _store_in('update_stats')
     set_statsd_prefix = _store_in('set_statsd_prefix')
 
+    def get_increments(self):
+        return [call[0][0] for call in self.log_dict['increment']]
+
+    def get_increment_counts(self):
+        counts = {}
+        for metric in self.get_increments():
+            if metric not in counts:
+                counts[metric] = 0
+            counts[metric] += 1
+        return counts
+
     def setFormatter(self, obj):
         self.formatter = obj
 
@@ -187,7 +198,7 @@ def fake_syslog_handler():
     logging.handlers.SysLogHandler = FakeLogger
 
 
-if get_config('unit_test').get('fake_syslog', 'False').lower() in TRUE_VALUES:
+if config_true_value(get_config('unit_test').get('fake_syslog', 'False')):
     fake_syslog_handler()
 
 

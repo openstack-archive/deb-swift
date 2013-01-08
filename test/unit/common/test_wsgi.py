@@ -29,9 +29,10 @@ from collections import defaultdict
 from urllib import quote
 
 from eventlet import sleep
-from webob import Request
 
+from swift.common.swob import Request
 from swift.common import wsgi
+
 
 class TestWSGI(unittest.TestCase):
     """ Tests for swift.common.wsgi """
@@ -216,6 +217,25 @@ class TestWSGI(unittest.TestCase):
         r = wsgi.make_pre_authed_request(
             {'QUERY_STRING': 'original'}, 'GET', 'path?')
         self.assertEquals(r.query_string, '')
+
+    def test_pre_auth_req_with_body(self):
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path', 'the body')
+        self.assertEquals(r.body, 'the body')
+
+    def test_pre_auth_creates_script_name(self):
+        e = wsgi.make_pre_authed_env({})
+        self.assertTrue('SCRIPT_NAME' in e)
+
+    def test_pre_auth_copies_script_name(self):
+        e = wsgi.make_pre_authed_env({'SCRIPT_NAME': '/script_name'})
+        self.assertEquals(e['SCRIPT_NAME'], '/script_name')
+
+    def test_pre_auth_copies_script_name_unless_path_overridden(self):
+        e = wsgi.make_pre_authed_env({'SCRIPT_NAME': '/script_name'},
+                                     path='/override')
+        self.assertEquals(e['SCRIPT_NAME'], '')
+        self.assertEquals(e['PATH_INFO'], '/override')
 
 
 if __name__ == '__main__':

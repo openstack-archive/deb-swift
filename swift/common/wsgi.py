@@ -27,11 +27,11 @@ import eventlet
 from eventlet import greenio, GreenPool, sleep, wsgi, listen
 from paste.deploy import loadapp, appconfig
 from eventlet.green import socket, ssl
-from webob import Request
 from urllib import unquote
 
+from swift.common.swob import Request
 from swift.common.utils import capture_stdio, disable_fallocate, \
-    drop_privileges, get_logger, NullLogger, TRUE_VALUES, \
+    drop_privileges, get_logger, NullLogger, config_true_value, \
     validate_configuration
 
 
@@ -66,20 +66,20 @@ def get_socket(conf, default_port=8080):
     """
     bind_addr = (conf.get('bind_ip', '0.0.0.0'),
                  int(conf.get('bind_port', default_port)))
-    address_family = [addr[0] for addr in socket.getaddrinfo(bind_addr[0],
-            bind_addr[1], socket.AF_UNSPEC, socket.SOCK_STREAM)
-            if addr[0] in (socket.AF_INET, socket.AF_INET6)][0]
+    address_family = [addr[0] for addr in socket.getaddrinfo(
+        bind_addr[0], bind_addr[1], socket.AF_UNSPEC, socket.SOCK_STREAM)
+        if addr[0] in (socket.AF_INET, socket.AF_INET6)][0]
     sock = None
     retry_until = time.time() + 30
     warn_ssl = False
     while not sock and time.time() < retry_until:
         try:
             sock = listen(bind_addr, backlog=int(conf.get('backlog', 4096)),
-                        family=address_family)
+                          family=address_family)
             if 'cert_file' in conf:
                 warn_ssl = True
                 sock = ssl.wrap_socket(sock, certfile=conf['cert_file'],
-                    keyfile=conf['key_file'])
+                                       keyfile=conf['key_file'])
         except socket.error, err:
             if err.args[0] != errno.EADDRINUSE:
                 raise
@@ -90,7 +90,8 @@ def get_socket(conf, default_port=8080):
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # in my experience, sockets can hang around forever without keepalive
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 600)
+    if hasattr(socket, 'TCP_KEEPIDLE'):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 600)
     if warn_ssl:
         ssl_warning_message = 'WARNING: SSL should only be enabled for ' \
                               'testing purposes. Use external SSL ' \
@@ -103,40 +104,23 @@ def get_socket(conf, default_port=8080):
 # TODO: pull pieces of this out to test
 def run_wsgi(conf_file, app_section, *args, **kwargs):
     """
-    Loads common settings from conf, then instantiates app and runs
-    the server using the specified number of workers.
+    Runs the server using the specified number of workers.
 
     :param conf_file: Path to paste.deploy style configuration file
     :param app_section: App name from conf file to load config from
     """
-
+    # Load configuration, Set logger and Load request processor
     try:
-        conf = appconfig('config:%s' % conf_file, name=app_section)
-    except Exception, e:
-        print "Error trying to load config %s: %s" % (conf_file, e)
+        (app, conf, logger, log_name) = \
+            init_request_processor(conf_file, app_section, *args, **kwargs)
+    except ConfigFileError, e:
+        print e
         return
-    validate_configuration()
-
-    # pre-configure logger
-    log_name = conf.get('log_name', app_section)
-    if 'logger' in kwargs:
-        logger = kwargs.pop('logger')
-    else:
-        logger = get_logger(conf, log_name,
-            log_to_console=kwargs.pop('verbose', False), log_route='wsgi')
-
-    # disable fallocate if desired
-    if conf.get('disable_fallocate', 'no').lower() in TRUE_VALUES:
-        disable_fallocate()
 
     # bind to address and port
     sock = get_socket(conf, default_port=kwargs.get('default_port', 8080))
     # remaining tasks should not require elevated privileges
     drop_privileges(conf.get('user', 'swift'))
-
-    # Ensure the application can be loaded before proceeding.
-    loadapp('config:%s' % conf_file, global_conf={'log_name': log_name})
-
     # redirect errors to logger and close stdio
     capture_stdio(logger)
 
@@ -150,7 +134,6 @@ def run_wsgi(conf_file, app_section, *args, **kwargs):
         wsgi.WRITE_TIMEOUT = int(conf.get('client_timeout') or 60)
         eventlet.hubs.use_hub('poll')
         eventlet.patcher.monkey_patch(all=False, socket=True)
-        monkey_patch_mimetools()
         app = loadapp('config:%s' % conf_file,
                       global_conf={'log_name': log_name})
         pool = GreenPool(size=1024)
@@ -212,6 +195,47 @@ def run_wsgi(conf_file, app_section, *args, **kwargs):
     logger.notice('Exited')
 
 
+class ConfigFileError(Exception):
+    pass
+
+
+def init_request_processor(conf_file, app_section, *args, **kwargs):
+    """
+    Loads common settings from conf
+    Sets the logger
+    Loads the request processor
+
+    :param conf_file: Path to paste.deploy style configuration file
+    :param app_section: App name from conf file to load config from
+    :returns the loaded application entry point
+    :raises ConfigFileError: Exception is raised for config file error
+    """
+    try:
+        conf = appconfig('config:%s' % conf_file, name=app_section)
+    except Exception, e:
+        raise ConfigFileError("Error trying to load config %s: %s" %
+                              (conf_file, e))
+
+    validate_configuration()
+
+    # pre-configure logger
+    log_name = conf.get('log_name', app_section)
+    if 'logger' in kwargs:
+        logger = kwargs.pop('logger')
+    else:
+        logger = get_logger(conf, log_name,
+                            log_to_console=kwargs.pop('verbose', False),
+                            log_route='wsgi')
+
+    # disable fallocate if desired
+    if config_true_value(conf.get('disable_fallocate', 'no')):
+        disable_fallocate()
+
+    monkey_patch_mimetools()
+    app = loadapp('config:%s' % conf_file, global_conf={'log_name': log_name})
+    return (app, conf, logger, log_name)
+
+
 class WSGIContext(object):
     """
     This class provides a means to provide context (scope) for a middleware
@@ -264,7 +288,7 @@ class WSGIContext(object):
 def make_pre_authed_request(env, method=None, path=None, body=None,
                             headers=None, agent='Swift'):
     """
-    Makes a new webob.Request based on the current env but with the
+    Makes a new swob.Request based on the current env but with the
     parameters specified. Note that this request will be preauthorized.
 
     :param env: The WSGI environment to base the new request on.
@@ -284,7 +308,7 @@ def make_pre_authed_request(env, method=None, path=None, body=None,
                   '%(orig)s StaticWeb'. You also set agent to None to
                   use the original env's HTTP_USER_AGENT or '' to
                   have no HTTP_USER_AGENT.
-    :returns: Fresh webob.Request object.
+    :returns: Fresh swob.Request object.
     """
     query_string = None
     if path and '?' in path:
@@ -328,14 +352,16 @@ def make_pre_authed_env(env, method=None, path=None, agent='Swift',
     newenv = {}
     for name in ('eventlet.posthooks', 'HTTP_USER_AGENT', 'HTTP_HOST',
                  'PATH_INFO', 'QUERY_STRING', 'REMOTE_USER', 'REQUEST_METHOD',
-                 'SERVER_NAME', 'SERVER_PORT', 'SERVER_PROTOCOL',
-                 'swift.cache', 'swift.source', 'swift.trans_id'):
+                 'SCRIPT_NAME', 'SERVER_NAME', 'SERVER_PORT',
+                 'SERVER_PROTOCOL', 'swift.cache', 'swift.source',
+                 'swift.trans_id'):
         if name in env:
             newenv[name] = env[name]
     if method:
         newenv['REQUEST_METHOD'] = method
     if path:
         newenv['PATH_INFO'] = path
+        newenv['SCRIPT_NAME'] = ''
     if query_string is not None:
         newenv['QUERY_STRING'] = query_string
     if agent:
@@ -347,4 +373,6 @@ def make_pre_authed_env(env, method=None, path=None, agent='Swift',
     newenv['swift.authorize_override'] = True
     newenv['REMOTE_USER'] = '.wsgi.pre_authed'
     newenv['wsgi.input'] = StringIO('')
+    if 'SCRIPT_NAME' not in newenv:
+        newenv['SCRIPT_NAME'] = ''
     return newenv

@@ -18,6 +18,7 @@
 import cPickle as pickle
 import os
 import unittest
+import email
 from shutil import rmtree
 from StringIO import StringIO
 from time import gmtime, sleep, strftime, time
@@ -25,17 +26,18 @@ from tempfile import mkdtemp
 from hashlib import md5
 
 from eventlet import sleep, spawn, wsgi, listen, Timeout
-from webob import Request
 from test.unit import FakeLogger
 from test.unit import _getxattr as getxattr
 from test.unit import _setxattr as setxattr
 from test.unit import connect_tcp, readuntil2crlfs
-from swift.obj import server as object_server
+from swift.obj import server as object_server, replicator
 from swift.common import utils
 from swift.common.utils import hash_path, mkdirs, normalize_timestamp, \
                                NullLogger, storage_directory
 from swift.common.exceptions import DiskFileNotExist
+from swift.common import constraints
 from eventlet import tpool
+from swift.common.swob import Request
 
 
 class TestDiskFile(unittest.TestCase):
@@ -54,31 +56,89 @@ class TestDiskFile(unittest.TestCase):
         """ Tear down for testing swift.object_server.ObjectController """
         rmtree(os.path.dirname(self.testdir))
 
-    def test_disk_file_app_iter_corners(self):
+    def _create_test_file(self, data, keep_data_fp=True):
         df = object_server.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
                                     FakeLogger())
         mkdirs(df.datadir)
         f = open(os.path.join(df.datadir,
                               normalize_timestamp(time()) + '.data'), 'wb')
-        f.write('1234567890')
+        f.write(data)
         setxattr(f.fileno(), object_server.METADATA_KEY,
                  pickle.dumps({}, object_server.PICKLE_PROTOCOL))
         f.close()
         df = object_server.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
-                                    FakeLogger(), keep_data_fp=True)
-        it = df.app_iter_range(0, None)
-        sio = StringIO()
-        for chunk in it:
-            sio.write(chunk)
-        self.assertEquals(sio.getvalue(), '1234567890')
+                                    FakeLogger(), keep_data_fp=keep_data_fp)
+        return df
+
+    def test_disk_file_app_iter_corners(self):
+        df = self._create_test_file('1234567890')
+        self.assertEquals(''.join(df.app_iter_range(0, None)), '1234567890')
 
         df = object_server.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
                                     FakeLogger(), keep_data_fp=True)
-        it = df.app_iter_range(5, None)
-        sio = StringIO()
-        for chunk in it:
-            sio.write(chunk)
-        self.assertEquals(sio.getvalue(), '67890')
+        self.assertEqual(''.join(df.app_iter_range(5, None)), '67890')
+
+    def test_disk_file_app_iter_ranges(self):
+        df = self._create_test_file('012345678911234567892123456789')
+        it = df.app_iter_ranges([(0, 10), (10, 20), (20, 30)], 'plain/text',
+                                '\r\n--someheader\r\n', 30)
+        value = ''.join(it)
+        self.assert_('0123456789' in value)
+        self.assert_('1123456789' in value)
+        self.assert_('2123456789' in value)
+
+    def test_disk_file_app_iter_ranges_edges(self):
+        df = self._create_test_file('012345678911234567892123456789')
+        it = df.app_iter_ranges([(3, 10), (0, 2)], 'application/whatever',
+                                '\r\n--someheader\r\n', 30)
+        value = ''.join(it)
+        self.assert_('3456789' in value)
+        self.assert_('01' in value)
+
+    def test_disk_file_large_app_iter_ranges(self):
+        """
+        This test case is to make sure that the disk file app_iter_ranges
+        method all the paths being tested.
+        """
+        long_str = '01234567890' * 65536
+        target_strs = ['3456789', long_str[0:65590]]
+        df = self._create_test_file(long_str)
+
+        it = df.app_iter_ranges([(3, 10), (0, 65590)], 'plain/text',
+                                '5e816ff8b8b8e9a5d355497e5d9e0301', 655360)
+
+        """
+        the produced string actually missing the MIME headers
+        need to add these headers to make it as real MIME message.
+        The body of the message is produced by method app_iter_ranges
+        off of DiskFile object.
+        """
+        header = ''.join(['Content-Type: multipart/byteranges;',
+                          'boundary=',
+                          '5e816ff8b8b8e9a5d355497e5d9e0301\r\n'])
+
+        value = header + ''.join(it)
+
+        parts = map(lambda p: p.get_payload(decode=True),
+                    email.message_from_string(value).walk())[1:3]
+        self.assertEqual(parts, target_strs)
+
+    def test_disk_file_app_iter_ranges_empty(self):
+        """
+        This test case tests when empty value passed into app_iter_ranges
+        When ranges passed into the method is either empty array or None,
+        this method will yield empty string
+        """
+        df = self._create_test_file('012345678911234567892123456789')
+        it = df.app_iter_ranges([], 'application/whatever',
+                                '\r\n--someheader\r\n', 100)
+        self.assertEqual(''.join(it), '')
+
+        df = object_server.DiskFile(self.testdir, 'sda1', '0', 'a', 'c', 'o',
+                                    FakeLogger(), keep_data_fp=True)
+        it = df.app_iter_ranges(None, 'app/something',
+                                '\r\n--someheader\r\n', 150)
+        self.assertEqual(''.join(it), '')
 
     def test_disk_file_mkstemp_creates_dir(self):
         tmpdir = os.path.join(self.testdir, 'sda1', 'tmp')
@@ -1046,7 +1106,7 @@ class TestObjectController(unittest.TestCase):
         resp = self.object_controller.GET(req)
         self.assertEquals(resp.status_int, 200)
 
-        since = strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp)))
+        since = strftime('%a, %d %b %Y %H:%M:%S GMT', gmtime(float(timestamp) + 1))
         req = Request.blank('/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'GET'},
                             headers={'If-Modified-Since': since})
         resp = self.object_controller.GET(req)
@@ -1389,7 +1449,8 @@ class TestObjectController(unittest.TestCase):
 
     def test_max_object_name_length(self):
         timestamp = normalize_timestamp(time())
-        req = Request.blank('/sda1/p/a/c/' + ('1' * 1024),
+        max_name_len = constraints.MAX_OBJECT_NAME_LENGTH
+        req = Request.blank('/sda1/p/a/c/' + ('1' * max_name_len),
                 environ={'REQUEST_METHOD': 'PUT'},
                 headers={'X-Timestamp': timestamp,
                          'Content-Length': '4',
@@ -1397,7 +1458,7 @@ class TestObjectController(unittest.TestCase):
         req.body = 'DATA'
         resp = self.object_controller.PUT(req)
         self.assertEquals(resp.status_int, 201)
-        req = Request.blank('/sda1/p/a/c/' + ('2' * 1025),
+        req = Request.blank('/sda1/p/a/c/' + ('2' * (max_name_len + 1)),
                 environ={'REQUEST_METHOD': 'PUT'},
                 headers={'X-Timestamp': timestamp,
                          'Content-Length': '4',
@@ -1518,6 +1579,24 @@ class TestObjectController(unittest.TestCase):
         resp = self.object_controller.GET(req)
         self.assertEquals(resp.status_int, 200)
         self.assertEquals(resp.headers.get('x-object-manifest'), 'c/o/')
+
+    def test_manifest_head_request(self):
+        timestamp = normalize_timestamp(time())
+        req = Request.blank('/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+                headers={'X-Timestamp': timestamp,
+                         'Content-Type': 'text/plain',
+                         'Content-Length': '0',
+                         'X-Object-Manifest': 'c/o/'})
+        req.body = 'hi'
+        resp = self.object_controller.PUT(req)
+        objfile = os.path.join(self.testdir, 'sda1',
+            storage_directory(object_server.DATADIR, 'p', hash_path('a', 'c',
+            'o')), timestamp + '.data')
+        self.assert_(os.path.isfile(objfile))
+        req = Request.blank('/sda1/p/a/c/o',
+                            environ={'REQUEST_METHOD': 'HEAD'})
+        resp = self.object_controller.GET(req)
+        self.assertEquals(resp.body, '')
 
     def test_async_update_http_connect(self):
         given_args = []
@@ -1978,6 +2057,29 @@ class TestObjectController(unittest.TestCase):
                 environ={'REQUEST_METHOD': 'POST'},
                 headers={'X-Timestamp': normalize_timestamp(time())})
             resp = self.object_controller.POST(req)
+            self.assertEquals(resp.status_int, 404)
+        finally:
+            object_server.time.time = orig_time
+
+    def test_DELETE_but_expired(self):
+        test_time = time() + 10000
+        req = Request.blank('/sda1/p/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': normalize_timestamp(test_time - 2000),
+                     'X-Delete-At': str(int(test_time + 100)),
+                     'Content-Length': '4',
+                     'Content-Type': 'application/octet-stream'})
+        req.body = 'TEST'
+        resp = self.object_controller.PUT(req)
+        self.assertEquals(resp.status_int, 201)
+
+        orig_time = object_server.time.time
+        try:
+            t = test_time + 100
+            object_server.time.time = lambda: float(t)
+            req = Request.blank('/sda1/p/a/c/o',
+                environ={'REQUEST_METHOD': 'DELETE'},
+                headers={'X-Timestamp': normalize_timestamp(time())})
+            resp = self.object_controller.DELETE(req)
             self.assertEquals(resp.status_int, 404)
         finally:
             object_server.time.time = orig_time

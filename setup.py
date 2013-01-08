@@ -38,7 +38,8 @@ setup(
         'Operating System :: POSIX :: Linux',
         'Programming Language :: Python :: 2.6',
         'Environment :: No Input/Output (Daemon)',
-        ],
+        'Environment :: OpenStack',
+    ],
     install_requires=[],  # removed for better compat
     scripts=[
         'bin/swift-account-audit',
@@ -47,6 +48,7 @@ setup(
         'bin/swift-account-replicator',
         'bin/swift-account-server',
         'bin/swift-bench',
+        'bin/swift-bench-client',
         'bin/swift-container-auditor',
         'bin/swift-container-replicator',
         'bin/swift-container-server',
@@ -78,7 +80,7 @@ setup(
             'object=swift.obj.server:app_factory',
             'container=swift.container.server:app_factory',
             'account=swift.account.server:app_factory',
-            ],
+        ],
         'paste.filter_factory': [
             'healthcheck=swift.common.middleware.healthcheck:filter_factory',
             'memcache=swift.common.middleware.memcache:filter_factory',
@@ -94,7 +96,7 @@ setup(
             'formpost=swift.common.middleware.formpost:filter_factory',
             'name_check=swift.common.middleware.name_check:filter_factory',
             'proxy_logging=swift.common.middleware.proxy_logging:'
-                'filter_factory',
-            ],
-        },
-    )
+            'filter_factory',
+        ],
+    },
+)

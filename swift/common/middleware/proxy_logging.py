@@ -40,10 +40,9 @@ be separated with a simple .split()
 import time
 from urllib import quote, unquote
 
-from webob import Request
-
+from swift.common.swob import Request
 from swift.common.utils import (get_logger, get_remote_client,
-                                get_valid_utf8_str, TRUE_VALUES)
+                                get_valid_utf8_str, config_true_value)
 
 
 class InputProxy(object):
@@ -93,7 +92,7 @@ class ProxyLoggingMiddleware(object):
 
     def __init__(self, app, conf):
         self.app = app
-        self.log_hdrs = conf.get('log_headers', 'no').lower() in TRUE_VALUES
+        self.log_hdrs = config_true_value(conf.get('log_headers', 'no'))
 
         # The leading access_* check is in case someone assumes that
         # log_statsd_valid_http_methods behaves like the other log_statsd_*
@@ -101,7 +100,7 @@ class ProxyLoggingMiddleware(object):
         self.valid_methods = conf.get(
             'access_log_statsd_valid_http_methods',
             conf.get('log_statsd_valid_http_methods',
-                     'GET,HEAD,POST,PUT,DELETE,COPY'))
+                     'GET,HEAD,POST,PUT,DELETE,COPY,OPTIONS'))
         self.valid_methods = [m.strip().upper() for m in
                               self.valid_methods.split(',') if m.strip()]
         access_log_conf = {}
