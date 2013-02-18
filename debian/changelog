@@ -1,8 +1,12 @@
 swift (1.4.8-3) UNRELEASED; urgency=low
 
+  [ Julien Danjou ]
   * Add /var/cache/swift to use swift-recon
   * Add configuration and cron job for swift-recon
   * Move swift-recon-cron to swift-object
+
+  [ Mehdi Abaakouk ]
+  * Update gbp.conf
 
  -- Julien Danjou <acid@debian.org>  Tue, 03 Apr 2012 17:45:30 +0200
 
