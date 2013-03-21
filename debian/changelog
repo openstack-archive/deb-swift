@@ -1,3 +1,10 @@
+swift (1.7.5-2) experimental; urgency=low
+
+  * Added missing python-swiftclient dependency in swift-account. Thanks to
+    Viktor Křivák for reporting (Closes: #703623).
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 22 Mar 2013 01:01:47 +0800
+
 swift (1.7.5-1) experimental; urgency=low
 
   [ Mehdi Abaakouk ]

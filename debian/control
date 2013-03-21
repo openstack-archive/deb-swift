@@ -177,7 +177,7 @@ Description: distributed virtual object store - container server
 Package: swift-account
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: lsb-base (>= 3.0-6), swift, python-swift (=${binary:Version}), rsync, ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0-6), swift, python-swift (=${binary:Version}), rsync, ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}, python-swift-client
 Provides: ${python:Provides}
 Description: distributed virtual object store - account server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
