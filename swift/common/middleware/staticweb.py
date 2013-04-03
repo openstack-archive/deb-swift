@@ -28,7 +28,8 @@ added. For example::
     ...
 
     [pipeline:main]
-    pipeline = healthcheck cache tempauth staticweb proxy-server
+    pipeline = catch_errors healthcheck proxy-logging cache ratelimit tempauth
+               staticweb proxy-logging proxy-server
 
     ...
 
@@ -36,14 +37,6 @@ added. For example::
     use = egg:swift#staticweb
     # Seconds to cache container x-container-meta-web-* header values.
     # cache_timeout = 300
-    # You can override the default log routing for this filter here:
-    # set log_name = staticweb
-    # set log_facility = LOG_LOCAL0
-    # set log_level = INFO
-    # set access_log_name = staticweb
-    # set access_log_facility = LOG_LOCAL0
-    # set access_log_level = INFO
-    # set log_headers = False
 
 Any publicly readable containers (for example, ``X-Container-Read: .r:*``, see
 `acls`_ for more information on this) will be checked for
@@ -63,7 +56,7 @@ Unauthorized and 404 Not Found) will instead serve the
 ``X-Container-Meta-Web-Error: error.html`` will serve .../404error.html for
 requests for paths not found.
 
-For psuedo paths that have no <index.name>, this middleware can serve HTML file
+For pseudo paths that have no <index.name>, this middleware can serve HTML file
 listings if you set the ``X-Container-Meta-Web-Listings: true`` metadata item
 on the container.
 
@@ -109,18 +102,13 @@ Example usage of this middleware via ``swift``:
 """
 
 
-try:
-    import simplejson as json
-except ImportError:
-    import json
-
 import cgi
 import time
 from urllib import unquote, quote as urllib_quote
 
 
-from swift.common.utils import cache_from_env, get_logger, human_readable, \
-    split_path, config_true_value
+from swift.common.utils import cache_from_env, human_readable, split_path, \
+    config_true_value, json
 from swift.common.wsgi import make_pre_authed_env, make_pre_authed_request, \
     WSGIContext
 from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND
@@ -155,9 +143,6 @@ class _StaticWebContext(WSGIContext):
         self.obj = obj
         self.app = staticweb.app
         self.cache_timeout = staticweb.cache_timeout
-        self.logger = staticweb.logger
-        self.access_logger = staticweb.access_logger
-        self.log_headers = staticweb.log_headers
         self.agent = '%(orig)s StaticWeb'
         # Results from the last call to self._get_container_info.
         self._index = self._error = self._listings = self._listings_css = None
@@ -171,7 +156,6 @@ class _StaticWebContext(WSGIContext):
         :param env: The original request WSGI environment.
         :param start_response: The WSGI start_response hook.
         """
-        self._log_response(env, self._get_status_int())
         if not self._error:
             start_response(self._response_status, self._response_headers,
                            self._response_exc_info)
@@ -183,7 +167,7 @@ class _StaticWebContext(WSGIContext):
             env, 'GET', '/%s/%s/%s/%s%s' % (
                 self.version, self.account, self.container,
                 self._get_status_int(), self._error),
-            self.agent))
+            self.agent, swift_source='SW'))
         if is_success(self._get_status_int()):
             start_response(save_response_status, self._response_headers,
                            self._response_exc_info)
@@ -214,7 +198,7 @@ class _StaticWebContext(WSGIContext):
         resp = make_pre_authed_request(
             env, 'HEAD', '/%s/%s/%s' % (
                 self.version, self.account, self.container),
-            agent=self.agent).get_response(self.app)
+            agent=self.agent, swift_source='SW').get_response(self.app)
         if is_success(resp.status_int):
             self._index = \
                 resp.headers.get('x-container-meta-web-index', '').strip()
@@ -229,7 +213,7 @@ class _StaticWebContext(WSGIContext):
                 memcache_client.set(memcache_key,
                                     (self._index, self._error, self._listings,
                                      self._listings_css),
-                                    timeout=self.cache_timeout)
+                                    time=self.cache_timeout)
 
     def _listing(self, env, start_response, prefix=None):
         """
@@ -245,7 +229,7 @@ class _StaticWebContext(WSGIContext):
         tmp_env = make_pre_authed_env(
             env, 'GET', '/%s/%s/%s' % (
                 self.version, self.account, self.container),
-            self.agent)
+            self.agent, swift_source='SW')
         tmp_env['QUERY_STRING'] = 'delimiter=/&format=json'
         if prefix:
             tmp_env['QUERY_STRING'] += '&prefix=%s' % quote(prefix)
@@ -296,7 +280,10 @@ class _StaticWebContext(WSGIContext):
                     '   </tr>\n'
         for item in listing:
             if 'subdir' in item:
-                subdir = item['subdir']
+                if isinstance(item['subdir'], unicode):
+                    subdir = item['subdir'].encode('utf-8')
+                else:
+                    subdir = item['subdir']
                 if prefix:
                     subdir = subdir[len(prefix):]
                 body += '   <tr class="item subdir">\n' \
@@ -307,7 +294,10 @@ class _StaticWebContext(WSGIContext):
                         (quote(subdir), cgi.escape(subdir))
         for item in listing:
             if 'name' in item:
-                name = item['name']
+                if isinstance(item['name'], unicode):
+                    name = item['name'].encode('utf-8')
+                else:
+                    name = item['name']
                 if prefix:
                     name = name[len(prefix):]
                 body += '   <tr class="item %s">\n' \
@@ -325,7 +315,6 @@ class _StaticWebContext(WSGIContext):
                 ' </body>\n' \
                 '</html>\n'
         resp = Response(headers=headers, body=body)
-        self._log_response(env, resp.status_int)
         return resp(env, start_response)
 
     def _build_css_path(self, prefix=''):
@@ -356,13 +345,13 @@ class _StaticWebContext(WSGIContext):
         if env['PATH_INFO'][-1] != '/':
             resp = HTTPMovedPermanently(
                 location=(env['PATH_INFO'] + '/'))
-            self._log_response(env, resp.status_int)
             return resp(env, start_response)
         if not self._index:
             return self._listing(env, start_response)
         tmp_env = dict(env)
         tmp_env['HTTP_USER_AGENT'] = \
             '%s StaticWeb' % env.get('HTTP_USER_AGENT')
+        tmp_env['swift.source'] = 'SW'
         tmp_env['PATH_INFO'] += self._index
         resp = self._app_call(tmp_env)
         status_int = self._get_status_int()
@@ -386,6 +375,7 @@ class _StaticWebContext(WSGIContext):
         tmp_env = dict(env)
         tmp_env['HTTP_USER_AGENT'] = \
             '%s StaticWeb' % env.get('HTTP_USER_AGENT')
+        tmp_env['swift.source'] = 'SW'
         resp = self._app_call(tmp_env)
         status_int = self._get_status_int()
         if is_success(status_int) or is_redirection(status_int):
@@ -402,6 +392,7 @@ class _StaticWebContext(WSGIContext):
             tmp_env = dict(env)
             tmp_env['HTTP_USER_AGENT'] = \
                 '%s StaticWeb' % env.get('HTTP_USER_AGENT')
+            tmp_env['swift.source'] = 'SW'
             if tmp_env['PATH_INFO'][-1] != '/':
                 tmp_env['PATH_INFO'] += '/'
             tmp_env['PATH_INFO'] += self._index
@@ -411,7 +402,6 @@ class _StaticWebContext(WSGIContext):
                 if env['PATH_INFO'][-1] != '/':
                     resp = HTTPMovedPermanently(
                         location=env['PATH_INFO'] + '/')
-                    self._log_response(env, resp.status_int)
                     return resp(env, start_response)
                 start_response(self._response_status, self._response_headers,
                                self._response_exc_info)
@@ -421,7 +411,7 @@ class _StaticWebContext(WSGIContext):
                 tmp_env = make_pre_authed_env(
                     env, 'GET', '/%s/%s/%s' % (
                         self.version, self.account, self.container),
-                    self.agent)
+                    self.agent, swift_source='SW')
                 tmp_env['QUERY_STRING'] = 'limit=1&format=json&delimiter' \
                     '=/&limit=1&prefix=%s' % quote(self.obj + '/')
                 resp = self._app_call(tmp_env)
@@ -431,76 +421,17 @@ class _StaticWebContext(WSGIContext):
                     resp = HTTPNotFound()(env, self._start_response)
                     return self._error_response(resp, env, start_response)
                 resp = HTTPMovedPermanently(location=env['PATH_INFO'] + '/')
-                self._log_response(env, resp.status_int)
                 return resp(env, start_response)
             return self._listing(env, start_response, self.obj)
-
-    def _log_response(self, env, status_int):
-        """
-        Logs an access line for StaticWeb responses; use when the next app in
-        the pipeline will not be handling the final response to the remote
-        user.
-
-        Assumes that the request and response bodies are 0 bytes or very near 0
-        so no bytes transferred are tracked or logged.
-
-        This does mean that the listings responses that actually do transfer
-        content will not be logged with any bytes transferred, but in counter
-        to that the full bytes for the underlying listing will be logged by the
-        proxy even if the remote client disconnects early for the StaticWeb
-        listing.
-
-        I didn't think the extra complexity of getting the bytes transferred
-        exactly correct for these requests was worth it, but perhaps someone
-        else will think it is.
-
-        To get things exact, this filter would need to use an
-        eventlet.posthooks logger like the proxy does and any log processing
-        systems would need to ignore some (but not all) proxy requests made by
-        StaticWeb if they were just interested in the bytes transferred to the
-        remote client.
-        """
-        trans_time = '%.4f' % (time.time() -
-                               env.get('staticweb.start_time', time.time()))
-        the_request = quote(unquote(env['PATH_INFO']))
-        if env.get('QUERY_STRING'):
-            the_request = the_request + '?' + env['QUERY_STRING']
-        # remote user for zeus
-        client = env.get('HTTP_X_CLUSTER_CLIENT_IP')
-        if not client and 'HTTP_X_FORWARDED_FOR' in env:
-            # remote user for other lbs
-            client = env['HTTP_X_FORWARDED_FOR'].split(',')[0].strip()
-        logged_headers = None
-        if self.log_headers:
-            headers = []
-            for k, v in env.iteritems():
-                if k.startswith('HTTP_'):
-                    k = k[len('HTTP_'):].replace('_', '-').title()
-                    headers.append((k, v))
-            logged_headers = '\n'.join('%s: %s' % (k, v) for k, v in headers)
-        self.access_logger.info(' '.join(quote(str(x)) for x in (
-            client or '-',
-            env.get('REMOTE_ADDR', '-'),
-            time.strftime('%d/%b/%Y/%H/%M/%S', time.gmtime()),
-            env['REQUEST_METHOD'],
-            the_request,
-            env['SERVER_PROTOCOL'],
-            status_int,
-            env.get('HTTP_REFERER', '-'),
-            env.get('HTTP_USER_AGENT', '-'),
-            env.get('HTTP_X_AUTH_TOKEN', '-'),
-            '-',
-            '-',
-            env.get('HTTP_ETAG', '-'),
-            env.get('swift.trans_id', '-'),
-            logged_headers or '-',
-            trans_time)))
 
 
 class StaticWeb(object):
     """
     The Static Web WSGI middleware filter; serves container data as a static
     web site. See `staticweb`_ for an overview.
+
+    The proxy logs created for any subrequests made will have swift.source set
+    to "SW".
 
     :param app: The next WSGI application/filter in the paste.deploy pipeline.
     :param conf: The filter configuration dict.
@@ -513,18 +444,6 @@ class StaticWeb(object):
         self.conf = conf
         #: The seconds to cache the x-container-meta-web-* headers.,
         self.cache_timeout = int(conf.get('cache_timeout', 300))
-        #: Logger for this filter.
-        self.logger = get_logger(conf, log_route='staticweb')
-        access_log_conf = {}
-        for key in ('log_facility', 'log_name', 'log_level'):
-            value = conf.get('access_' + key, conf.get(key, None))
-            if value:
-                access_log_conf[key] = value
-        #: Web access logger for this filter.
-        self.access_logger = get_logger(access_log_conf,
-                                        log_route='staticweb-access')
-        #: Indicates whether full HTTP headers should be logged or not.
-        self.log_headers = config_true_value(conf.get('log_headers', 'no'))
 
     def __call__(self, env, start_response):
         """

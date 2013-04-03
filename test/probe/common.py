@@ -16,12 +16,14 @@
 from httplib import HTTPConnection
 from os import kill
 from signal import SIGTERM
-from subprocess import call, Popen
+from subprocess import Popen, PIPE, STDOUT
 from time import sleep, time
 
 from swiftclient import get_auth, head_account
 
 from swift.common.ring import Ring
+
+from test.probe import CHECK_SERVER_TIMEOUT
 
 
 def start_server(port, port2server, pids, check=True):
@@ -40,7 +42,7 @@ def start_server(port, port2server, pids, check=True):
     return None
 
 
-def check_server(port, port2server, pids):
+def check_server(port, port2server, pids, timeout=CHECK_SERVER_TIMEOUT):
     server = port2server[port]
     if server[:-1] in ('account', 'container', 'object'):
         path = '/connect/1/2'
@@ -48,7 +50,7 @@ def check_server(port, port2server, pids):
             path += '/3'
         elif server[:-1] == 'object':
             path += '/3/4'
-        try_until = time() + 30
+        try_until = time() + timeout
         while True:
             try:
                 conn = HTTPConnection('127.0.0.1', port)
@@ -61,12 +63,12 @@ def check_server(port, port2server, pids):
             except Exception, err:
                 if time() > try_until:
                     print err
-                    print 'Giving up on %s:%s after 30 seconds.' % (
-                        server, port)
+                    print 'Giving up on %s:%s after %s seconds.' % (
+                        server, port, timeout)
                     raise err
                 sleep(0.1)
     else:
-        try_until = time() + 30
+        try_until = time() + timeout
         while True:
             try:
                 url, token = get_auth('http://127.0.0.1:8080/auth/v1.0',
@@ -122,7 +124,9 @@ def kill_nonprimary_server(primary_nodes, port2server, pids):
 
 
 def reset_environment():
-    call(['resetswift'])
+    p = Popen("resetswift 2>&1", shell=True, stdout=PIPE)
+    stdout, _stderr = p.communicate()
+    print stdout
     pids = {}
     try:
         port2server = {}

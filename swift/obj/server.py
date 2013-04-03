@@ -31,7 +31,7 @@ from xattr import getxattr, setxattr
 from eventlet import sleep, Timeout, tpool
 
 from swift.common.utils import mkdirs, normalize_timestamp, public, \
-    storage_directory, hash_path, renamer, fallocate, fsync, \
+    storage_directory, hash_path, renamer, fallocate, fsync, fdatasync, \
     split_path, drop_buffer_cache, get_logger, write_pickle, \
     config_true_value, validate_device_partition, timing_stats
 from swift.common.bufferedhttp import http_connect
@@ -118,6 +118,7 @@ class DiskFile(object):
             path, device, storage_directory(DATADIR, partition, name_hash))
         self.device_path = os.path.join(path, device)
         self.tmpdir = os.path.join(path, device, 'tmp')
+        self.tmppath = None
         self.logger = logger
         self.metadata = {}
         self.meta_file = None
@@ -206,7 +207,7 @@ class DiskFile(object):
 
     def app_iter_ranges(self, ranges, content_type, boundary, size):
         """Returns an iterator over the data file for a set of ranges"""
-        if (not ranges or len(ranges) == 0):
+        if not ranges:
             yield ''
         else:
             try:
@@ -222,8 +223,8 @@ class DiskFile(object):
     def _handle_close_quarantine(self):
         """Check if file needs to be quarantined"""
         try:
-            obj_size = self.get_data_file_size()
-        except DiskFileError, e:
+            self.get_data_file_size()
+        except DiskFileError:
             self.quarantine()
             return
         except DiskFileNotExist:
@@ -278,30 +279,31 @@ class DiskFile(object):
         """Contextmanager to make a temporary file."""
         if not os.path.exists(self.tmpdir):
             mkdirs(self.tmpdir)
-        fd, tmppath = mkstemp(dir=self.tmpdir)
+        fd, self.tmppath = mkstemp(dir=self.tmpdir)
         try:
-            yield fd, tmppath
+            yield fd
         finally:
             try:
                 os.close(fd)
             except OSError:
                 pass
+            tmppath, self.tmppath = self.tmppath, None
             try:
                 os.unlink(tmppath)
             except OSError:
                 pass
 
-    def put(self, fd, tmppath, metadata, extension='.data'):
+    def put(self, fd, metadata, extension='.data'):
         """
         Finalize writing the file on disk, and renames it from the temp file to
         the real location.  This should be called after the data has been
         written to the temp file.
 
-        :params fd: file descriptor of the temp file
-        :param tmppath: path to the temporary file being used
+        :param fd: file descriptor of the temp file
         :param metadata: dictionary of metadata to be written
         :param extension: extension to be used when making the file
         """
+        assert self.tmppath is not None
         metadata['name'] = self.name
         timestamp = normalize_timestamp(metadata['X-Timestamp'])
         write_metadata(fd, metadata)
@@ -309,8 +311,20 @@ class DiskFile(object):
             self.drop_cache(fd, 0, int(metadata['Content-Length']))
         tpool.execute(fsync, fd)
         invalidate_hash(os.path.dirname(self.datadir))
-        renamer(tmppath, os.path.join(self.datadir, timestamp + extension))
+        renamer(self.tmppath,
+                os.path.join(self.datadir, timestamp + extension))
         self.metadata = metadata
+
+    def put_metadata(self, metadata, tombstone=False):
+        """
+        Short hand for putting metadata to .meta and .ts files.
+
+        :param metadata: dictionary of metadata to be written
+        :param tombstone: whether or not we are writing a tombstone
+        """
+        extension = '.ts' if tombstone else '.meta'
+        with self.mkstemp() as fd:
+            self.put(fd, metadata, extension=extension)
 
     def unlinkold(self, timestamp):
         """
@@ -403,6 +417,7 @@ class ObjectController(object):
             content-encoding,
             x-delete-at,
             x-object-manifest,
+            x-static-large-object,
         '''
         self.allowed_headers = set(
             i.strip().lower() for i in
@@ -475,16 +490,34 @@ class ObjectController(object):
         :param obj: object name
         :param headers_in: dictionary of headers from the original request
         :param headers_out: dictionary of headers to send in the container
-                            request
+                            request(s)
         :param objdevice: device name that the object is in
         """
-        host = headers_in.get('X-Container-Host', None)
-        partition = headers_in.get('X-Container-Partition', None)
-        contdevice = headers_in.get('X-Container-Device', None)
-        if not all([host, partition, contdevice]):
+        conthosts = [h.strip() for h in
+                     headers_in.get('X-Container-Host', '').split(',')]
+        contdevices = [d.strip() for d in
+                       headers_in.get('X-Container-Device', '').split(',')]
+        contpartition = headers_in.get('X-Container-Partition', '')
+
+        if len(conthosts) != len(contdevices):
+            # This shouldn't happen unless there's a bug in the proxy,
+            # but if there is, we want to know about it.
+            self.logger.error(_('ERROR Container update failed: different  '
+                                'numbers of hosts and devices in request: '
+                                '"%s" vs "%s"' %
+                                (headers_in.get('X-Container-Host', ''),
+                                 headers_in.get('X-Container-Device', ''))))
             return
-        self.async_update(op, account, container, obj, host, partition,
-                          contdevice, headers_out, objdevice)
+
+        if contpartition:
+            updates = zip(conthosts, contdevices)
+        else:
+            updates = []
+
+        for conthost, contdevice in updates:
+            self.async_update(op, account, container, obj, conthost,
+                              contpartition, contdevice, headers_out,
+                              objdevice)
 
     def delete_at_update(self, op, delete_at, account, container, obj,
                          headers_in, objdevice):
@@ -502,25 +535,36 @@ class ObjectController(object):
         # At that time, Swift will be so popular and pervasive I will have
         # created income for thousands of future programmers.
         delete_at = max(min(delete_at, 9999999999), 0)
-        host = partition = contdevice = None
+        updates = [(None, None)]
+
+        partition = None
+        hosts = contdevices = [None]
         headers_out = {'x-timestamp': headers_in['x-timestamp'],
                        'x-trans-id': headers_in.get('x-trans-id', '-')}
         if op != 'DELETE':
-            host = headers_in.get('X-Delete-At-Host', None)
             partition = headers_in.get('X-Delete-At-Partition', None)
-            contdevice = headers_in.get('X-Delete-At-Device', None)
+            hosts = headers_in.get('X-Delete-At-Host', '')
+            contdevices = headers_in.get('X-Delete-At-Device', '')
+            updates = [upd for upd in
+                       zip((h.strip() for h in hosts.split(',')),
+                           (c.strip() for c in contdevices.split(',')))
+                       if all(upd) and partition]
+            if not updates:
+                updates = [(None, None)]
             headers_out['x-size'] = '0'
             headers_out['x-content-type'] = 'text/plain'
             headers_out['x-etag'] = 'd41d8cd98f00b204e9800998ecf8427e'
-        self.async_update(
-            op, self.expiring_objects_account,
-            str(delete_at / self.expiring_objects_container_divisor *
-                self.expiring_objects_container_divisor),
-            '%s-%s/%s/%s' % (delete_at, account, container, obj),
-            host, partition, contdevice, headers_out, objdevice)
+
+        for host, contdevice in updates:
+            self.async_update(
+                op, self.expiring_objects_account,
+                str(delete_at / self.expiring_objects_container_divisor *
+                    self.expiring_objects_container_divisor),
+                '%s-%s/%s/%s' % (delete_at, account, container, obj),
+                host, partition, contdevice, headers_out, objdevice)
 
     @public
-    @timing_stats
+    @timing_stats()
     def POST(self, request):
         """Handle HTTP POST requests for the Swift Object Server."""
         try:
@@ -546,7 +590,7 @@ class ObjectController(object):
         if file.is_deleted() or file.is_expired():
             return HTTPNotFound(request=request)
         try:
-            file_size = file.get_data_file_size()
+            file.get_data_file_size()
         except (DiskFileError, DiskFileNotExist):
             file.quarantine()
             return HTTPNotFound(request=request)
@@ -565,12 +609,11 @@ class ObjectController(object):
             if old_delete_at:
                 self.delete_at_update('DELETE', old_delete_at, account,
                                       container, obj, request.headers, device)
-        with file.mkstemp() as (fd, tmppath):
-            file.put(fd, tmppath, metadata, extension='.meta')
+        file.put_metadata(metadata)
         return HTTPAccepted(request=request)
 
     @public
-    @timing_stats
+    @timing_stats()
     def PUT(self, request):
         """Handle HTTP PUT requests for the Swift Object Server."""
         try:
@@ -600,15 +643,15 @@ class ObjectController(object):
         etag = md5()
         upload_size = 0
         last_sync = 0
-        with file.mkstemp() as (fd, tmppath):
-            if 'content-length' in request.headers:
-                try:
-                    fallocate(fd, int(request.headers['content-length']))
-                except OSError:
-                    return HTTPInsufficientStorage(drive=device,
-                                                   request=request)
+        elapsed_time = 0
+        with file.mkstemp() as fd:
+            try:
+                fallocate(fd, int(request.headers.get('content-length', 0)))
+            except OSError:
+                return HTTPInsufficientStorage(drive=device, request=request)
             reader = request.environ['wsgi.input'].read
             for chunk in iter(lambda: reader(self.network_chunk_size), ''):
+                start_time = time.time()
                 upload_size += len(chunk)
                 if time.time() > upload_expiration:
                     self.logger.increment('PUT.timeouts')
@@ -619,10 +662,15 @@ class ObjectController(object):
                     chunk = chunk[written:]
                 # For large files sync every 512MB (by default) written
                 if upload_size - last_sync >= self.bytes_per_sync:
-                    tpool.execute(fsync, fd)
+                    tpool.execute(fdatasync, fd)
                     drop_buffer_cache(fd, last_sync, upload_size - last_sync)
                     last_sync = upload_size
                 sleep()
+                elapsed_time += time.time() - start_time
+
+            if upload_size:
+                self.logger.transfer_rate(
+                    'PUT.' + device + '.timing', elapsed_time, upload_size)
 
             if 'content-length' in request.headers and \
                     int(request.headers['content-length']) != upload_size:
@@ -654,7 +702,7 @@ class ObjectController(object):
                     self.delete_at_update(
                         'DELETE', old_delete_at, account, container, obj,
                         request.headers, device)
-            file.put(fd, tmppath, metadata)
+            file.put(fd, metadata)
         file.unlinkold(metadata['X-Timestamp'])
         if not orig_timestamp or \
                 orig_timestamp < request.headers['x-timestamp']:
@@ -670,7 +718,7 @@ class ObjectController(object):
         return resp
 
     @public
-    @timing_stats
+    @timing_stats()
     def GET(self, request):
         """Handle HTTP GET requests for the Swift Object Server."""
         try:
@@ -750,7 +798,7 @@ class ObjectController(object):
         return request.get_response(response)
 
     @public
-    @timing_stats
+    @timing_stats(sample_rate=0.8)
     def HEAD(self, request):
         """Handle HTTP HEAD requests for the Swift Object Server."""
         try:
@@ -790,7 +838,7 @@ class ObjectController(object):
         return response
 
     @public
-    @timing_stats
+    @timing_stats()
     def DELETE(self, request):
         """Handle HTTP DELETE requests for the Swift Object Server."""
         try:
@@ -821,12 +869,11 @@ class ObjectController(object):
         metadata = {
             'X-Timestamp': request.headers['X-Timestamp'], 'deleted': True,
         }
-        with file.mkstemp() as (fd, tmppath):
-            old_delete_at = int(file.metadata.get('X-Delete-At') or 0)
-            if old_delete_at:
-                self.delete_at_update('DELETE', old_delete_at, account,
-                                      container, obj, request.headers, device)
-            file.put(fd, tmppath, metadata, extension='.ts')
+        old_delete_at = int(file.metadata.get('X-Delete-At') or 0)
+        if old_delete_at:
+            self.delete_at_update('DELETE', old_delete_at, account,
+                                  container, obj, request.headers, device)
+        file.put_metadata(metadata, tombstone=True)
         file.unlinkold(metadata['X-Timestamp'])
         if not orig_timestamp or \
                 orig_timestamp < request.headers['x-timestamp']:
@@ -839,7 +886,7 @@ class ObjectController(object):
         return resp
 
     @public
-    @timing_stats
+    @timing_stats(sample_rate=0.1)
     def REPLICATE(self, request):
         """
         Handle REPLICATE requests for the Swift Object Server.  This is used
@@ -868,7 +915,7 @@ class ObjectController(object):
         self.logger.txn_id = req.headers.get('x-trans-id', None)
 
         if not check_utf8(req.path_info):
-            res = HTTPPreconditionFailed(body='Invalid UTF8')
+            res = HTTPPreconditionFailed(body='Invalid UTF8 or contains NULL')
         else:
             try:
                 # disallow methods which have not been marked 'public'

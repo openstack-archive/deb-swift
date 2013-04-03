@@ -18,7 +18,6 @@ from __future__ import with_statement
 import os
 import time
 import traceback
-from urllib import unquote
 from xml.sax import saxutils
 from datetime import datetime
 
@@ -27,7 +26,7 @@ from eventlet import Timeout
 import swift.common.db
 from swift.common.db import ContainerBroker
 from swift.common.utils import get_logger, get_param, hash_path, public, \
-    normalize_timestamp, storage_directory, split_path, validate_sync_to, \
+    normalize_timestamp, storage_directory, validate_sync_to, \
     config_true_value, validate_device_partition, json, timing_stats
 from swift.common.constraints import CONTAINER_LISTING_LIMIT, \
     check_mount, check_float, check_utf8, FORMAT2CONTENT_TYPE
@@ -38,7 +37,7 @@ from swift.common.http import HTTP_NOT_FOUND, is_success
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
     HTTPCreated, HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPMethodNotAllowed, Request, Response, \
-    HTTPInsufficientStorage
+    HTTPInsufficientStorage, HTTPNotAcceptable
 
 DATADIR = 'containers'
 
@@ -88,19 +87,42 @@ class ContainerController(object):
 
     def account_update(self, req, account, container, broker):
         """
-        Update the account server with latest container info.
+        Update the account server(s) with latest container info.
 
         :param req: swob.Request object
         :param account: account name
         :param container: container name
         :param broker: container DB broker object
-        :returns: if the account request returns a 404 error code,
-                  HTTPNotFound response object, otherwise None.
+        :returns: if all the account requests return a 404 error code,
+                  HTTPNotFound response object,
+                  if the account cannot be updated due to a malformed header,
+                  an HTTPBadRequest response object,
+                  otherwise None.
         """
-        account_host = req.headers.get('X-Account-Host')
-        account_partition = req.headers.get('X-Account-Partition')
-        account_device = req.headers.get('X-Account-Device')
-        if all([account_host, account_partition, account_device]):
+        account_hosts = [h.strip() for h in
+                         req.headers.get('X-Account-Host', '').split(',')]
+        account_devices = [d.strip() for d in
+                           req.headers.get('X-Account-Device', '').split(',')]
+        account_partition = req.headers.get('X-Account-Partition', '')
+
+        if len(account_hosts) != len(account_devices):
+            # This shouldn't happen unless there's a bug in the proxy,
+            # but if there is, we want to know about it.
+            self.logger.error(_('ERROR Account update failed: different  '
+                                'numbers of hosts and devices in request: '
+                                '"%s" vs "%s"' %
+                                (req.headers.get('X-Account-Host', ''),
+                                 req.headers.get('X-Account-Device', ''))))
+            return HTTPBadRequest(req=req)
+
+        if account_partition:
+            updates = zip(account_hosts, account_devices)
+        else:
+            updates = []
+
+        account_404s = 0
+
+        for account_host, account_device in updates:
             account_ip, account_port = account_host.rsplit(':', 1)
             new_path = '/' + '/'.join([account, container])
             info = broker.get_info()
@@ -122,7 +144,7 @@ class ContainerController(object):
                     account_response = conn.getresponse()
                     account_response.read()
                     if account_response.status == HTTP_NOT_FOUND:
-                        return HTTPNotFound(request=req)
+                        account_404s += 1
                     elif not is_success(account_response.status):
                         self.logger.error(_(
                             'ERROR Account update failed '
@@ -138,15 +160,17 @@ class ContainerController(object):
                     '%(ip)s:%(port)s/%(device)s (will retry later)'),
                     {'ip': account_ip, 'port': account_port,
                      'device': account_device})
-        return None
+        if updates and account_404s == len(updates):
+            return HTTPNotFound(req=req)
+        else:
+            return None
 
     @public
-    @timing_stats
+    @timing_stats()
     def DELETE(self, req):
         """Handle HTTP DELETE request."""
         try:
-            drive, part, account, container, obj = split_path(
-                unquote(req.path), 4, 5, True)
+            drive, part, account, container, obj = req.split_path(4, 5, True)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -184,12 +208,11 @@ class ContainerController(object):
             return HTTPNotFound()
 
     @public
-    @timing_stats
+    @timing_stats()
     def PUT(self, req):
         """Handle HTTP PUT request."""
         try:
-            drive, part, account, container, obj = split_path(
-                unquote(req.path), 4, 5, True)
+            drive, part, account, container, obj = req.split_path(4, 5, True)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -248,12 +271,11 @@ class ContainerController(object):
                 return HTTPAccepted(request=req)
 
     @public
-    @timing_stats
+    @timing_stats(sample_rate=0.1)
     def HEAD(self, req):
         """Handle HTTP HEAD request."""
         try:
-            drive, part, account, container, obj = split_path(
-                unquote(req.path), 4, 5, True)
+            drive, part, account, container, obj = req.split_path(4, 5, True)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -280,23 +302,38 @@ class ContainerController(object):
         if get_param(req, 'format'):
             req.accept = FORMAT2CONTENT_TYPE.get(
                 get_param(req, 'format').lower(), FORMAT2CONTENT_TYPE['plain'])
-        try:
-            headers['Content-Type'] = req.accept.best_match(
-                ['text/plain', 'application/json', 'application/xml',
-                 'text/xml'],
-                default_match='text/plain')
-        except AssertionError, err:
-            return HTTPBadRequest(body='bad accept header: %s' % req.accept,
-                                  content_type='text/plain', request=req)
+        headers['Content-Type'] = req.accept.best_match(
+            ['text/plain', 'application/json', 'application/xml', 'text/xml'])
+        if not headers['Content-Type']:
+            return HTTPNotAcceptable(request=req)
         return HTTPNoContent(request=req, headers=headers, charset='utf-8')
 
+    def derive_content_type_metadata(self, content_type, size):
+        """
+        Will check the last parameter and if it starts with 'swift_bytes=' will
+        strip it off. Returns either the passed in content_type and size
+        or the content_type without the swift_bytes param and its value as
+        the new size.
+        :params content_type: Content Type from db
+        :params size: # bytes from db, an int
+        :returns: tuple: content_type, size
+        """
+        if ';' in content_type:
+            new_content_type, param = content_type.rsplit(';', 1)
+            if param.lstrip().startswith('swift_bytes='):
+                key, value = param.split('=')
+                try:
+                    return new_content_type, int(value)
+                except ValueError:
+                    self.logger.exception("Invalid swift_bytes")
+        return content_type, size
+
     @public
-    @timing_stats
+    @timing_stats()
     def GET(self, req):
         """Handle HTTP GET request."""
         try:
-            drive, part, account, container, obj = split_path(
-                unquote(req.path), 4, 5, True)
+            drive, part, account, container, obj = req.split_path(4, 5, True)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -344,14 +381,10 @@ class ContainerController(object):
         if query_format:
             req.accept = FORMAT2CONTENT_TYPE.get(query_format.lower(),
                                                  FORMAT2CONTENT_TYPE['plain'])
-        try:
-            out_content_type = req.accept.best_match(
-                ['text/plain', 'application/json', 'application/xml',
-                 'text/xml'],
-                default_match='text/plain')
-        except AssertionError, err:
-            return HTTPBadRequest(body='bad accept header: %s' % req.accept,
-                                  content_type='text/plain', request=req)
+        out_content_type = req.accept.best_match(
+            ['text/plain', 'application/json', 'application/xml', 'text/xml'])
+        if not out_content_type:
+            return HTTPNotAcceptable(request=req)
         container_list = broker.list_objects_iter(limit, marker, end_marker,
                                                   prefix, delimiter, path)
         if out_content_type == 'application/json':
@@ -365,6 +398,8 @@ class ContainerController(object):
                     # python isoformat() doesn't include msecs when zero
                     if len(created_at) < len("1970-01-01T00:00:00.000000"):
                         created_at += ".000000"
+                    content_type, size = self.derive_content_type_metadata(
+                        content_type, size)
                     data.append({'last_modified': created_at, 'bytes': size,
                                 'content_type': content_type, 'hash': etag,
                                 'name': name})
@@ -383,6 +418,8 @@ class ContainerController(object):
                     xml_output.append('<subdir name="%s"><name>%s</name>'
                                       '</subdir>' % (name, name))
                 else:
+                    content_type, size = self.derive_content_type_metadata(
+                        content_type, size)
                     content_type = saxutils.escape(content_type)
                     xml_output.append(
                         '<object><name>%s</name><hash>%s</hash>'
@@ -403,13 +440,13 @@ class ContainerController(object):
         return ret
 
     @public
-    @timing_stats
+    @timing_stats(sample_rate=0.01)
     def REPLICATE(self, req):
         """
         Handle HTTP REPLICATE request (json-encoded RPC calls for replication.)
         """
         try:
-            post_args = split_path(unquote(req.path), 3)
+            post_args = req.split_path(3)
             drive, partition, hash = post_args
             validate_device_partition(drive, partition)
         except ValueError, err:
@@ -426,11 +463,11 @@ class ContainerController(object):
         return ret
 
     @public
-    @timing_stats
+    @timing_stats()
     def POST(self, req):
         """Handle HTTP POST request."""
         try:
-            drive, part, account, container = split_path(unquote(req.path), 4)
+            drive, part, account, container = req.split_path(4)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -469,7 +506,7 @@ class ContainerController(object):
         req = Request(env)
         self.logger.txn_id = req.headers.get('x-trans-id', None)
         if not check_utf8(req.path_info):
-            res = HTTPPreconditionFailed(body='Invalid UTF8')
+            res = HTTPPreconditionFailed(body='Invalid UTF8 or contains NULL')
         else:
             try:
                 # disallow methods which have not been marked 'public'

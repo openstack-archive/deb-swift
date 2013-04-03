@@ -26,12 +26,11 @@
 
 import time
 from urllib import unquote
-from random import shuffle
 
 from swift.common.utils import normalize_timestamp, public
 from swift.common.constraints import check_metadata, MAX_ACCOUNT_NAME_LENGTH
 from swift.common.http import is_success, HTTP_NOT_FOUND
-from swift.proxy.controllers.base import Controller
+from swift.proxy.controllers.base import Controller, get_account_memcache_key
 from swift.common.swob import HTTPBadRequest, HTTPMethodNotAllowed, Request
 
 
@@ -49,7 +48,7 @@ class AccountController(Controller):
     def GETorHEAD(self, req):
         """Handler for HTTP GET/HEAD requests."""
         partition, nodes = self.app.account_ring.get_nodes(self.account_name)
-        shuffle(nodes)
+        nodes = self.app.sort_nodes(nodes)
         resp = self.GETorHEAD_base(
             req, _('Account'), partition, nodes, req.path_info.rstrip('/'),
             len(nodes))
@@ -97,7 +96,8 @@ class AccountController(Controller):
                    'Connection': 'close'}
         self.transfer_headers(req.headers, headers)
         if self.app.memcache:
-            self.app.memcache.delete('account%s' % req.path_info.rstrip('/'))
+            self.app.memcache.delete(
+                get_account_memcache_key(self.account_name))
         resp = self.make_requests(
             req, self.app.account_ring, account_partition, 'PUT',
             req.path_info, [headers] * len(accounts))
@@ -116,7 +116,8 @@ class AccountController(Controller):
                    'Connection': 'close'}
         self.transfer_headers(req.headers, headers)
         if self.app.memcache:
-            self.app.memcache.delete('account%s' % req.path_info.rstrip('/'))
+            self.app.memcache.delete(
+                get_account_memcache_key(self.account_name))
         resp = self.make_requests(
             req, self.app.account_ring, account_partition, 'POST',
             req.path_info, [headers] * len(accounts))
@@ -149,7 +150,8 @@ class AccountController(Controller):
                    'X-Trans-Id': self.trans_id,
                    'Connection': 'close'}
         if self.app.memcache:
-            self.app.memcache.delete('account%s' % req.path_info.rstrip('/'))
+            self.app.memcache.delete(
+                get_account_memcache_key(self.account_name))
         resp = self.make_requests(
             req, self.app.account_ring, account_partition, 'DELETE',
             req.path_info, [headers] * len(accounts))

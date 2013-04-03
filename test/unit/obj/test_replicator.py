@@ -135,6 +135,7 @@ class TestObjectReplicator(unittest.TestCase):
 
     def setUp(self):
         utils.HASH_PATH_SUFFIX = 'endcap'
+        utils.HASH_PATH_PREFIX = ''
         # Setup a test ring (stolen from common/test_ring.py)
         self.testdir = tempfile.mkdtemp()
         self.devices = os.path.join(self.testdir, 'node')
@@ -237,6 +238,26 @@ class TestObjectReplicator(unittest.TestCase):
             hashed, hashes = object_replicator.get_hashes(
                 part, recalculate=['a83'])
         self.assertEquals(i[0], 2)
+
+    def test_get_hashes_unmodified_and_zero_bytes(self):
+        df = DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o', FakeLogger())
+        mkdirs(df.datadir)
+        part = os.path.join(self.objects, '0')
+        open(os.path.join(part, object_replicator.HASH_FILE), 'w')
+        # Now the hash file is zero bytes.
+        i = [0]
+        def getmtime(filename):
+            i[0] += 1
+            return 1
+        with mock({'os.path.getmtime': getmtime}):
+            hashed, hashes = object_replicator.get_hashes(
+                part, recalculate=[])
+        # getmtime will actually not get called.  Initially, the pickle.load
+        # will raise an exception first and later, force_rewrite will
+        # short-circuit the if clause to determine whether to write out a fresh
+        # hashes_file.
+        self.assertEquals(i[0], 0)
+        self.assertTrue('a83' in hashes)
 
     def test_get_hashes_modified(self):
         df = DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o', FakeLogger())
@@ -353,7 +374,7 @@ class TestObjectReplicator(unittest.TestCase):
         whole_path_from = os.path.join(self.objects, '0', data_dir)
         hashes_file = os.path.join(self.objects, '0',
                                    object_replicator.HASH_FILE)
-        # test that non existant file except caught
+        # test that non existent file except caught
         self.assertEquals(object_replicator.invalidate_hash(whole_path_from),
                           None)
         # test that hashes get cleared
@@ -376,6 +397,28 @@ class TestObjectReplicator(unittest.TestCase):
         self.assertTrue(self.replicator.check_ring())
         self.replicator.next_check = orig_check - 30
         self.assertFalse(self.replicator.check_ring())
+
+    def test_collect_jobs_mkdirs_error(self):
+
+        def blowup_mkdirs(path):
+            raise OSError('Ow!')
+
+        mkdirs_orig = object_replicator.mkdirs
+        try:
+            rmtree(self.objects, ignore_errors=1)
+            object_replicator.mkdirs = blowup_mkdirs
+            jobs = self.replicator.collect_jobs()
+            self.assertTrue('exception' in self.replicator.logger.log_dict)
+            self.assertEquals(
+                len(self.replicator.logger.log_dict['exception']), 1)
+            exc_args, exc_kwargs, exc_str = \
+                self.replicator.logger.log_dict['exception'][0]
+            self.assertEquals(len(exc_args), 1)
+            self.assertTrue(exc_args[0].startswith('ERROR creating '))
+            self.assertEquals(exc_kwargs, {})
+            self.assertEquals(exc_str, 'Ow!')
+        finally:
+            object_replicator.mkdirs = mkdirs_orig
 
     def test_collect_jobs(self):
         jobs = self.replicator.collect_jobs()

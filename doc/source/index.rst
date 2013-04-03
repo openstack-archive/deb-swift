@@ -42,6 +42,7 @@ Overview and Concepts
 .. toctree::
     :maxdepth: 1
 
+    Swift's API docs <http://docs.openstack.org/api/openstack-object-storage/1.0/content/>
     overview_architecture
     overview_ring
     overview_reaper
@@ -52,6 +53,7 @@ Overview and Concepts
     overview_object_versioning
     overview_container_sync
     overview_expiring_objects
+    cors
     associated_projects
 
 Developer Documentation
@@ -73,7 +75,6 @@ Administrator Documentation
     howto_installmultinode
     deployment_guide
     admin_guide
-    debian_package_guide
 
 Source Documentation
 ====================
@@ -96,4 +97,5 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
+
 

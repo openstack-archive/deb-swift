@@ -187,6 +187,14 @@ class TestWSGI(unittest.TestCase):
         self.assertTrue('wsgi.input' in newenv)
         self.assertEquals(newenv['wsgi.input'].read(), '')
 
+        oldenv = {'swift.source': 'UT'}
+        newenv = wsgi.make_pre_authed_env(oldenv)
+        self.assertEquals(newenv['swift.source'], 'UT')
+
+        oldenv = {'swift.source': 'UT'}
+        newenv = wsgi.make_pre_authed_env(oldenv, swift_source='SA')
+        self.assertEquals(newenv['swift.source'], 'SA')
+
     def test_pre_auth_req(self):
         class FakeReq(object):
             @classmethod
@@ -236,6 +244,32 @@ class TestWSGI(unittest.TestCase):
                                      path='/override')
         self.assertEquals(e['SCRIPT_NAME'], '')
         self.assertEquals(e['PATH_INFO'], '/override')
+
+    def test_pre_auth_req_swift_source(self):
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path', 'the body',
+            swift_source='UT')
+        self.assertEquals(r.body, 'the body')
+        self.assertEquals(r.environ['swift.source'], 'UT')
+
+class TestWSGIContext(unittest.TestCase):
+
+    def test_app_call(self):
+        statuses = ['200 Ok', '404 Not Found']
+
+        def app(env, start_response):
+            start_response(statuses.pop(0), [('Content-Length', '3')])
+            yield 'Ok\n'
+
+        wc = wsgi.WSGIContext(app)
+        r = Request.blank('/')
+        it = wc._app_call(r.environ)
+        self.assertEquals(wc._response_status, '200 Ok')
+        self.assertEquals(''.join(it), 'Ok\n')
+        r = Request.blank('/')
+        it = wc._app_call(r.environ)
+        self.assertEquals(wc._response_status, '404 Not Found')
+        self.assertEquals(''.join(it), 'Ok\n')
 
 
 if __name__ == '__main__':

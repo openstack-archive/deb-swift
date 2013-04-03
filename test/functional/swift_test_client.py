@@ -26,6 +26,7 @@ import simplejson as json
 
 from nose import SkipTest
 from xml.dom import minidom
+from swiftclient import get_auth
 
 
 class AuthenticationFailed(Exception):
@@ -87,13 +88,14 @@ def listing_items(method):
 class Connection(object):
     def __init__(self, config):
         for key in 'auth_host auth_port auth_ssl username password'.split():
-            if not key in config:
+            if key not in config:
                 raise SkipTest
 
         self.auth_host = config['auth_host']
         self.auth_port = int(config['auth_port'])
         self.auth_ssl = config['auth_ssl'] in ('on', 'true', 'yes', '1')
         self.auth_prefix = config.get('auth_prefix', '/')
+        self.auth_version = str(config.get('auth_version', '1'))
 
         self.account = config.get('account')
         self.username = config['username']
@@ -116,38 +118,25 @@ class Connection(object):
             self.storage_token = clone_conn.storage_token
             return
 
-        if self.account:
-            auth_user = '%s:%s' % (self.account, self.username)
+        if self.auth_version == "1":
+            auth_path = '%sv1.0' % (self.auth_prefix)
+            if self.account:
+                auth_user = '%s:%s' % (self.account, self.username)
+            else:
+                auth_user = self.username
         else:
             auth_user = self.username
-        headers = {
-            'x-auth-user': auth_user,
-            'x-auth-key': self.password,
-        }
+            auth_path = self.auth_prefix
+        auth_scheme = 'https://' if self.auth_ssl else 'http://'
+        auth_netloc = "%s:%d" % (self.auth_host, self.auth_port)
+        auth_url = auth_scheme + auth_netloc + auth_path
 
-        path = '%sv1.0' % (self.auth_prefix)
-        if self.auth_ssl:
-            connection = httplib.HTTPSConnection(self.auth_host,
-                                                 port=self.auth_port)
-        else:
-            connection = httplib.HTTPConnection(self.auth_host,
-                                                port=self.auth_port)
-        #connection.set_debuglevel(3)
-        connection.request('GET', path, '', headers)
-        response = connection.getresponse()
-        connection.close()
-
-        if response.status == 401:
-            raise AuthenticationFailed()
-
-        if response.status not in (200, 204):
-            raise ResponseError(response)
-
-        for hdr in response.getheaders():
-            if hdr[0].lower() == "x-storage-url":
-                storage_url = hdr[1]
-            elif hdr[0].lower() == "x-storage-token":
-                storage_token = hdr[1]
+        (storage_url, storage_token) = get_auth(auth_url,
+              auth_user, self.password,
+              snet=False,
+              tenant_name=self.account,
+              auth_version=self.auth_version,
+              os_options={})
 
         if not (storage_url and storage_token):
             raise AuthenticationFailed()
@@ -301,7 +290,7 @@ class Base:
         headers = dict(self.conn.response.getheaders())
         ret = {}
         for field in fields:
-            if not field[1] in headers:
+            if field[1] not in headers:
                 raise ValueError("%s was not found in response header" %
                                  (field[1]))
 
@@ -717,15 +706,15 @@ class File(Base):
 
         self.conn.put_start(self.path, hdrs=headers, parms=parms, cfg=cfg)
 
-        transfered = 0
+        transferred = 0
         buff = data.read(block_size)
         try:
             while len(buff) > 0:
                 self.conn.put_data(buff)
                 buff = data.read(block_size)
-                transfered += len(buff)
+                transferred += len(buff)
                 if callable(callback):
-                    callback(transfered, self.size)
+                    callback(transferred, self.size)
 
             self.conn.put_end()
         except socket.timeout, err:

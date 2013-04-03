@@ -1,6 +1,6 @@
 .\"
 .\" Author: Joao Marcelo Martins <marcelo.martins@rackspace.com> or <btorch@gmail.com>
-.\" Copyright (c) 2010-2011 OpenStack, LLC.
+.\" Copyright (c) 2010-2011 OpenStack Foundation.
 .\"
 .\" Licensed under the Apache License, Version 2.0 (the "License");
 .\" you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 
 .SH SYNOPSIS
 .LP
-.B swift-dispersion-report [-d|--debug] [-j|--dump-json] [-p|--partitions] [conf_file]
+.B swift-dispersion-report [-d|--debug] [-j|--dump-json] [-p|--partitions] [--container-only|--object-only] [conf_file]
 
 .SH DESCRIPTION 
 .PP
@@ -72,6 +72,18 @@ output dispersion report in json format
 .IP "\fB-p, --partitions\fR"
 output the partition numbers that have any missing replicas
 
+.SH OPTIONS
+.RS 0
+.PD 1
+.IP "\fB--container-only\fR"
+Only run the container report
+
+.SH OPTIONS
+.RS 0
+.PD 1
+.IP "\fB--object-only\fR"
+Only run the object report
+
 .SH CONFIGURATION
 .PD 0 
 Example \fI/etc/swift/dispersion.conf\fR: 
@@ -86,12 +98,15 @@ Example \fI/etc/swift/dispersion.conf\fR:
 .IP "# retries = 5"
 .IP "# concurrency = 25"
 .IP "# dump_json = no"
+.IP "# endpoint_type = publicURL"
 .RE
 .PD 
-.SH EXAMPLE
+
+.SH EXAMPLE
 .PP 
 .PD 0
 $ swift-dispersion-report 
+
 
 .RS 1
 .IP "Queried 2622 containers for dispersion reporting, 31s, 0 retries"
@@ -102,8 +117,10 @@ $ swift-dispersion-report
 .IP "100.00% of object copies found (7863 of 7863)"
 .IP "Sample represents 1.00% of the object partition space"
 .RE
+
 .PD
  
+
 .SH DOCUMENTATION
 .LP
 More in depth documentation about the swift-dispersion utilities and

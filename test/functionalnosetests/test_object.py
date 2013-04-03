@@ -1,5 +1,20 @@
 #!/usr/bin/python
 
+# Copyright (c) 2010-2012 OpenStack, LLC.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import unittest
 from nose import SkipTest
 from uuid import uuid4
@@ -7,7 +22,9 @@ from uuid import uuid4
 from swift.common.constraints import MAX_META_COUNT, MAX_META_NAME_LENGTH, \
     MAX_META_OVERALL_SIZE, MAX_META_VALUE_LENGTH
 
-from swift_testing import check_response, retry, skip, skip3, swift_test_user
+from swift_testing import check_response, retry, skip, skip3, \
+    swift_test_perm, web_front_end
+from test import get_config
 
 
 class TestObject(unittest.TestCase):
@@ -203,8 +220,8 @@ class TestObject(unittest.TestCase):
             conn.request('PUT', '%s/%s' % (parsed.path,
                                            shared_container), '',
                          {'X-Auth-Token': token,
-                         'X-Container-Read': swift_test_user[2],
-                         'X-Container-Write': swift_test_user[2]})
+                          'X-Container-Read': swift_test_perm[2],
+                          'X-Container-Write': swift_test_perm[2]})
             return check_response(conn)
         resp = retry(put)
         resp.read()
@@ -402,8 +419,8 @@ class TestObject(unittest.TestCase):
             # Grant access to the third account
             def post(url, token, parsed, conn):
                 conn.request('POST', '%s/%s' % (parsed.path, self.container),
-                    '', {'X-Auth-Token': token, 'X-Container-Read':
-                    swift_test_user[2]})
+                    '', {'X-Auth-Token': token,
+                         'X-Container-Read': swift_test_perm[2]})
                 return check_response(conn)
             resp = retry(post)
             resp.read()
@@ -477,8 +494,8 @@ class TestObject(unittest.TestCase):
             # Grant access to the third account
             def post(url, token, parsed, conn):
                 conn.request('POST', '%s/%s' % (parsed.path, acontainer),
-                    '', {'X-Auth-Token': token, 'X-Container-Read':
-                    swift_test_user[2]})
+                    '', {'X-Auth-Token': token,
+                         'X-Container-Read': swift_test_perm[2]})
                 return check_response(conn)
             resp = retry(post)
             resp.read()
@@ -562,6 +579,21 @@ class TestObject(unittest.TestCase):
         self.assertEquals(resp.status, 204)
         self.assertEquals(resp.getheader('Content-Type'),
                           'text/html; charset=UTF-8')
+
+    def test_null_name(self):
+        if skip:
+            raise SkipTest
+
+        def put(url, token, parsed, conn):
+            conn.request('PUT', '%s/%s/abc%%00def' % (parsed.path,
+                self.container), 'test', {'X-Auth-Token': token})
+            return check_response(conn)
+        resp = retry(put)
+        if (web_front_end == 'apache2'):
+            self.assertEquals(resp.status, 404)
+        else:
+            self.assertEquals(resp.read(), 'Invalid UTF8 or contains NULL')
+            self.assertEquals(resp.status, 412)
 
 
 if __name__ == '__main__':

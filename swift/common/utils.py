@@ -39,9 +39,7 @@ except ImportError:
 import cPickle as pickle
 import glob
 from urlparse import urlparse as stdlib_urlparse, ParseResult
-import socket
 import itertools
-import types
 
 import eventlet
 from eventlet import GreenPool, sleep, Timeout
@@ -66,21 +64,63 @@ logging._levelNames[NOTICE] = 'NOTICE'
 SysLogHandler.priority_map['NOTICE'] = 'notice'
 
 # These are lazily pulled from libc elsewhere
-_sys_fsync = None
 _sys_fallocate = None
 _posix_fadvise = None
+
+# If set to non-zero, fallocate routines will fail based on free space
+# available being at or below this amount, in bytes.
+FALLOCATE_RESERVE = 0
 
 # Used by hash_path to offer a bit more security when generating hashes for
 # paths. It simply appends this value to all paths; guessing the hash a path
 # will end up with would also require knowing this suffix.
 hash_conf = ConfigParser()
 HASH_PATH_SUFFIX = ''
+HASH_PATH_PREFIX = ''
 if hash_conf.read('/etc/swift/swift.conf'):
     try:
         HASH_PATH_SUFFIX = hash_conf.get('swift-hash',
                                          'swift_hash_path_suffix')
     except (NoSectionError, NoOptionError):
         pass
+    try:
+        HASH_PATH_PREFIX = hash_conf.get('swift-hash',
+                                         'swift_hash_path_prefix')
+    except (NoSectionError, NoOptionError):
+        pass
+
+
+def backward(f, blocksize=4096):
+    """
+    A generator returning lines from a file starting with the last line,
+    then the second last line, etc. i.e., it reads lines backwards.
+    Stops when the first line (if any) is read.
+    This is useful when searching for recent activity in very
+    large files.
+
+    :param f: file object to read
+    :param blocksize: no of characters to go backwards at each block
+    """
+    f.seek(0, os.SEEK_END)
+    if f.tell() == 0:
+        return
+    last_row = ''
+    while f.tell() != 0:
+        try:
+            f.seek(-blocksize, os.SEEK_CUR)
+        except IOError:
+            blocksize = f.tell()
+            f.seek(-blocksize, os.SEEK_CUR)
+        block = f.read(blocksize)
+        f.seek(-blocksize, os.SEEK_CUR)
+        rows = block.split('\n')
+        rows[-1] = rows[-1] + last_row
+        while rows:
+            last_row = rows.pop(-1)
+            if rows and last_row:
+                yield last_row
+    yield last_row
+
 
 # Used when reading config values
 TRUE_VALUES = set(('true', '1', 'yes', 'on', 't', 'y'))
@@ -100,8 +140,9 @@ def noop_libc_function(*args):
 
 
 def validate_configuration():
-    if HASH_PATH_SUFFIX == '':
-        sys.exit("Error: [swift-hash]: swift_hash_path_suffix missing "
+    if not HASH_PATH_SUFFIX and not HASH_PATH_PREFIX:
+        sys.exit("Error: [swift-hash]: both swift_hash_path_suffix "
+                 "and swift_hash_path_prefix are missing "
                  "from /etc/swift/swift.conf")
 
 
@@ -144,7 +185,7 @@ class FallocateWrapper(object):
             self.func_name = 'posix_fallocate'
             self.fallocate = noop_libc_function
             return
-        ## fallocate is prefered because we need the on-disk size to match
+        ## fallocate is preferred because we need the on-disk size to match
         ## the allocated size. Older versions of sqlite require that the
         ## two sizes match. However, fallocate is Linux only.
         for func in ('fallocate', 'posix_fallocate'):
@@ -156,10 +197,17 @@ class FallocateWrapper(object):
             logging.warn(_("Unable to locate fallocate, posix_fallocate in "
                          "libc.  Leaving as a no-op."))
 
-    def __call__(self, fd, mode, offset, len):
+    def __call__(self, fd, mode, offset, length):
+        """ The length parameter must be a ctypes.c_uint64 """
+        if FALLOCATE_RESERVE > 0:
+            st = os.fstatvfs(fd)
+            free = st.f_frsize * st.f_bavail - length.value
+            if free <= FALLOCATE_RESERVE:
+                raise OSError('FALLOCATE_RESERVE fail %s <= %s' % (
+                    free, FALLOCATE_RESERVE))
         args = {
-            'fallocate': (fd, mode, offset, len),
-            'posix_fallocate': (fd, offset, len)
+            'fallocate': (fd, mode, offset, length),
+            'posix_fallocate': (fd, offset, length)
         }
         return self.fallocate(*args[self.func_name])
 
@@ -179,55 +227,41 @@ def fallocate(fd, size):
     global _sys_fallocate
     if _sys_fallocate is None:
         _sys_fallocate = FallocateWrapper()
-    if size > 0:
-        # 1 means "FALLOC_FL_KEEP_SIZE", which means it pre-allocates invisibly
-        ret = _sys_fallocate(fd, 1, 0, ctypes.c_uint64(size))
-        err = ctypes.get_errno()
-        if ret and err not in (0, errno.ENOSYS, errno.EOPNOTSUPP,
-                               errno.EINVAL):
-            raise OSError(err, 'Unable to fallocate(%s)' % size)
-
-
-class FsyncWrapper(object):
-
-    def __init__(self):
-        if hasattr(os, 'fdatasync'):
-            self.func_name = 'fdatasync'
-            self.fsync = os.fdatasync
-            self.fcntl_flag = None
-        elif hasattr(fcntl, 'F_FULLFSYNC'):
-            self.func_name = 'fcntl'
-            self.fsync = fcntl.fcntl
-            self.fcntl_flag = fcntl.F_FULLFSYNC
-        else:
-            self.func_name = 'fsync'
-            self.fsync = os.fsync
-            self.fcntl_flag = None
-
-    def __call__(self, fd):
-        args = {
-            'fdatasync': (fd, ),
-            'fsync': (fd, ),
-            'fcntl': (fd, self.fcntl_flag)
-        }
-        return self.fsync(*args[self.func_name])
+    if size < 0:
+        size = 0
+    # 1 means "FALLOC_FL_KEEP_SIZE", which means it pre-allocates invisibly
+    ret = _sys_fallocate(fd, 1, 0, ctypes.c_uint64(size))
+    err = ctypes.get_errno()
+    if ret and err not in (0, errno.ENOSYS, errno.EOPNOTSUPP,
+                           errno.EINVAL):
+        raise OSError(err, 'Unable to fallocate(%s)' % size)
 
 
 def fsync(fd):
     """
-    Write buffered changes to disk.
+    Sync modified file data and metadata to disk.
 
     :param fd: file descriptor
     """
+    if hasattr(fcntl, 'F_FULLSYNC'):
+        try:
+            fcntl.fcntl(fd, fcntl.F_FULLSYNC)
+        except IOError as e:
+            raise OSError(e.errno, 'Unable to F_FULLSYNC(%s)' % fd)
+    else:
+        os.fsync(fd)
 
-    global _sys_fsync
-    if _sys_fsync is None:
-        _sys_fsync = FsyncWrapper()
 
-    ret = _sys_fsync(fd)
-    err = ctypes.get_errno()
-    if ret and err != 0:
-        raise OSError(err, 'Unable to fsync(%s)' % fd)
+def fdatasync(fd):
+    """
+    Sync modified file data to disk.
+
+    :param fd: file descriptor
+    """
+    try:
+        os.fdatasync(fd)
+    except AttributeError:
+        fsync(fd)
 
 
 def drop_buffer_cache(fd, offset, length):
@@ -286,7 +320,7 @@ def renamer(old, new):
     try:
         mkdirs(os.path.dirname(new))
         os.rename(old, new)
-    except OSError, err:
+    except OSError:
         mkdirs(os.path.dirname(new))
         os.rename(old, new)
 
@@ -411,12 +445,13 @@ class LoggerFileObject(object):
 
 class StatsdClient(object):
     def __init__(self, host, port, base_prefix='', tail_prefix='',
-                 default_sample_rate=1):
+                 default_sample_rate=1, sample_rate_factor=1):
         self._host = host
         self._port = port
         self._base_prefix = base_prefix
         self.set_prefix(tail_prefix)
         self._default_sample_rate = default_sample_rate
+        self._sample_rate_factor = sample_rate_factor
         self._target = (self._host, self._port)
         self.random = random
 
@@ -433,6 +468,7 @@ class StatsdClient(object):
     def _send(self, m_name, m_value, m_type, sample_rate):
         if sample_rate is None:
             sample_rate = self._default_sample_rate
+        sample_rate = sample_rate * self._sample_rate_factor
         parts = ['%s%s:%s' % (self._prefix, m_name, m_value), m_type]
         if sample_rate < 1:
             if self.random() < sample_rate:
@@ -463,26 +499,37 @@ class StatsdClient(object):
         return self.timing(metric, (time.time() - orig_time) * 1000,
                            sample_rate)
 
+    def transfer_rate(self, metric, elapsed_time, byte_xfer, sample_rate=None):
+        if byte_xfer:
+            return self.timing(metric,
+                               elapsed_time * 1000 / byte_xfer * 1000,
+                               sample_rate)
 
-def timing_stats(func):
+
+def timing_stats(**dec_kwargs):
     """
-    Decorator that logs timing events or errors for public methods in swift's
-    wsgi server controllers, based on response code.
+    Returns a decorator that logs timing events or errors for public methods in
+    swift's wsgi server controllers, based on response code.
     """
-    method = func.func_name
+    def decorating_func(func):
+        method = func.func_name
 
-    @functools.wraps(func)
-    def _timing_stats(ctrl, *args, **kwargs):
-        start_time = time.time()
-        resp = func(ctrl, *args, **kwargs)
-        if is_success(resp.status_int) or is_redirection(resp.status_int) or \
-                resp.status_int == HTTP_NOT_FOUND:
-            ctrl.logger.timing_since(method + '.timing', start_time)
-        else:
-            ctrl.logger.timing_since(method + '.errors.timing', start_time)
-        return resp
+        @functools.wraps(func)
+        def _timing_stats(ctrl, *args, **kwargs):
+            start_time = time.time()
+            resp = func(ctrl, *args, **kwargs)
+            if is_success(resp.status_int) or \
+                    is_redirection(resp.status_int) or \
+                    resp.status_int == HTTP_NOT_FOUND:
+                ctrl.logger.timing_since(method + '.timing',
+                                         start_time, **dec_kwargs)
+            else:
+                ctrl.logger.timing_since(method + '.errors.timing',
+                                         start_time, **dec_kwargs)
+            return resp
 
-    return _timing_stats
+        return _timing_stats
+    return decorating_func
 
 
 # double inheritance to support property with setter
@@ -590,14 +637,11 @@ class LogAdapter(logging.LoggerAdapter, object):
 
     def statsd_delegate(statsd_func_name):
         """
-        Factory which creates methods which delegate to methods on
+        Factory to create methods which delegate to methods on
         self.logger.statsd_client (an instance of StatsdClient).  The
         created methods conditionally delegate to a method whose name is given
         in 'statsd_func_name'.  The created delegate methods are a no-op when
-        StatsD logging is not configured.  The created delegate methods also
-        handle the defaulting of sample_rate (to either the default specified
-        in the config with 'log_statsd_default_sample_rate' or the value passed
-        into delegate function).
+        StatsD logging is not configured.
 
         :param statsd_func_name: the name of a method on StatsdClient.
         """
@@ -615,6 +659,7 @@ class LogAdapter(logging.LoggerAdapter, object):
     decrement = statsd_delegate('decrement')
     timing = statsd_delegate('timing')
     timing_since = statsd_delegate('timing_since')
+    transfer_rate = statsd_delegate('transfer_rate')
 
 
 class SwiftLogFormatter(logging.Formatter):
@@ -624,11 +669,34 @@ class SwiftLogFormatter(logging.Formatter):
     """
 
     def format(self, record):
-        msg = logging.Formatter.format(self, record)
-        if (record.txn_id and record.levelno != logging.INFO and
+        if not hasattr(record, 'server'):
+            # Catch log messages that were not initiated by swift
+            # (for example, the keystone auth middleware)
+            record.server = record.name
+
+        # Included from Python's logging.Formatter and then altered slightly to
+        # replace \n with #012
+        record.message = record.getMessage()
+        if self._fmt.find('%(asctime)') >= 0:
+            record.asctime = self.formatTime(record, self.datefmt)
+        msg = (self._fmt % record.__dict__).replace('\n', '#012')
+        if record.exc_info:
+            # Cache the traceback text to avoid converting it multiple times
+            # (it's constant anyway)
+            if not record.exc_text:
+                record.exc_text = self.formatException(
+                    record.exc_info).replace('\n', '#012')
+        if record.exc_text:
+            if msg[-3:] != '#012':
+                msg = msg + '#012'
+            msg = msg + record.exc_text
+
+        if (hasattr(record, 'txn_id') and record.txn_id and
+                record.levelno != logging.INFO and
                 record.txn_id not in msg):
             msg = "%s (txn: %s)" % (msg, record.txn_id)
-        if (record.client_ip and record.levelno != logging.INFO and
+        if (hasattr(record, 'client_ip') and record.client_ip and
+                record.levelno != logging.INFO and
                 record.client_ip not in msg):
             msg = "%s (client_ip: %s)" % (msg, record.client_ip)
         return msg
@@ -649,7 +717,8 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
         log_address = /dev/log
         log_statsd_host = (disabled)
         log_statsd_port = 8125
-        log_statsd_default_sample_rate = 1
+        log_statsd_default_sample_rate = 1.0
+        log_statsd_sample_rate_factor = 1.0
         log_statsd_metric_prefix = (empty-string)
 
     :param conf: Configuration dict to read settings from
@@ -681,7 +750,8 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
                        SysLogHandler.LOG_LOCAL0)
     udp_host = conf.get('log_udp_host')
     if udp_host:
-        udp_port = conf.get('log_udp_port', logging.handlers.SYSLOG_UDP_PORT)
+        udp_port = int(conf.get('log_udp_port',
+                                logging.handlers.SYSLOG_UDP_PORT))
         handler = SysLogHandler(address=(udp_host, udp_port),
                                 facility=facility)
     else:
@@ -690,7 +760,7 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
             handler = SysLogHandler(address=log_address, facility=facility)
         except socket.error, e:
             # Either /dev/log isn't a UNIX socket or it does not exist at all
-            if e.errno not in [errno.ENOTSOCK,  errno.ENOENT]:
+            if e.errno not in [errno.ENOTSOCK, errno.ENOENT]:
                 raise e
             handler = SysLogHandler(facility=facility)
     handler.setFormatter(formatter)
@@ -721,8 +791,11 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
         base_prefix = conf.get('log_statsd_metric_prefix', '')
         default_sample_rate = float(conf.get(
             'log_statsd_default_sample_rate', 1))
+        sample_rate_factor = float(conf.get(
+            'log_statsd_sample_rate_factor', 1))
         statsd_client = StatsdClient(statsd_host, statsd_port, base_prefix,
-                                     name, default_sample_rate)
+                                     name, default_sample_rate,
+                                     sample_rate_factor)
         logger.statsd_client = statsd_client
     else:
         logger.statsd_client = None
@@ -745,6 +818,31 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
     return adapted_logger
 
 
+def get_hub():
+    """
+    Checks whether poll is available and falls back
+    on select if it isn't.
+
+    Note about epoll:
+
+    Review: https://review.openstack.org/#/c/18806/
+
+    There was a problem where once out of every 30 quadrillion
+    connections, a coroutine wouldn't wake up when the client
+    closed its end. Epoll was not reporting the event or it was
+    getting swallowed somewhere. Then when that file descriptor
+    was re-used, eventlet would freak right out because it still
+    thought it was waiting for activity from it in some other coro.
+    """
+    try:
+        import select
+        if hasattr(select, "poll"):
+            return "poll"
+        return "selects"
+    except ImportError:
+        return None
+
+
 def drop_privileges(user):
     """
     Sets the userid/groupid of the current process, get session leader, etc.
@@ -756,6 +854,7 @@ def drop_privileges(user):
         os.setgroups([])
     os.setgid(user[3])
     os.setuid(user[2])
+    os.environ['HOME'] = user[5]
     try:
         os.setsid()
     except OSError:
@@ -899,9 +998,11 @@ def hash_path(account, container=None, object=None, raw_digest=False):
     if object:
         paths.append(object)
     if raw_digest:
-        return md5('/' + '/'.join(paths) + HASH_PATH_SUFFIX).digest()
+        return md5(HASH_PATH_PREFIX + '/' + '/'.join(paths)
+                   + HASH_PATH_SUFFIX).digest()
     else:
-        return md5('/' + '/'.join(paths) + HASH_PATH_SUFFIX).hexdigest()
+        return md5(HASH_PATH_PREFIX + '/' + '/'.join(paths)
+                   + HASH_PATH_SUFFIX).hexdigest()
 
 
 @contextmanager
@@ -1024,7 +1125,7 @@ def compute_eta(start_time, current_value, final_value):
 
 def iter_devices_partitions(devices_dir, item_type):
     """
-    Iterate over partitions accross all devices.
+    Iterate over partitions across all devices.
 
     :param devices_dir: Path to devices
     :param item_type: One of 'accounts', 'containers', or 'objects'
@@ -1499,6 +1600,18 @@ def list_from_csv(comma_separated_str):
     return []
 
 
+def csv_append(csv_string, item):
+    """
+    Appends an item to a comma-separated string.
+
+    If the comma-separated string is empty/None, just returns item.
+    """
+    if csv_string:
+        return ",".join((csv_string, item))
+    else:
+        return item
+
+
 def reiterate(iterable):
     """
     Consume the first item from an iterator, then re-chain it to the rest of
@@ -1514,7 +1627,47 @@ def reiterate(iterable):
         try:
             chunk = ''
             while not chunk:
-                chunk = next(iterable)
-            return itertools.chain([chunk], iterable)
+                chunk = next(iterator)
+            return itertools.chain([chunk], iterator)
         except StopIteration:
             return []
+
+
+class InputProxy(object):
+    """
+    File-like object that counts bytes read.
+    To be swapped in for wsgi.input for accounting purposes.
+    """
+    def __init__(self, wsgi_input):
+        """
+        :param wsgi_input: file-like object to wrap the functionality of
+        """
+        self.wsgi_input = wsgi_input
+        self.bytes_received = 0
+        self.client_disconnect = False
+
+    def read(self, *args, **kwargs):
+        """
+        Pass read request to the underlying file-like object and
+        add bytes read to total.
+        """
+        try:
+            chunk = self.wsgi_input.read(*args, **kwargs)
+        except Exception:
+            self.client_disconnect = True
+            raise
+        self.bytes_received += len(chunk)
+        return chunk
+
+    def readline(self, *args, **kwargs):
+        """
+        Pass readline request to the underlying file-like object and
+        add bytes read to total.
+        """
+        try:
+            line = self.wsgi_input.readline(*args, **kwargs)
+        except Exception:
+            self.client_disconnect = True
+            raise
+        self.bytes_received += len(line)
+        return line

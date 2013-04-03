@@ -1,6 +1,7 @@
 [DEFAULT]
 # bind_ip = 0.0.0.0
 # bind_port = 6001
+# bind_timeout = 30
 # backlog = 4096
 # workers = 1
 # user = swift
@@ -26,14 +27,19 @@
 # You can enable StatsD logging here:
 # log_statsd_host = localhost
 # log_statsd_port = 8125
-# log_statsd_default_sample_rate = 1
+# log_statsd_default_sample_rate = 1.0
+# log_statsd_sample_rate_factor = 1.0
 # log_statsd_metric_prefix =
 # If you don't mind the extra disk space usage in overhead, you can turn this
 # on to preallocate disk space with SQLite databases to decrease fragmentation.
 # db_preallocation = off
+# eventlet_debug = false
+# You can set fallocate_reserve to the number of bytes you'd like fallocate to
+# reserve, whether there is space for the given file size or not.
+# fallocate_reserve = 0
 
 [pipeline:main]
-pipeline = recon container-server
+pipeline = healthcheck recon container-server
 
 [app:container-server]
 use = egg:swift#container
@@ -47,6 +53,12 @@ use = egg:swift#container
 # conn_timeout = 0.5
 # allow_versions = False
 # auto_create_account_prefix = .
+
+[filter:healthcheck]
+use = egg:swift#healthcheck
+# An optional filesystem path, which if present, will cause the healthcheck
+# URL to return "503 Service Unavailable" with a body of "DISABLED BY FILE"
+# disable_path =
 
 [filter:recon]
 use = egg:swift#recon
@@ -93,8 +105,9 @@ use = egg:swift#recon
 # log_facility = LOG_LOCAL0
 # log_level = INFO
 # log_address = /dev/log
-# Will audit, at most, 1 container per device per interval
+# Will audit each container at most once per interval
 # interval = 1800
+# containers_per_second = 200
 # recon_cache_path = /var/cache/swift
 
 [container-sync]
@@ -105,7 +118,7 @@ use = egg:swift#recon
 # log_address = /dev/log
 # If you need to use an HTTP Proxy, set it here; defaults to no proxy.
 # sync_proxy = http://127.0.0.1:8888
-# Will sync, at most, each container once per interval
+# Will sync each container at most once per interval
 # interval = 300
 # Maximum amount of time to spend syncing each container per pass
 # container_time = 60

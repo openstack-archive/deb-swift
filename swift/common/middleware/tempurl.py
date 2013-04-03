@@ -69,6 +69,16 @@ locations in Swift.
 Note that changing the X-Account-Meta-Temp-URL-Key will invalidate
 any previously generated temporary URLs within 60 seconds (the
 memcache time for the key).
+
+With GET TempURLs, a Content-Disposition header will be set on the
+response so that browsers will interpret this as a file attachment to
+be saved. The filename chosen is based on the object name, but you
+can override this with a filename query parameter. Modifying the
+above example::
+
+    https://swift-cluster.example.com/v1/AUTH_account/container/object?
+    temp_url_sig=da39a3ee5e6b4b0d3255bfef95601890afd80709&
+    temp_url_expires=1323479485&filename=My+Test+File.pdf
 """
 
 __all__ = ['TempURL', 'filter_factory',
@@ -83,10 +93,9 @@ from hashlib import sha1
 from os.path import basename
 from StringIO import StringIO
 from time import gmtime, strftime, time
-from urllib import quote, unquote
+from urllib import unquote, urlencode
 from urlparse import parse_qs
 
-from swift.common.utils import get_logger
 from swift.common.wsgi import make_pre_authed_env
 from swift.common.http import HTTP_UNAUTHORIZED
 
@@ -151,6 +160,9 @@ class TempURL(object):
             '*' to indicate a prefix match.
             Default: x-object-meta-public-*
 
+    The proxy logs created for any subrequests made will have swift.source set
+    to "FP".
+
     :param app: The next WSGI filter or app in the paste.deploy
                 chain.
     :param conf: The configuration dict for the middleware.
@@ -161,8 +173,6 @@ class TempURL(object):
         self.app = app
         #: The filter configuration dict.
         self.conf = conf
-        #: The logger to use with this middleware.
-        self.logger = get_logger(conf, log_route='tempurl')
 
         headers = DEFAULT_INCOMING_REMOVE_HEADERS
         if 'incoming_remove_headers' in conf:
@@ -224,7 +234,7 @@ class TempURL(object):
         :param start_response: The WSGI start_response hook.
         :returns: Response as per WSGI.
         """
-        temp_url_sig, temp_url_expires = self._get_temp_url_info(env)
+        temp_url_sig, temp_url_expires, filename = self._get_temp_url_info(env)
         if temp_url_sig is None and temp_url_expires is None:
             return self.app(env, start_response)
         if not temp_url_sig or not temp_url_expires:
@@ -251,19 +261,30 @@ class TempURL(object):
         env['swift.authorize'] = lambda req: None
         env['swift.authorize_override'] = True
         env['REMOTE_USER'] = '.wsgi.tempurl'
+        qs = {'temp_url_sig': temp_url_sig,
+              'temp_url_expires': temp_url_expires}
+        if filename:
+            qs['filename'] = filename
+        env['QUERY_STRING'] = urlencode(qs)
 
         def _start_response(status, headers, exc_info=None):
             headers = self._clean_outgoing_headers(headers)
-            if env['REQUEST_METHOD'] == 'GET':
+            if env['REQUEST_METHOD'] == 'GET' and status[0] == '2':
                 already = False
                 for h, v in headers:
                     if h.lower() == 'content-disposition':
                         already = True
                         break
+                if already and filename:
+                    headers = list((h, v) for h, v in headers
+                                   if h.lower() != 'content-disposition')
+                    already = False
                 if not already:
-                    headers.append(('Content-Disposition',
-                        'attachment; filename=%s' %
-                            (quote(basename(env['PATH_INFO'])))))
+                    headers.append((
+                        'Content-Disposition',
+                        'attachment; filename="%s"' % (
+                            filename or
+                            basename(env['PATH_INFO'])).replace('"', '\\"')))
             return start_response(status, headers, exc_info)
 
         return self.app(env, _start_response)
@@ -298,7 +319,7 @@ class TempURL(object):
         :param env: The WSGI environment for the request.
         :returns: (sig, expires) as described above.
         """
-        temp_url_sig = temp_url_expires = None
+        temp_url_sig = temp_url_expires = filename = None
         qs = parse_qs(env.get('QUERY_STRING', ''))
         if 'temp_url_sig' in qs:
             temp_url_sig = qs['temp_url_sig'][0]
@@ -309,7 +330,9 @@ class TempURL(object):
                 temp_url_expires = 0
             if temp_url_expires < time():
                 temp_url_expires = 0
-        return temp_url_sig, temp_url_expires
+        if 'filename' in qs:
+            filename = qs['filename'][0]
+        return temp_url_sig, temp_url_expires, filename
 
     def _get_key(self, env, account):
         """
@@ -326,7 +349,7 @@ class TempURL(object):
             key = memcache.get('temp-url-key/%s' % account)
         if not key:
             newenv = make_pre_authed_env(env, 'HEAD', '/v1/' + account,
-                                         self.agent)
+                                         self.agent, swift_source='TU')
             newenv['CONTENT_LENGTH'] = '0'
             newenv['wsgi.input'] = StringIO('')
             key = [None]
@@ -343,7 +366,7 @@ class TempURL(object):
                 pass
             key = key[0]
             if key and memcache:
-                memcache.set('temp-url-key/%s' % account, key, timeout=60)
+                memcache.set('temp-url-key/%s' % account, key, time=60)
         return key
 
     def _get_hmac(self, env, expires, key, request_method=None):
@@ -365,8 +388,9 @@ class TempURL(object):
         """
         if not request_method:
             request_method = env['REQUEST_METHOD']
-        return hmac.new(key, '%s\n%s\n%s' % (request_method, expires,
-            env['PATH_INFO']), sha1).hexdigest()
+        return hmac.new(
+            key, '%s\n%s\n%s' % (request_method, expires,
+                                 env['PATH_INFO']), sha1).hexdigest()
 
     def _invalid(self, env, start_response):
         """
@@ -377,11 +401,10 @@ class TempURL(object):
         :param start_response: The WSGI start_response hook.
         :returns: 401 response as per WSGI.
         """
-        self._log_request(env, HTTP_UNAUTHORIZED)
         body = '401 Unauthorized: Temp URL invalid\n'
         start_response('401 Unauthorized',
-            [('Content-Type', 'text/plain'),
-             ('Content-Length', str(len(body)))])
+                       [('Content-Type', 'text/plain'),
+                        ('Content-Length', str(len(body)))])
         if env['REQUEST_METHOD'] == 'HEAD':
             return []
         return [body]
@@ -442,45 +465,6 @@ class TempURL(object):
             if remove:
                 del headers[h]
         return headers.items()
-
-    def _log_request(self, env, response_status_int):
-        """
-        Used when a request might not be logged by the underlying
-        WSGI application, but we'd still like to record what
-        happened. An early 401 Unauthorized is a good example of
-        this.
-
-        :param env: The WSGI environment for the request.
-        :param response_status_int: The HTTP status we'll be replying
-                                    to the request with.
-        """
-        the_request = quote(unquote(env.get('PATH_INFO') or '/'))
-        if env.get('QUERY_STRING'):
-            the_request = the_request + '?' + env['QUERY_STRING']
-        client = env.get('HTTP_X_CLUSTER_CLIENT_IP')
-        if not client and 'HTTP_X_FORWARDED_FOR' in env:
-            # remote host for other lbs
-            client = env['HTTP_X_FORWARDED_FOR'].split(',')[0].strip()
-        if not client:
-            client = env.get('REMOTE_ADDR')
-        self.logger.info(' '.join(quote(str(x)) for x in (
-            client or '-',
-            env.get('REMOTE_ADDR') or '-',
-            strftime('%d/%b/%Y/%H/%M/%S', gmtime()),
-            env.get('REQUEST_METHOD') or 'GET',
-            the_request,
-            env.get('SERVER_PROTOCOL') or '1.0',
-            response_status_int,
-            env.get('HTTP_REFERER') or '-',
-            (env.get('HTTP_USER_AGENT') or '-') + ' TempURL',
-            env.get('HTTP_X_AUTH_TOKEN') or '-',
-            '-',
-            '-',
-            '-',
-            env.get('swift.trans_id') or '-',
-            '-',
-            '-',
-        )))
 
 
 def filter_factory(global_conf, **local_conf):
