@@ -1,4 +1,3 @@
 fix-doc-no-network.patch
-Fix-keystoneauth-with-OPTIONS-headers.patch
 Allow-change-the-endpoint_type-when-use-swift-dispersion-tools.patch
 Add-handler-for-CORS-actual-requests.patch
