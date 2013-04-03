@@ -16,6 +16,7 @@
 """ Tests for swift.object_server """
 
 import cPickle as pickle
+import operator
 import os
 import unittest
 import email
@@ -216,7 +217,7 @@ class TestDiskFile(unittest.TestCase):
             timestamp = ts
         else:
             timestamp = str(normalize_timestamp(time()))
-        with df.mkstemp() as (fd, tmppath):
+        with df.mkstemp() as fd:
             os.write(fd, data)
             etag.update(data)
             etag = etag.hexdigest()
@@ -225,7 +226,7 @@ class TestDiskFile(unittest.TestCase):
                 'X-Timestamp': timestamp,
                 'Content-Length': str(os.fstat(fd).st_size),
             }
-            df.put(fd, tmppath, metadata, extension=extension)
+            df.put(fd, metadata, extension=extension)
             if invalid_type == 'ETag':
                 etag = md5()
                 etag.update('1' + '0' * (fsize - 1))
@@ -316,7 +317,6 @@ class TestDiskFile(unittest.TestCase):
                                  extension='.data')
         df.close()
         self.assertTrue(df.quarantined_dir)
-
         df = self._get_data_file(invalid_type='Content-Length',
                                  extension='.ts')
         df.close()
@@ -324,6 +324,26 @@ class TestDiskFile(unittest.TestCase):
         df = self._get_data_file(invalid_type='Content-Length',
                                  extension='.ts')
         self.assertRaises(DiskFileNotExist, df.get_data_file_size)
+
+    def test_put_metadata(self):
+        df = self._get_data_file()
+        ts = time()
+        metadata = { 'X-Timestamp': ts, 'X-Object-Meta-test': 'data' }
+        df.put_metadata(metadata)
+        exp_name = '%s.meta' % str(normalize_timestamp(ts))
+        dl = os.listdir(df.datadir)
+        self.assertEquals(len(dl), 2)
+        self.assertTrue(exp_name in set(dl))
+
+    def test_put_metadata_ts(self):
+        df = self._get_data_file()
+        ts = time()
+        metadata = { 'X-Timestamp': ts, 'X-Object-Meta-test': 'data' }
+        df.put_metadata(metadata, tombstone=True)
+        exp_name = '%s.ts' % str(normalize_timestamp(ts))
+        dl = os.listdir(df.datadir)
+        self.assertEquals(len(dl), 2)
+        self.assertTrue(exp_name in set(dl))
 
     def test_unlinkold(self):
         df1 = self._get_data_file()
@@ -363,6 +383,7 @@ class TestObjectController(unittest.TestCase):
     def setUp(self):
         """ Set up for testing swift.object_server.ObjectController """
         utils.HASH_PATH_SUFFIX = 'endcap'
+        utils.HASH_PATH_PREFIX = 'startcap'
         self.testdir = \
             os.path.join(mkdtemp(), 'tmp_test_object_server_ObjectController')
         mkdirs(os.path.join(self.testdir, 'sda1', 'tmp'))
@@ -1616,7 +1637,180 @@ class TestObjectController(unittest.TestCase):
         self.assertEquals(given_args, ['127.0.0.1', '1234', 'sdc1', 1, 'PUT',
             '/a/c/o', {'x-timestamp': '1', 'x-out': 'set'}])
 
+
+    def test_updating_multiple_delete_at_container_servers(self):
+        self.object_controller.expiring_objects_account = 'exp'
+        self.object_controller.expiring_objects_container_divisor = 60
+
+        http_connect_args = []
+        def fake_http_connect(ipaddr, port, device, partition, method, path,
+                              headers=None, query_string=None, ssl=False):
+            class SuccessfulFakeConn(object):
+                @property
+                def status(self):
+                    return 200
+
+                def getresponse(self):
+                    return self
+
+                def read(self):
+                    return ''
+
+            captured_args = {'ipaddr': ipaddr, 'port': port,
+                             'device': device, 'partition': partition,
+                             'method': method, 'path': path, 'ssl': ssl,
+                             'headers': headers, 'query_string': query_string}
+
+            http_connect_args.append(
+                dict((k,v) for k,v in captured_args.iteritems()
+                     if v is not None))
+
+        req = Request.blank(
+            '/sda1/p/a/c/o',
+            environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': '12345',
+                     'Content-Type': 'application/burrito',
+                     'Content-Length': '0',
+                     'X-Container-Partition': '20',
+                     'X-Container-Host': '1.2.3.4:5',
+                     'X-Container-Device': 'sdb1',
+                     'X-Delete-At': 9999999999,
+                     'X-Delete-At-Host': "10.1.1.1:6001,10.2.2.2:6002",
+                     'X-Delete-At-Partition': '6237',
+                     'X-Delete-At-Device': 'sdp,sdq'})
+
+        orig_http_connect = object_server.http_connect
+        try:
+            object_server.http_connect = fake_http_connect
+            resp = self.object_controller.PUT(req)
+        finally:
+            object_server.http_connect = orig_http_connect
+
+        self.assertEqual(resp.status_int, 201)
+
+
+        http_connect_args.sort(key=operator.itemgetter('ipaddr'))
+
+        self.assertEquals(len(http_connect_args), 3)
+        self.assertEquals(
+            http_connect_args[0],
+            {'ipaddr': '1.2.3.4',
+             'port': '5',
+             'path': '/a/c/o',
+             'device': 'sdb1',
+             'partition': '20',
+             'method': 'PUT',
+             'ssl': False,
+             'headers': {'x-content-type': 'application/burrito',
+                         'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+                         'x-size': '0',
+                         'x-timestamp': '12345',
+                         'x-trans-id': '-'}})
+        self.assertEquals(
+            http_connect_args[1],
+            {'ipaddr': '10.1.1.1',
+             'port': '6001',
+             'path': '/exp/9999999960/9999999999-a/c/o',
+             'device': 'sdp',
+             'partition': '6237',
+             'method': 'PUT',
+             'ssl': False,
+             'headers': {'x-content-type': 'text/plain',
+                         'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+                         'x-size': '0',
+                         'x-timestamp': '12345',
+                         'x-trans-id': '-'}})
+        self.assertEquals(
+            http_connect_args[2],
+            {'ipaddr': '10.2.2.2',
+             'port': '6002',
+             'path': '/exp/9999999960/9999999999-a/c/o',
+             'device': 'sdq',
+             'partition': '6237',
+             'method': 'PUT',
+             'ssl': False,
+             'headers': {'x-content-type': 'text/plain',
+                         'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+                         'x-size': '0',
+                         'x-timestamp': '12345',
+                         'x-trans-id': '-'}})
+
+    def test_updating_multiple_container_servers(self):
+        http_connect_args = []
+        def fake_http_connect(ipaddr, port, device, partition, method, path,
+                              headers=None, query_string=None, ssl=False):
+            class SuccessfulFakeConn(object):
+                @property
+                def status(self):
+                    return 200
+
+                def getresponse(self):
+                    return self
+
+                def read(self):
+                    return ''
+
+            captured_args = {'ipaddr': ipaddr, 'port': port,
+                             'device': device, 'partition': partition,
+                             'method': method, 'path': path, 'ssl': ssl,
+                             'headers': headers, 'query_string': query_string}
+
+            http_connect_args.append(
+                dict((k,v) for k,v in captured_args.iteritems()
+                     if v is not None))
+
+        req = Request.blank(
+            '/sda1/p/a/c/o',
+            environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Timestamp': '12345',
+                     'Content-Type': 'application/burrito',
+                     'Content-Length': '0',
+                     'X-Container-Partition': '20',
+                     'X-Container-Host': '1.2.3.4:5, 6.7.8.9:10',
+                     'X-Container-Device': 'sdb1, sdf1'})
+
+        orig_http_connect = object_server.http_connect
+        try:
+            object_server.http_connect = fake_http_connect
+            self.object_controller.PUT(req)
+        finally:
+            object_server.http_connect = orig_http_connect
+
+        http_connect_args.sort(key=operator.itemgetter('ipaddr'))
+
+        self.assertEquals(len(http_connect_args), 2)
+        self.assertEquals(
+            http_connect_args[0],
+            {'ipaddr': '1.2.3.4',
+             'port': '5',
+             'path': '/a/c/o',
+             'device': 'sdb1',
+             'partition': '20',
+             'method': 'PUT',
+             'ssl': False,
+             'headers': {'x-content-type': 'application/burrito',
+                         'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+                         'x-size': '0',
+                         'x-timestamp': '12345',
+                         'x-trans-id': '-'}})
+        self.assertEquals(
+            http_connect_args[1],
+            {'ipaddr': '6.7.8.9',
+             'port': '10',
+             'path': '/a/c/o',
+             'device': 'sdf1',
+             'partition': '20',
+             'method': 'PUT',
+             'ssl': False,
+             'headers': {'x-content-type': 'application/burrito',
+                         'x-etag': 'd41d8cd98f00b204e9800998ecf8427e',
+                         'x-size': '0',
+                         'x-timestamp': '12345',
+                         'x-trans-id': '-'}})
+
     def test_async_update_saves_on_exception(self):
+        _prefix = utils.HASH_PATH_PREFIX
+        utils.HASH_PATH_PREFIX = ''
 
         def fake_http_connect(*args):
             raise Exception('test')
@@ -1629,6 +1823,7 @@ class TestObjectController(unittest.TestCase):
                 {'x-timestamp': '1', 'x-out': 'set'}, 'sda1')
         finally:
             object_server.http_connect = orig_http_connect
+            utils.HASH_PATH_PREFIX = _prefix
         self.assertEquals(
             pickle.load(open(os.path.join(self.testdir, 'sda1',
                 'async_pending', 'a83',
@@ -1637,6 +1832,8 @@ class TestObjectController(unittest.TestCase):
              'container': 'c', 'obj': 'o', 'op': 'PUT'})
 
     def test_async_update_saves_on_non_2xx(self):
+        _prefix = utils.HASH_PATH_PREFIX
+        utils.HASH_PATH_PREFIX = ''
 
         def fake_http_connect(status):
 
@@ -1669,6 +1866,7 @@ class TestObjectController(unittest.TestCase):
                      'op': 'PUT'})
         finally:
             object_server.http_connect = orig_http_connect
+            utils.HASH_PATH_PREFIX = _prefix
 
     def test_async_update_does_not_save_on_2xx(self):
 

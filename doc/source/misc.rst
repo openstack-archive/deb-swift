@@ -44,6 +44,14 @@ TempAuth
 
 .. _acls:
 
+KeystoneAuth
+============
+
+.. automodule:: swift.common.middleware.keystoneauth
+    :members:
+    :show-inheritance:
+
+
 ACLs
 ====
 
@@ -172,34 +180,39 @@ Proxy Logging
     :members:
     :show-inheritance:
 
-CORS Headers
-============
+Bulk Operations (Delete and Archive Auto Extraction)
+====================================================
 
-Cross Origin RequestS or CORS allows the browser to make requests against
-Swift from another origin via the browser.  This enables the use of HTML5
-forms and javascript uploads to swift.  The owner of a container can set
-three headers:
+.. automodule:: swift.common.middleware.bulk
+    :members:
+    :show-inheritance:
 
-+---------------------------------------------+-------------------------------+
-|Metadata                                     | Use                           |
-+=============================================+===============================+
-|X-Container-Meta-Access-Control-Allow-Origin | Origins to be allowed to      |
-|                                             | make Cross Origin Requests,   |
-|                                             | space separated               |
-+---------------------------------------------+-------------------------------+
-|X-Container-Meta-Access-Control-Max-Age      | Max age for the Origin to     |
-|                                             | hold the preflight results.   |
-+---------------------------------------------+-------------------------------+
-|X-Container-Meta-Access-Control-Allow-Headers| Headers to be allowed in      |
-|                                             | actual request by browser.    |
-+---------------------------------------------+-------------------------------+
+Container Quotas
+================
 
-When the browser does a request it can issue a preflight request.  The 
-preflight request is the OPTIONS call that verifies the Origin is allowed
-to make the request.
+.. automodule:: swift.common.middleware.container_quotas
+    :members:
+    :show-inheritance:
 
-* Browser makes OPTIONS request to Swift
-* Swift returns 200/401 to browser based on allowed origins
-* If 200, browser makes PUT, POST, DELETE, HEAD, GET request to Swift
+.. _slo-doc:
 
-CORS should be used in conjunction with TempURL and FormPost.
+Static Large Objects
+====================
+
+.. automodule:: swift.common.middleware.slo
+    :members:
+    :show-inheritance:
+
+List Endpoints
+==============
+
+.. automodule:: swift.common.middleware.list_endpoints
+    :members:
+    :show-inheritance:
+
+Account Quotas
+================
+
+.. automodule:: swift.common.middleware.account_quotas
+    :members:
+    :show-inheritance:

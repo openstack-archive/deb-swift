@@ -27,7 +27,7 @@ from swift.common.swob import HTTPBadRequest, HTTPForbidden, HTTPNotFound, \
     HTTPUnauthorized
 
 from swift.common.middleware.acl import clean_acl, parse_acl, referrer_allowed
-from swift.common.utils import cache_from_env, get_logger, get_remote_client, \
+from swift.common.utils import cache_from_env, get_logger, \
     split_path, config_true_value
 from swift.common.http import HTTP_CLIENT_CLOSED_REQUEST
 
@@ -77,19 +77,19 @@ class TempAuth(object):
         self.logger.set_statsd_prefix('tempauth.%s' % (
             self.reseller_prefix if self.reseller_prefix else 'NONE',))
         self.auth_prefix = conf.get('auth_prefix', '/auth/')
-        if not self.auth_prefix:
+        if not self.auth_prefix or not self.auth_prefix.strip('/'):
+            self.logger.warning('Rewriting invalid auth prefix "%s" to '
+                                '"/auth/" (Non-empty auth prefix path '
+                                'is required)' % self.auth_prefix)
             self.auth_prefix = '/auth/'
         if self.auth_prefix[0] != '/':
             self.auth_prefix = '/' + self.auth_prefix
         if self.auth_prefix[-1] != '/':
             self.auth_prefix += '/'
         self.token_life = int(conf.get('token_life', 86400))
-        self.allowed_sync_hosts = [
-            h.strip()
-            for h in conf.get('allowed_sync_hosts', '127.0.0.1').split(',')
-            if h.strip()]
         self.allow_overrides = config_true_value(
             conf.get('allow_overrides', 't'))
+        self.storage_url_scheme = conf.get('storage_url_scheme', 'default')
         self.users = {}
         for conf_key in conf:
             if conf_key.startswith('user_') or conf_key.startswith('user64_'):
@@ -105,16 +105,10 @@ class TempAuth(object):
                 if not values:
                     raise ValueError('%s has no key set' % conf_key)
                 key = values.pop(0)
-                if values and '://' in values[-1]:
+                if values and ('://' in values[-1] or '$HOST' in values[-1]):
                     url = values.pop()
                 else:
-                    url = 'https://' if 'cert_file' in conf else 'http://'
-                    ip = conf.get('bind_ip', '127.0.0.1')
-                    if ip == '0.0.0.0':
-                        ip = '127.0.0.1'
-                    url += ip
-                    url += ':' + conf.get('bind_port', '8080') + '/v1/' + \
-                        self.reseller_prefix + account
+                    url = '$HOST/v1/%s%s' % (self.reseller_prefix, account)
                 self.users[account + ':' + username] = {
                     'key': key, 'url': url, 'groups': values}
 
@@ -156,6 +150,8 @@ class TempAuth(object):
                     '%s,%s' % (user, 's3' if s3 else token)
                 env['swift.authorize'] = self.authorize
                 env['swift.clean_acl'] = clean_acl
+                if '.reseller_admin' in groups:
+                    env['reseller_request'] = True
             else:
                 # Unauthorized token
                 if self.reseller_prefix:
@@ -247,44 +243,69 @@ class TempAuth(object):
         """
 
         try:
-            version, account, container, obj = split_path(req.path, 1, 4, True)
+            version, account, container, obj = req.split_path(1, 4, True)
         except ValueError:
             self.logger.increment('errors')
             return HTTPNotFound(request=req)
+
         if not account or not account.startswith(self.reseller_prefix):
+            self.logger.debug("Account name: %s doesn't start with "
+                              "reseller_prefix: %s."
+                              % (account, self.reseller_prefix))
             return self.denied_response(req)
+
         user_groups = (req.remote_user or '').split(',')
+        account_user = user_groups[1] if len(user_groups) > 1 else None
+
         if '.reseller_admin' in user_groups and \
                 account != self.reseller_prefix and \
                 account[len(self.reseller_prefix)] != '.':
             req.environ['swift_owner'] = True
+            self.logger.debug("User %s has reseller admin authorizing."
+                              % account_user)
             return None
+
         if account in user_groups and \
                 (req.method not in ('DELETE', 'PUT') or container):
             # If the user is admin for the account and is not trying to do an
             # account DELETE or PUT...
             req.environ['swift_owner'] = True
+            self.logger.debug("User %s has admin authorizing."
+                              % account_user)
             return None
-        if (req.environ.get('swift_sync_key') and
-            req.environ['swift_sync_key'] ==
-                req.headers.get('x-container-sync-key', None) and
-            'x-timestamp' in req.headers and
-            (req.remote_addr in self.allowed_sync_hosts or
-             get_remote_client(req) in self.allowed_sync_hosts)):
+
+        if (req.environ.get('swift_sync_key')
+                and (req.environ['swift_sync_key'] ==
+                     req.headers.get('x-container-sync-key', None))
+                and 'x-timestamp' in req.headers):
+            self.logger.debug("Allow request with container sync-key: %s."
+                              % req.environ['swift_sync_key'])
             return None
+
         if req.method == 'OPTIONS':
             #allow OPTIONS requests to proceed as normal
+            self.logger.debug("Allow OPTIONS request.")
             return None
+
         referrers, groups = parse_acl(getattr(req, 'acl', None))
         if referrer_allowed(req.referer, referrers):
             if obj or '.rlistings' in groups:
+                self.logger.debug("Allow authorizing %s via referer ACL."
+                                  % req.referer)
                 return None
+            self.logger.debug("Disallow authorizing %s via referer ACL."
+                              % req.referer)
             return self.denied_response(req)
+
         if not req.remote_user:
             return self.denied_response(req)
+
         for user_group in user_groups:
             if user_group in groups:
+                self.logger.debug("User %s allowed in ACL: %s authorizing."
+                                  % (account_user, user_group))
                 return None
+
         return self.denied_response(req)
 
     def denied_response(self, req):
@@ -317,18 +338,7 @@ class TempAuth(object):
             if 'x-storage-token' in req.headers and \
                     'x-auth-token' not in req.headers:
                 req.headers['x-auth-token'] = req.headers['x-storage-token']
-            if 'eventlet.posthooks' in env:
-                env['eventlet.posthooks'].append(
-                    (self.posthooklogger, (req,), {}))
-                return self.handle_request(req)(env, start_response)
-            else:
-                # Lack of posthook support means that we have to log on the
-                # start of the response, rather than after all the data has
-                # been sent. This prevents logging client disconnects
-                # differently than full transmissions.
-                response = self.handle_request(req)(env, start_response)
-                self.posthooklogger(env, req)
-                return response
+            return self.handle_request(req)(env, start_response)
         except (Exception, Timeout):
             print "EXCEPTION IN handle: %s: %s" % (format_exc(), env)
             self.logger.increment('errors')
@@ -346,11 +356,7 @@ class TempAuth(object):
         req.start_time = time()
         handler = None
         try:
-            version, account, user, _junk = split_path(
-                req.path_info,
-                minsegs=1,
-                maxsegs=4,
-                rest_with_last=True)
+            version, account, user, _junk = req.split_path(1, 4, True)
         except ValueError:
             self.logger.increment('errors')
             return HTTPNotFound(request=req)
@@ -390,8 +396,7 @@ class TempAuth(object):
         """
         # Validate the request info
         try:
-            pathsegs = split_path(req.path_info, minsegs=1, maxsegs=3,
-                                  rest_with_last=True)
+            pathsegs = split_path(req.path_info, 1, 3, True)
         except ValueError:
             self.logger.increment('errors')
             return HTTPNotFound(request=req)
@@ -465,53 +470,19 @@ class TempAuth(object):
             # Save token
             memcache_token_key = '%s/token/%s' % (self.reseller_prefix, token)
             memcache_client.set(memcache_token_key, (expires, groups),
-                                timeout=float(expires - time()))
+                                time=float(expires - time()))
             # Record the token with the user info for future use.
             memcache_user_key = \
                 '%s/user/%s' % (self.reseller_prefix, account_user)
             memcache_client.set(memcache_user_key, token,
-                                timeout=float(expires - time()))
-        return Response(request=req,
-                        headers={
-                            'x-auth-token': token,
-                            'x-storage-token': token,
-                            'x-storage-url': self.users[account_user]['url']})
-
-    def posthooklogger(self, env, req):
-        if not req.path.startswith(self.auth_prefix):
-            return
-        response = getattr(req, 'response', None)
-        if not response:
-            return
-        trans_time = '%.4f' % (time() - req.start_time)
-        the_request = quote(unquote(req.path))
-        if req.query_string:
-            the_request = the_request + '?' + req.query_string
-        # remote user for zeus
-        client = req.headers.get('x-cluster-client-ip')
-        if not client and 'x-forwarded-for' in req.headers:
-            # remote user for other lbs
-            client = req.headers['x-forwarded-for'].split(',')[0].strip()
-        logged_headers = None
-        if self.log_headers:
-            logged_headers = '\n'.join('%s: %s' % (k, v)
-                                       for k, v in req.headers.items())
-        status_int = response.status_int
-        if getattr(req, 'client_disconnect', False) or \
-                getattr(response, 'client_disconnect', False):
-            status_int = HTTP_CLIENT_CLOSED_REQUEST
-        self.logger.info(
-            ' '.join(quote(str(x)) for x in (client or '-',
-            req.remote_addr or '-', strftime('%d/%b/%Y/%H/%M/%S', gmtime()),
-            req.method, the_request, req.environ['SERVER_PROTOCOL'],
-            status_int, req.referer or '-', req.user_agent or '-',
-            req.headers.get('x-auth-token',
-                            req.headers.get('x-auth-admin-user', '-')),
-            getattr(req, 'bytes_transferred', 0) or '-',
-            getattr(response, 'bytes_transferred', 0) or '-',
-            req.headers.get('etag', '-'),
-            req.environ.get('swift.trans_id', '-'), logged_headers or '-',
-            trans_time)))
+                                time=float(expires - time()))
+        resp = Response(request=req, headers={
+            'x-auth-token': token, 'x-storage-token': token})
+        url = self.users[account_user]['url'].replace('$HOST', resp.host_url)
+        if self.storage_url_scheme != 'default':
+            url = self.storage_url_scheme + ':' + url.split(':', 1)[1]
+        resp.headers['x-storage-url'] = url
+        return resp
 
 
 def filter_factory(global_conf, **local_conf):

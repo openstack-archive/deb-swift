@@ -30,9 +30,20 @@ To execute the unit tests:
 
   - `pip install tox`
 
+* If you do not have python 2.6 installed (as in 12.04):
+
+  - Add `export TOXENV=py27,pep8` to your `~/.bashrc`
+
+  - `. ~/.bashrc`
+
 * Run Tox from the root of the swift repo:
 
   - `tox`
+
+  Remarks:
+  if you installed using: `cd ~/swift; sudo python setup.py develop`,
+  you may need to do: `cd ~/swift; sudo chown -R swift:swift swift.egg-info`
+  prior to running tox
 
 * Optionally, run only specific tox builds:
 
@@ -57,14 +68,22 @@ More specifically:
         the sphinx specific markup can be found here:
         http://sphinx.pocoo.org/markup/index.html
 
+Installing Sphinx:
+  #. Install sphinx (On Ubuntu: `sudo apt-get install python-sphinx`)
+  #. `python setup.py build_sphinx`
+
+
 ---------------------
 License and Copyright
 ---------------------
 
-Every source file should have the following copyright and license statement at
-the top::
+You can have the following copyright and license statement at
+the top of each source file. Copyright assignment is optional. 
 
-    # Copyright (c) 2010-2012 OpenStack, LLC.
+New files should contain the current year. Substantial updates can have
+another year added, and date ranges are not needed.::
+
+    # Copyright (c) 2013 OpenStack Foundation.
     #
     # Licensed under the Apache License, Version 2.0 (the "License");
     # you may not use this file except in compliance with the License.

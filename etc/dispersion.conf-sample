@@ -6,9 +6,12 @@ auth_key = testing
 # auth_user = test:tester
 # auth_key = testing
 # auth_version = 2.0
+# endpoint_type = publicURL
 #
 # swift_dir = /etc/swift
 # dispersion_coverage = 1
 # retries = 5
 # concurrency = 25
+# container_report = yes
+# object_report = yes
 # dump_json = no

@@ -27,10 +27,7 @@ import time
 from bisect import bisect
 from hashlib import md5
 
-try:
-    import simplejson as json
-except ImportError:
-    import json
+from swift.common.utils import json
 
 DEFAULT_MEMCACHED_PORT = 11211
 
@@ -51,6 +48,18 @@ ERROR_LIMIT_DURATION = 60
 
 def md5hash(key):
     return md5(key).hexdigest()
+
+
+def sanitize_timeout(timeout):
+    """
+    Sanitize a timeout value to use an absolute expiration time if the delta
+    is greater than 30 days (in seconds). Note that the memcached server
+    translates negative values to mean a delta of 30 days in seconds (and 1
+    additional second), client beware.
+    """
+    if timeout > (30 * 24 * 60 * 60):
+        timeout += time.time()
+    return timeout
 
 
 class MemcacheConnectionError(Exception):
@@ -133,7 +142,8 @@ class MemcacheRing(object):
         """ Returns a server connection to the pool """
         self._client_cache[server].append((fp, sock))
 
-    def set(self, key, value, serialize=True, timeout=0):
+    def set(self, key, value, serialize=True, timeout=0, time=0,
+            min_compress_len=0):
         """
         Set a key/value pair in memcache
 
@@ -142,11 +152,22 @@ class MemcacheRing(object):
         :param serialize: if True, value is serialized with JSON before sending
                           to memcache, or with pickle if configured to use
                           pickle instead of JSON (to avoid cache poisoning)
-        :param timeout: ttl in memcache
+        :param timeout: ttl in memcache, this parameter is now deprecated. It
+                        will be removed in next release of OpenStack,
+                        use time parameter instead in the future
+        :time: equivalent to timeout, this parameter is added to keep the
+               signature compatible with python-memcached interface. This
+               implementation will take this value and sign it to the
+               parameter timeout
+        :min_compress_len: minimum compress length, this parameter was added
+                           to keep the signature compatible with
+                           python-memcached interface. This implementation
+                           ignores it.
         """
         key = md5hash(key)
-        if timeout > 0:
-            timeout += time.time()
+        if timeout:
+            logging.warn("parameter timeout has been deprecated, use time")
+        timeout = sanitize_timeout(time or timeout)
         flags = 0
         if serialize and self._allow_pickle:
             value = pickle.dumps(value, PICKLE_PROTOCOL)
@@ -196,7 +217,7 @@ class MemcacheRing(object):
             except Exception, e:
                 self._exception_occurred(server, e)
 
-    def incr(self, key, delta=1, timeout=0):
+    def incr(self, key, delta=1, time=0, timeout=0):
         """
         Increments a key which has a numeric value by delta.
         If the key can't be found, it's added as delta or 0 if delta < 0.
@@ -209,14 +230,21 @@ class MemcacheRing(object):
         :param key: key
         :param delta: amount to add to the value of key (or set as the value
                       if the key is not found) will be cast to an int
-        :param timeout: ttl in memcache
+        :param time: the time to live. This parameter deprecates parameter
+                     timeout. The addition of this parameter is to make the
+                     interface consistent with set and set_multi methods
+        :param timeout: ttl in memcache, deprecated, will be removed in future
+                        OpenStack releases
         :raises MemcacheConnectionError:
         """
+        if timeout:
+            logging.warn("parameter timeout has been deprecated, use time")
         key = md5hash(key)
         command = 'incr'
         if delta < 0:
             command = 'decr'
         delta = str(abs(int(delta)))
+        timeout = sanitize_timeout(time or timeout)
         for (server, fp, sock) in self._get_conns(key):
             try:
                 sock.sendall('%s %s %s\r\n' % (command, key, delta))
@@ -242,7 +270,7 @@ class MemcacheRing(object):
                 self._exception_occurred(server, e)
         raise MemcacheConnectionError("No Memcached connections succeeded.")
 
-    def decr(self, key, delta=1, timeout=0):
+    def decr(self, key, delta=1, time=0, timeout=0):
         """
         Decrements a key which has a numeric value by delta. Calls incr with
         -delta.
@@ -251,10 +279,17 @@ class MemcacheRing(object):
         :param delta: amount to subtract to the value of key (or set the
                       value to 0 if the key is not found) will be cast to
                       an int
-        :param timeout: ttl in memcache
+        :param time: the time to live. This parameter depcates parameter
+                     timeout. The addition of this parameter is to make the
+                     interface consistent with set and set_multi methods
+        :param timeout: ttl in memcache, deprecated, will be removed in future
+                        OpenStack releases
         :raises MemcacheConnectionError:
         """
-        self.incr(key, delta=-delta, timeout=timeout)
+        if timeout:
+            logging.warn("parameter timeout has been deprecated, use time")
+
+        self.incr(key, delta=-delta, time=(time or timeout))
 
     def delete(self, key):
         """
@@ -271,7 +306,8 @@ class MemcacheRing(object):
             except Exception, e:
                 self._exception_occurred(server, e)
 
-    def set_multi(self, mapping, server_key, serialize=True, timeout=0):
+    def set_multi(self, mapping, server_key, serialize=True, timeout=0,
+                  time=0, min_compress_len=0):
         """
         Sets multiple key/value pairs in memcache.
 
@@ -281,11 +317,23 @@ class MemcacheRing(object):
         :param serialize: if True, value is serialized with JSON before sending
                           to memcache, or with pickle if configured to use
                           pickle instead of JSON (to avoid cache poisoning)
-        :param timeout: ttl for memcache
+        :param timeout: ttl for memcache. This parameter is now deprecated, it
+                        will be removed in next release of OpenStack, use time
+                        parameter instead in the future
+        :time: equalvent to timeout, this parameter is added to keep the
+               signature compatible with python-memcached interface. This
+               implementation will take this value and sign it to parameter
+               timeout
+        :min_compress_len: minimum compress length, this parameter was added
+                           to keep the signature compatible with
+                           python-memcached interface. This implementation
+                           ignores it
         """
+        if timeout:
+            logging.warn("parameter timeout has been deprecated, use time")
+
         server_key = md5hash(server_key)
-        if timeout > 0:
-            timeout += time.time()
+        timeout = sanitize_timeout(time or timeout)
         msg = ''
         for key, value in mapping.iteritems():
             key = md5hash(key)

@@ -1,6 +1,6 @@
 .\"
 .\" Author: Joao Marcelo Martins <marcelo.martins@rackspace.com> or <btorch@gmail.com>
-.\" Copyright (c) 2010-2011 OpenStack, LLC.
+.\" Copyright (c) 2010-2011 OpenStack Foundation.
 .\"
 .\" Licensed under the Apache License, Version 2.0 (the "License");
 .\" you may not use this file except in compliance with the License.
@@ -46,12 +46,12 @@ allows one to use the keywords such as "all", "main" and "rest" for the <server>
 
 .RS 4
 .IP "\fIobject\fR, \fIobject-replicator\fR, \fIobject-auditor\fR, \fIobject-updater\fR"
-.IP "    - Initialize the swift object daemons above"
+.IP "    - Initializes the swift object daemons above"
 .RE
 
 .RS 4
 .IP "\fIcontainer\fR, \fIcontainer-update\fR, \fIcontainer-replicator\fR, \fIcontainer-auditor\fR"
-.IP "    - Initialize the swift container daemons above"
+.IP "    - Initializes the swift container daemons above"
 .RE
 
 .RS 4
@@ -66,14 +66,14 @@ allows one to use the keywords such as "all", "main" and "rest" for the <server>
 
 .RS 4
 .IP "\fImain\fR"
-.IP "    - Initializes all the \fBmain\fR swift daemons "
+.IP "    - Initializes all the \fBmain\fR swift daemons"
 .IP "      (proxy, container, account and object servers)"
 .RE
 
 .RS 4
 .IP "\fIrest\fR"
-.IP "    - Initializes all the other \fBswift background daemons\fR such as"
-.IP "      (updater, replicator, auditor, reaper)"
+.IP "    - Initializes all the other \fBswift background daemons\fR"
+.IP "      (updater, replicator, auditor, reaper, etc)"
 .RE
 .PD 
 
@@ -107,8 +107,11 @@ allows one to use the keywords such as "all", "main" and "rest" for the <server>
 .IP "-n, --no-daemon \t\t start server interactively
 .IP "-g, --graceful \t\t send SIGHUP to supporting servers
 .IP "-c N, --config-num=N \t send command to the Nth server only
+.IP "-k N, --kill-wait=N \t wait N seconds for processes to die (default 15)
+.IP "-r RUN_DIR, --run-dir=RUN_DIR directory where the pids will be stored (default /var/run/swift)
 .PD 
 .RE
+
 
 
 .SH DOCUMENTATION

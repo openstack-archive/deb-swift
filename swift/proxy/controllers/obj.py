@@ -24,39 +24,66 @@
 #   These shenanigans are to ensure all related objects can be garbage
 # collected. We've seen objects hang around forever otherwise.
 
-try:
-    import simplejson as json
-except ImportError:
-    import json
+import itertools
 import mimetypes
 import re
 import time
 from datetime import datetime
 from urllib import unquote, quote
 from hashlib import md5
-from random import shuffle
 
-from eventlet import sleep, GreenPile, Timeout
+from eventlet import sleep, GreenPile
 from eventlet.queue import Queue
 from eventlet.timeout import Timeout
 
 from swift.common.utils import ContextPool, normalize_timestamp, \
-    config_true_value, public
+    config_true_value, public, json, csv_append
 from swift.common.bufferedhttp import http_connect
 from swift.common.constraints import check_metadata, check_object_creation, \
     CONTAINER_LISTING_LIMIT, MAX_FILE_SIZE
 from swift.common.exceptions import ChunkReadTimeout, \
     ChunkWriteTimeout, ConnectionTimeout, ListingIterNotFound, \
-    ListingIterNotAuthorized, ListingIterError
+    ListingIterNotAuthorized, ListingIterError, SloSegmentError
 from swift.common.http import is_success, is_client_error, HTTP_CONTINUE, \
-    HTTP_CREATED, HTTP_MULTIPLE_CHOICES, HTTP_NOT_FOUND, \
+    HTTP_CREATED, HTTP_MULTIPLE_CHOICES, HTTP_NOT_FOUND, HTTP_CONFLICT, \
     HTTP_INTERNAL_SERVER_ERROR, HTTP_SERVICE_UNAVAILABLE, \
-    HTTP_INSUFFICIENT_STORAGE
-from swift.proxy.controllers.base import Controller, delay_denial
+    HTTP_INSUFFICIENT_STORAGE, HTTP_OK
+from swift.proxy.controllers.base import Controller, delay_denial, \
+    cors_validation
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPRequestEntityTooLarge, HTTPRequestTimeout, \
     HTTPServerError, HTTPServiceUnavailable, Request, Response, \
     HTTPClientDisconnect
+
+
+def segment_listing_iter(listing):
+    listing = iter(listing)
+    while True:
+        seg_dict = listing.next()
+        if isinstance(seg_dict['name'], unicode):
+            seg_dict['name'] = seg_dict['name'].encode('utf-8')
+        yield seg_dict
+
+
+def copy_headers_into(from_r, to_r):
+    """
+    Will copy desired headers from from_r to to_r
+    :params from_r: a swob Request or Response
+    :params to_r: a swob Request or Response
+    """
+    for k, v in from_r.headers.items():
+        if k.lower().startswith('x-object-meta-'):
+            to_r.headers[k] = v
+
+
+def check_content_type(req):
+    if not req.environ.get('swift.content_type_overriden') and \
+            ';' in req.headers.get('content-type', ''):
+        for param in req.headers['content-type'].split(';')[1:]:
+            if param.lstrip().startswith('swift_'):
+                return HTTPBadRequest("Invalid Content-Type, "
+                                      "swift_* is not a valid parameter name.")
+    return None
 
 
 class SegmentedIterable(object):
@@ -68,7 +95,9 @@ class SegmentedIterable(object):
     status would have already been sent to the client).
 
     :param controller: The ObjectController instance to work with.
-    :param container: The container the object segments are within.
+    :param container: The container the object segments are within. If
+                      container is None will derive container from elements
+                      in listing using split('/', 1).
     :param listing: The listing of object segments to iterate over; this may
                     be an iterator or list that returns dicts with 'name' and
                     'bytes' keys.
@@ -76,10 +105,12 @@ class SegmentedIterable(object):
                      any (default: None)
     """
 
-    def __init__(self, controller, container, listing, response=None):
+    def __init__(self, controller, container, listing, response=None,
+                 is_slo=False):
         self.controller = controller
         self.container = container
-        self.listing = iter(listing)
+        self.listing = segment_listing_iter(listing)
+        self.is_slo = is_slo
         self.segment = 0
         self.segment_dict = None
         self.segment_peek = None
@@ -97,40 +128,67 @@ class SegmentedIterable(object):
         """
         Loads the self.segment_iter with the next object segment's contents.
 
-        :raises: StopIteration when there are no more object segments.
+        :raises: StopIteration when there are no more object segments or
+                 segment no longer matches SLO manifest specifications.
         """
         try:
             self.segment += 1
             self.segment_dict = self.segment_peek or self.listing.next()
             self.segment_peek = None
+            if self.container is None:
+                container, obj = \
+                    self.segment_dict['name'].lstrip('/').split('/', 1)
+            else:
+                container, obj = self.container, self.segment_dict['name']
             partition, nodes = self.controller.app.object_ring.get_nodes(
-                self.controller.account_name, self.container,
-                self.segment_dict['name'])
-            path = '/%s/%s/%s' % (self.controller.account_name, self.container,
-                                  self.segment_dict['name'])
+                self.controller.account_name, container, obj)
+            path = '/%s/%s/%s' % (self.controller.account_name, container, obj)
             req = Request.blank(path)
             if self.seek:
                 req.range = 'bytes=%s-' % self.seek
                 self.seek = 0
-            if self.segment > self.controller.app.rate_limit_after_segment:
+            if not self.is_slo and self.segment > \
+                    self.controller.app.rate_limit_after_segment:
                 sleep(max(self.next_get_time - time.time(), 0))
             self.next_get_time = time.time() + \
                 1.0 / self.controller.app.rate_limit_segments_per_sec
-            shuffle(nodes)
+            nodes = self.controller.app.sort_nodes(nodes)
             resp = self.controller.GETorHEAD_base(
                 req, _('Object'), partition,
                 self.controller.iter_nodes(partition, nodes,
                                            self.controller.app.object_ring),
                 path, len(nodes))
+            if self.is_slo and resp.status_int == HTTP_NOT_FOUND:
+                raise SloSegmentError(_(
+                    'Could not load object segment %(path)s:'
+                    ' %(status)s') % {'path': path, 'status': resp.status_int})
             if not is_success(resp.status_int):
                 raise Exception(_(
                     'Could not load object segment %(path)s:'
                     ' %(status)s') % {'path': path, 'status': resp.status_int})
+            if self.is_slo:
+                if resp.etag != self.segment_dict['hash']:
+                    raise SloSegmentError(_(
+                        'Object segment no longer valid: '
+                        '%(path)s etag: %(r_etag)s != %(s_etag)s.' %
+                        {'path': path, 'r_etag': resp.etag,
+                         's_etag': self.segment_dict['hash']}))
             self.segment_iter = resp.app_iter
             # See NOTE: swift_conn at top of file about this.
             self.segment_iter_swift_conn = getattr(resp, 'swift_conn', None)
         except StopIteration:
             raise
+        except SloSegmentError, err:
+            if not getattr(err, 'swift_logged', False):
+                self.controller.app.logger.error(_(
+                    'ERROR: While processing manifest '
+                    '/%(acc)s/%(cont)s/%(obj)s, %(err)s'),
+                    {'acc': self.controller.account_name,
+                     'cont': self.controller.container_name,
+                     'obj': self.controller.object_name, 'err': err})
+                err.swift_logged = True
+                self.response.status_int = HTTP_CONFLICT
+            raise StopIteration('Invalid manifiest segment')
         except (Exception, Timeout), err:
             if not getattr(err, 'swift_logged', False):
                 self.controller.app.logger.exception(_(
@@ -177,7 +235,7 @@ class SegmentedIterable(object):
 
     def app_iter_range(self, start, stop):
         """
-        Non-standard iterator function for use with Webob in serving Range
+        Non-standard iterator function for use with Swob in serving Range
         requests more quickly. This will skip over segments and do a range
         request on the first segment to return data from, if needed.
 
@@ -247,6 +305,11 @@ class ObjectController(Controller):
         self.object_name = unquote(object_name)
 
     def _listing_iter(self, lcontainer, lprefix, env):
+        for page in self._listing_pages_iter(lcontainer, lprefix, env):
+            for item in page:
+                yield item
+
+    def _listing_pages_iter(self, lcontainer, lprefix, env):
         lpartition, lnodes = self.app.container_ring.get_nodes(
             self.account_name, lcontainer)
         marker = ''
@@ -259,7 +322,7 @@ class ObjectController(Controller):
             lreq.environ['QUERY_STRING'] = \
                 'format=json&prefix=%s&marker=%s' % (quote(lprefix),
                                                      quote(marker))
-            shuffle(lnodes)
+            nodes = self.app.sort_nodes(lnodes)
             lresp = self.GETorHEAD_base(
                 lreq, _('Container'), lpartition, lnodes, lreq.path_info,
                 len(lnodes))
@@ -277,9 +340,30 @@ class ObjectController(Controller):
             sublisting = json.loads(lresp.body)
             if not sublisting:
                 break
-            marker = sublisting[-1]['name']
-            for obj in sublisting:
-                yield obj
+            marker = sublisting[-1]['name'].encode('utf-8')
+            yield sublisting
+
+    def _remaining_items(self, listing_iter):
+        """
+        Returns an item-by-item iterator for a page-by-page iterator
+        of item listings.
+
+        Swallows listing-related errors; this iterator is only used
+        after we've already started streaming a response to the
+        client, and so if we start getting errors from the container
+        servers now, it's too late to send an error to the client, so
+        we just quit looking for segments.
+        """
+        try:
+            for page in listing_iter:
+                for item in page:
+                    yield item
+        except ListingIterNotFound:
+            pass
+        except ListingIterError:
+            pass
+        except ListingIterNotAuthorized:
+            pass
 
     def is_good_source(self, src):
         """
@@ -304,28 +388,76 @@ class ObjectController(Controller):
 
         partition, nodes = self.app.object_ring.get_nodes(
             self.account_name, self.container_name, self.object_name)
-        shuffle(nodes)
+        nodes = self.app.sort_nodes(nodes)
         resp = self.GETorHEAD_base(
             req, _('Object'), partition,
             self.iter_nodes(partition, nodes, self.app.object_ring),
             req.path_info, len(nodes))
 
-        if 'x-object-manifest' in resp.headers:
+        if ';' in resp.headers.get('content-type', ''):
+            # strip off swift_bytes from content-type
+            content_type, check_extra_meta = \
+                resp.headers['content-type'].rsplit(';', 1)
+            if check_extra_meta.lstrip().startswith('swift_bytes='):
+                resp.content_type = content_type
+
+        large_object = None
+        if config_true_value(resp.headers.get('x-static-large-object')) and \
+                req.params.get('multipart-manifest') != 'get' and \
+                self.app.allow_static_large_object:
+            large_object = 'SLO'
+            listing_page1 = ()
+            listing = []
+            lcontainer = None  # container name is included in listing
+            if resp.status_int == HTTP_OK and \
+                    req.method == 'GET' and not req.range:
+                try:
+                    listing = json.loads(resp.body)
+                except ValueError:
+                    listing = []
+            else:
+                # need to make a second request to get whole manifest
+                new_req = req.copy_get()
+                new_req.method = 'GET'
+                new_req.range = None
+                nodes = self.app.sort_nodes(nodes)
+                new_resp = self.GETorHEAD_base(
+                    new_req, _('Object'), partition,
+                    self.iter_nodes(partition, nodes, self.app.object_ring),
+                    req.path_info, len(nodes))
+                if new_resp.status_int // 100 == 2:
+                    try:
+                        listing = json.loads(new_resp.body)
+                    except ValueError:
+                        listing = []
+                else:
+                    return HTTPServiceUnavailable(
+                        "Unable to load SLO manifest", request=req)
+
+        if 'x-object-manifest' in resp.headers and \
+                req.params.get('multipart-manifest') != 'get':
+            large_object = 'DLO'
             lcontainer, lprefix = \
                 resp.headers['x-object-manifest'].split('/', 1)
             lcontainer = unquote(lcontainer)
             lprefix = unquote(lprefix)
             try:
-                listing = list(self._listing_iter(lcontainer, lprefix,
-                               req.environ))
+                pages_iter = iter(self._listing_pages_iter(lcontainer, lprefix,
+                                                           req.environ))
+                listing_page1 = pages_iter.next()
+                listing = itertools.chain(listing_page1,
+                                          self._remaining_items(pages_iter))
             except ListingIterNotFound:
                 return HTTPNotFound(request=req)
             except ListingIterNotAuthorized, err:
                 return err.aresp
             except ListingIterError:
                 return HTTPServerError(request=req)
+            except StopIteration:
+                listing_page1 = listing = ()
 
-            if len(listing) > CONTAINER_LISTING_LIMIT:
+        if large_object:
+            if len(listing_page1) >= CONTAINER_LISTING_LIMIT:
                 resp = Response(headers=resp.headers, request=req,
                                 conditional_response=True)
                 if req.method == 'HEAD':
@@ -344,28 +476,35 @@ class ObjectController(Controller):
                     return head_response
                 else:
                     resp.app_iter = SegmentedIterable(
-                        self, lcontainer,
-                        self._listing_iter(lcontainer, lprefix, req.environ),
-                        resp)
+                        self, lcontainer, listing, resp,
+                        is_slo=(large_object == 'SLO'))
 
             else:
                 # For objects with a reasonable number of segments, we'll serve
                 # them with a set content-length and computed etag.
                 if listing:
-                    content_length = sum(o['bytes'] for o in listing)
-                    last_modified = max(o['last_modified'] for o in listing)
-                    last_modified = datetime(*map(int, re.split('[^\d]',
-                                             last_modified)[:-1]))
-                    etag = md5(
-                        ''.join(o['hash'] for o in listing)).hexdigest()
+                    listing = list(listing)
+                    try:
+                        content_length = sum(o['bytes'] for o in listing)
+                        last_modified = \
+                            max(o['last_modified'] for o in listing)
+                        last_modified = datetime(*map(int, re.split('[^\d]',
+                                                 last_modified)[:-1]))
+                        etag = md5(
+                            ''.join(o['hash'] for o in listing)).hexdigest()
+                    except KeyError:
+                        return HTTPServerError('Invalid Manifest File',
+                                               request=req)
+
                 else:
                     content_length = 0
                     last_modified = resp.last_modified
                     etag = md5().hexdigest()
                 resp = Response(headers=resp.headers, request=req,
                                 conditional_response=True)
-                resp.app_iter = SegmentedIterable(self, lcontainer, listing,
-                                                  resp)
+                resp.app_iter = SegmentedIterable(
+                    self, lcontainer, listing, resp,
+                    is_slo=(large_object == 'SLO'))
                 resp.content_length = content_length
                 resp.last_modified = last_modified
                 resp.etag = etag
@@ -378,18 +517,21 @@ class ObjectController(Controller):
         return resp
 
     @public
+    @cors_validation
     @delay_denial
     def GET(self, req):
         """Handler for HTTP GET requests."""
         return self.GETorHEAD(req)
 
     @public
+    @cors_validation
     @delay_denial
     def HEAD(self, req):
         """Handler for HTTP HEAD requests."""
         return self.GETorHEAD(req)
 
     @public
+    @cors_validation
     @delay_denial
     def POST(self, req):
         """HTTP POST request handler."""
@@ -410,6 +552,10 @@ class ObjectController(Controller):
                                                self.object_name))
             req.headers['X-Fresh-Metadata'] = 'true'
             req.environ['swift_versioned_copy'] = True
+            if req.environ.get('QUERY_STRING'):
+                req.environ['QUERY_STRING'] += '&multipart-manifest=get'
+            else:
+                req.environ['QUERY_STRING'] = 'multipart-manifest=get'
             resp = self.PUT(req)
             # Older editions returned 202 Accepted on object POSTs, so we'll
             # convert any 201 Created responses to that for compatibility with
@@ -456,22 +602,47 @@ class ObjectController(Controller):
             partition, nodes = self.app.object_ring.get_nodes(
                 self.account_name, self.container_name, self.object_name)
             req.headers['X-Timestamp'] = normalize_timestamp(time.time())
-            headers = []
-            for container in containers:
-                nheaders = dict(req.headers.iteritems())
-                nheaders['Connection'] = 'close'
-                nheaders['X-Container-Host'] = '%(ip)s:%(port)s' % container
-                nheaders['X-Container-Partition'] = container_partition
-                nheaders['X-Container-Device'] = container['device']
-                if delete_at_nodes:
-                    node = delete_at_nodes.pop(0)
-                    nheaders['X-Delete-At-Host'] = '%(ip)s:%(port)s' % node
-                    nheaders['X-Delete-At-Partition'] = delete_at_part
-                    nheaders['X-Delete-At-Device'] = node['device']
-                headers.append(nheaders)
+
+            headers = self._backend_requests(
+                req, len(nodes), container_partition, containers,
+                delete_at_part, delete_at_nodes)
+
             resp = self.make_requests(req, self.app.object_ring, partition,
                                       'POST', req.path_info, headers)
             return resp
+
+    def _backend_requests(self, req, n_outgoing,
+                          container_partition, containers,
+                          delete_at_partition=None, delete_at_nodes=None):
+        headers = [dict(req.headers.iteritems())
+                   for _junk in range(n_outgoing)]
+
+        for header in headers:
+            header['Connection'] = 'close'
+
+        for i, container in enumerate(containers):
+            i = i % len(headers)
+
+            headers[i]['X-Container-Partition'] = container_partition
+            headers[i]['X-Container-Host'] = csv_append(
+                headers[i].get('X-Container-Host'),
+                '%(ip)s:%(port)s' % container)
+            headers[i]['X-Container-Device'] = csv_append(
+                headers[i].get('X-Container-Device'),
+                container['device'])
+
+        for i, node in enumerate(delete_at_nodes or []):
+            i = i % len(headers)
+
+            headers[i]['X-Delete-At-Partition'] = delete_at_partition
+            headers[i]['X-Delete-At-Host'] = csv_append(
+                headers[i].get('X-Delete-At-Host'),
+                '%(ip)s:%(port)s' % node)
+            headers[i]['X-Delete-At-Device'] = csv_append(
+                headers[i].get('X-Delete-At-Device'),
+                node['device'])
+
+        return headers
 
     def _send_file(self, conn, path):
         """Method for a file PUT coro"""
@@ -493,10 +664,12 @@ class ObjectController(Controller):
         self.app.logger.thread_locals = logger_thread_locals
         for node in nodes:
             try:
+                start_time = time.time()
                 with ConnectionTimeout(self.app.conn_timeout):
                     conn = http_connect(
                         node['ip'], node['port'], node['device'], part, 'PUT',
                         path, headers)
+                self.app.set_node_timing(node, time.time() - start_time)
                 with Timeout(self.app.node_timeout):
                     resp = conn.getexpect()
                 if resp.status == HTTP_CONTINUE:
@@ -514,6 +687,7 @@ class ObjectController(Controller):
                                         _('Expect: 100-continue on %s') % path)
 
     @public
+    @cors_validation
     @delay_denial
     def PUT(self, req):
         """HTTP PUT request handler."""
@@ -591,7 +765,8 @@ class ObjectController(Controller):
             req.headers['Content-Type'] = guessed_type or \
                 'application/octet-stream'
             content_type_manually_set = False
-        error_response = check_object_creation(req, self.object_name)
+        error_response = check_object_creation(req, self.object_name) or \
+            check_content_type(req)
         if error_response:
             return error_response
         if object_versions and not req.environ.get('swift_versioned_copy'):
@@ -669,6 +844,8 @@ class ObjectController(Controller):
                 # CONTAINER_LISTING_LIMIT segments in a segmented object. In
                 # this case, we're going to refuse to do the server-side copy.
                 return HTTPRequestEntityTooLarge(request=req)
+            if new_req.content_length > MAX_FILE_SIZE:
+                return HTTPRequestEntityTooLarge(request=req)
             new_req.etag = source_resp.etag
             # we no longer need the X-Copy-From header
             del new_req.headers['X-Copy-From']
@@ -677,32 +854,30 @@ class ObjectController(Controller):
                     source_resp.headers['Content-Type']
             if not config_true_value(
                     new_req.headers.get('x-fresh-metadata', 'false')):
-                for k, v in source_resp.headers.items():
-                    if k.lower().startswith('x-object-meta-'):
-                        new_req.headers[k] = v
-                for k, v in req.headers.items():
-                    if k.lower().startswith('x-object-meta-'):
-                        new_req.headers[k] = v
+                copy_headers_into(source_resp, new_req)
+                copy_headers_into(req, new_req)
+            # copy over x-static-large-object for POSTs and manifest copies
+            if 'X-Static-Large-Object' in source_resp.headers and \
+                    req.params.get('multipart-manifest') == 'get':
+                new_req.headers['X-Static-Large-Object'] = \
+                    source_resp.headers['X-Static-Large-Object']
+
             req = new_req
         node_iter = self.iter_nodes(partition, nodes, self.app.object_ring)
         pile = GreenPile(len(nodes))
         chunked = req.headers.get('transfer-encoding')
-        for container in containers:
-            nheaders = dict(req.headers.iteritems())
-            nheaders['Connection'] = 'close'
-            nheaders['X-Container-Host'] = '%(ip)s:%(port)s' % container
-            nheaders['X-Container-Partition'] = container_partition
-            nheaders['X-Container-Device'] = container['device']
+
+        outgoing_headers = self._backend_requests(
+            req, len(nodes), container_partition, containers,
+            delete_at_part, delete_at_nodes)
+
+        for nheaders in outgoing_headers:
             # RFC2616:8.2.3 disallows 100-continue without a body
             if (req.content_length > 0) or chunked:
                 nheaders['Expect'] = '100-continue'
-            if delete_at_nodes:
-                node = delete_at_nodes.pop(0)
-                nheaders['X-Delete-At-Host'] = '%(ip)s:%(port)s' % node
-                nheaders['X-Delete-At-Partition'] = delete_at_part
-                nheaders['X-Delete-At-Device'] = node['device']
             pile.spawn(self._connect_put_node, node_iter, partition,
                        req.path_info, nheaders, self.app.logger.thread_locals)
+
         conns = [conn for conn in pile if conn]
         if len(conns) <= len(nodes) / 2:
             self.app.logger.error(
@@ -804,13 +979,12 @@ class ObjectController(Controller):
             if 'last-modified' in source_resp.headers:
                 resp.headers['X-Copied-From-Last-Modified'] = \
                     source_resp.headers['last-modified']
-            for k, v in req.headers.items():
-                if k.lower().startswith('x-object-meta-'):
-                    resp.headers[k] = v
+            copy_headers_into(req, resp)
         resp.last_modified = float(req.headers['X-Timestamp'])
         return resp
 
     @public
+    @cors_validation
     @delay_denial
     def DELETE(self, req):
         """HTTP DELETE request handler."""
@@ -896,19 +1070,15 @@ class ObjectController(Controller):
                          'was %r' % req.headers['x-timestamp'])
         else:
             req.headers['X-Timestamp'] = normalize_timestamp(time.time())
-        headers = []
-        for container in containers:
-            nheaders = dict(req.headers.iteritems())
-            nheaders['Connection'] = 'close'
-            nheaders['X-Container-Host'] = '%(ip)s:%(port)s' % container
-            nheaders['X-Container-Partition'] = container_partition
-            nheaders['X-Container-Device'] = container['device']
-            headers.append(nheaders)
+
+        headers = self._backend_requests(
+            req, len(nodes), container_partition, containers)
         resp = self.make_requests(req, self.app.object_ring,
                                   partition, 'DELETE', req.path_info, headers)
         return resp
 
     @public
+    @cors_validation
     @delay_denial
     def COPY(self, req):
         """HTTP COPY request handler."""

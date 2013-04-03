@@ -18,7 +18,6 @@ from __future__ import with_statement
 import os
 import time
 import traceback
-from urllib import unquote
 from xml.sax import saxutils
 
 from eventlet import Timeout
@@ -26,7 +25,7 @@ from eventlet import Timeout
 import swift.common.db
 from swift.common.db import AccountBroker
 from swift.common.utils import get_logger, get_param, hash_path, public, \
-    normalize_timestamp, split_path, storage_directory, config_true_value, \
+    normalize_timestamp, storage_directory, config_true_value, \
     validate_device_partition, json, timing_stats
 from swift.common.constraints import ACCOUNT_LISTING_LIMIT, \
     check_mount, check_float, check_utf8, FORMAT2CONTENT_TYPE
@@ -35,7 +34,7 @@ from swift.common.swob import HTTPAccepted, HTTPBadRequest, \
     HTTPCreated, HTTPForbidden, HTTPInternalServerError, \
     HTTPMethodNotAllowed, HTTPNoContent, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPConflict, Request, Response, \
-    HTTPInsufficientStorage
+    HTTPInsufficientStorage, HTTPNotAcceptable
 
 
 DATADIR = 'accounts'
@@ -63,11 +62,11 @@ class AccountController(object):
         return AccountBroker(db_path, account=account, logger=self.logger)
 
     @public
-    @timing_stats
+    @timing_stats()
     def DELETE(self, req):
         """Handle HTTP DELETE request."""
         try:
-            drive, part, account = split_path(unquote(req.path), 3)
+            drive, part, account = req.split_path(3)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -85,12 +84,11 @@ class AccountController(object):
         return HTTPNoContent(request=req)
 
     @public
-    @timing_stats
+    @timing_stats()
     def PUT(self, req):
         """Handle HTTP PUT request."""
         try:
-            drive, part, account, container = split_path(unquote(req.path),
-                                                         3, 4)
+            drive, part, account, container = req.split_path(3, 4)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -141,18 +139,11 @@ class AccountController(object):
                 return HTTPAccepted(request=req)
 
     @public
-    @timing_stats
+    @timing_stats()
     def HEAD(self, req):
         """Handle HTTP HEAD request."""
-        # TODO(refactor): The account server used to provide a 'account and
-        # container existence check all-in-one' call by doing a HEAD with a
-        # container path. However, container existence is now checked with the
-        # container servers directly so this is no longer needed. We should
-        # refactor out the container existence check here and retest
-        # everything.
         try:
-            drive, part, account, container = split_path(unquote(req.path),
-                                                         3, 4)
+            drive, part, account = req.split_path(3)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -160,9 +151,8 @@ class AccountController(object):
         if self.mount_check and not check_mount(self.root, drive):
             return HTTPInsufficientStorage(drive=drive, request=req)
         broker = self._get_account_broker(drive, part, account)
-        if not container:
-            broker.pending_timeout = 0.1
-            broker.stale_reads_ok = True
+        broker.pending_timeout = 0.1
+        broker.stale_reads_ok = True
         if broker.is_deleted():
             return HTTPNotFound(request=req)
         info = broker.get_info()
@@ -172,32 +162,24 @@ class AccountController(object):
             'X-Account-Bytes-Used': info['bytes_used'],
             'X-Timestamp': info['created_at'],
             'X-PUT-Timestamp': info['put_timestamp']}
-        if container:
-            container_ts = broker.get_container_timestamp(container)
-            if container_ts is not None:
-                headers['X-Container-Timestamp'] = container_ts
         headers.update((key, value)
                        for key, (value, timestamp) in
                        broker.metadata.iteritems() if value != '')
         if get_param(req, 'format'):
             req.accept = FORMAT2CONTENT_TYPE.get(
                 get_param(req, 'format').lower(), FORMAT2CONTENT_TYPE['plain'])
-        try:
-            headers['Content-Type'] = req.accept.best_match(
-                ['text/plain', 'application/json', 'application/xml',
-                 'text/xml'],
-                default_match='text/plain')
-        except AssertionError, err:
-            return HTTPBadRequest(body='bad accept header: %s' % req.accept,
-                                  content_type='text/plain', request=req)
+        headers['Content-Type'] = req.accept.best_match(
+            ['text/plain', 'application/json', 'application/xml', 'text/xml'])
+        if not headers['Content-Type']:
+            return HTTPNotAcceptable(request=req)
         return HTTPNoContent(request=req, headers=headers, charset='utf-8')
 
     @public
-    @timing_stats
+    @timing_stats()
     def GET(self, req):
         """Handle HTTP GET request."""
         try:
-            drive, part, account = split_path(unquote(req.path), 3)
+            drive, part, account = req.split_path(3)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -242,14 +224,10 @@ class AccountController(object):
         if query_format:
             req.accept = FORMAT2CONTENT_TYPE.get(query_format.lower(),
                                                  FORMAT2CONTENT_TYPE['plain'])
-        try:
-            out_content_type = req.accept.best_match(
-                ['text/plain', 'application/json', 'application/xml',
-                 'text/xml'],
-                default_match='text/plain')
-        except AssertionError, err:
-            return HTTPBadRequest(body='bad accept header: %s' % req.accept,
-                                  content_type='text/plain', request=req)
+        out_content_type = req.accept.best_match(
+            ['text/plain', 'application/json', 'application/xml', 'text/xml'])
+        if not out_content_type:
+            return HTTPNotAcceptable(request=req)
         account_list = broker.list_containers_iter(limit, marker, end_marker,
                                                    prefix, delimiter)
         if out_content_type == 'application/json':
@@ -285,14 +263,14 @@ class AccountController(object):
         return ret
 
     @public
-    @timing_stats
+    @timing_stats()
     def REPLICATE(self, req):
         """
         Handle HTTP REPLICATE request.
         Handler for RPC calls for account replication.
         """
         try:
-            post_args = split_path(unquote(req.path), 3)
+            post_args = req.split_path(3)
             drive, partition, hash = post_args
             validate_device_partition(drive, partition)
         except ValueError, err:
@@ -309,11 +287,11 @@ class AccountController(object):
         return ret
 
     @public
-    @timing_stats
+    @timing_stats()
     def POST(self, req):
         """Handle HTTP POST request."""
         try:
-            drive, part, account = split_path(unquote(req.path), 3)
+            drive, part, account = req.split_path(3)
             validate_device_partition(drive, part)
         except ValueError, err:
             return HTTPBadRequest(body=str(err), content_type='text/plain',
@@ -342,7 +320,7 @@ class AccountController(object):
         req = Request(env)
         self.logger.txn_id = req.headers.get('x-trans-id', None)
         if not check_utf8(req.path_info):
-            res = HTTPPreconditionFailed(body='Invalid UTF8')
+            res = HTTPPreconditionFailed(body='Invalid UTF8 or contains NULL')
         else:
             try:
                 # disallow methods which are not publicly accessible

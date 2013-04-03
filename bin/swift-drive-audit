@@ -15,13 +15,14 @@
 # limitations under the License.
 
 import datetime
+import glob
 import os
 import re
 import subprocess
 import sys
 from ConfigParser import ConfigParser
 
-from swift.common.utils import get_logger
+from swift.common.utils import backward, get_logger
 
 
 # To search for more types of errors, add the regex to the list below
@@ -46,7 +47,7 @@ def get_devices(device_dir, logger):
             except OSError, e:
                 # If we can't stat the device, then something weird is going on
                 logger.error("Error: Could not stat %s!" %
-                    block_device)
+                             block_device)
                 continue
             device['major'] = str(os.major(device_num))
             device['minor'] = str(os.minor(device_num))
@@ -54,34 +55,66 @@ def get_devices(device_dir, logger):
     for line in open('/proc/partitions').readlines()[2:]:
         major, minor, blocks, kernel_device = line.strip().split()
         device = [d for d in devices
-            if d['major'] == major and d['minor'] == minor]
+                  if d['major'] == major and d['minor'] == minor]
         if device:
             device[0]['kernel_device'] = kernel_device
     return devices
 
 
 def get_errors(minutes):
+    # Assuming log rotation is being used, we need to examine
+    # recently rotated files in case the rotation occured
+    # just before the script is being run - the data we are
+    # looking for may have rotated.
+    log_files = [f for f in glob.glob('/var/log/kern.*[!.][!g][!z]')]
+    log_files.sort()
+
+    now_time = datetime.datetime.now()
+    end_time = now_time - datetime.timedelta(minutes=minutes)
+    # kern.log does not contain the year so we need to keep
+    # track of the year and month in case the year recently
+    # ticked over
+    year = now_time.year
+    prev_entry_month = now_time.month
     errors = {}
-    start_time = datetime.datetime.now() - datetime.timedelta(minutes=minutes)
-    try:
-        for line in open('/var/log/kern.log'):
-            if '[    0.000000]' in line:
+
+    reached_old_logs = False
+    for path in log_files:
+        try:
+            f = open(path)
+        except IOError:
+            logger.error("Error: Unable to open " + path)
+            print("Unable to open " + path)
+            sys.exit(1)
+        for line in backward(f):
+            if '[    0.000000]' in line \
+                or 'KERNEL supported cpus:' in line \
+                    or 'BIOS-provided physical RAM map:' in line:
                 # Ignore anything before the last boot
-                errors = {}
+                reached_old_logs = True
+                break
+            # Solves the problem with year change - kern.log does not
+            # keep track of the year.
+            log_time_entry = line.split()[:3]
+            if log_time_entry[0] == 'Dec' and prev_entry_month == 'Jan':
+                year -= 1
+            prev_entry_month = log_time_entry[0]
+            log_time_string = '%s %s' % (year, ' '.join(log_time_entry))
+            try:
+                log_time = datetime.datetime.strptime(
+                    log_time_string, '%Y %b %d %H:%M:%S')
+            except ValueError:
                 continue
-            log_time_string = '%s %s' % (start_time.year,
-                                         ' '.join(line.split()[:3]))
-            log_time = datetime.datetime.strptime(
-                log_time_string, '%Y %b %d %H:%M:%S')
-            if log_time > start_time:
+            if log_time > end_time:
                 for err in error_re:
                     for device in err.findall(line):
                         errors[device] = errors.get(device, 0) + 1
-        return errors
-    except IOError:
-        logger.error("Error: Unable to open /var/log/kern.log")
-        print("Unable to open /var/log/kern.log")
-        sys.exit(1)
+            else:
+                reached_old_logs = True
+                break
+        if reached_old_logs:
+            break
+    return errors
 
 
 def comment_fstab(mount_point):
@@ -127,10 +160,10 @@ if __name__ == '__main__':
                 mount_point = device[0]['mount_point']
                 if mount_point.startswith(device_dir):
                     logger.info("Unmounting %s with %d errors" %
-                        (mount_point, count))
+                                (mount_point, count))
                     subprocess.call(['umount', '-fl', mount_point])
                     logger.info("Commenting out %s from /etc/fstab" %
-                        (mount_point))
+                                (mount_point))
                     comment_fstab(mount_point)
                     unmounts += 1
     if unmounts == 0:

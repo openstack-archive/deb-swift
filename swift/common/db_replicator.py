@@ -37,7 +37,7 @@ from swift.common.bufferedhttp import BufferedHTTPConnection
 from swift.common.exceptions import DriveNotMounted, ConnectionTimeout
 from swift.common.daemon import Daemon
 from swift.common.swob import Response, HTTPNotFound, HTTPNoContent, \
-    HTTPAccepted, HTTPInsufficientStorage, HTTPBadRequest
+    HTTPAccepted, HTTPBadRequest
 
 
 DEBUG_TIMINGS_THRESHOLD = 10
@@ -63,6 +63,47 @@ def quarantine_db(object_file, server_type):
             raise
         quarantine_dir = "%s-%s" % (quarantine_dir, uuid.uuid4().hex)
         renamer(object_dir, quarantine_dir)
+
+
+def roundrobin_datadirs(datadirs):
+    """
+    Generator to walk the data dirs in a round robin manner, evenly
+    hitting each device on the system, and yielding any .db files
+    found (in their proper places). The partitions within each data
+    dir are walked randomly, however.
+
+    :param datadirs: a list of (path, node_id) to walk
+    :returns: A generator of (partition, path_to_db_file, node_id)
+    """
+
+    def walk_datadir(datadir, node_id):
+        partitions = os.listdir(datadir)
+        random.shuffle(partitions)
+        for partition in partitions:
+            part_dir = os.path.join(datadir, partition)
+            if not os.path.isdir(part_dir):
+                continue
+            suffixes = os.listdir(part_dir)
+            for suffix in suffixes:
+                suff_dir = os.path.join(part_dir, suffix)
+                if not os.path.isdir(suff_dir):
+                    continue
+                hashes = os.listdir(suff_dir)
+                for hsh in hashes:
+                    hash_dir = os.path.join(suff_dir, hsh)
+                    if not os.path.isdir(hash_dir):
+                        continue
+                    object_file = os.path.join(hash_dir, hsh + '.db')
+                    if os.path.exists(object_file):
+                        yield (partition, object_file, node_id)
+
+    its = [walk_datadir(datadir, node_id) for datadir, node_id in datadirs]
+    while its:
+        for it in its:
+            try:
+                yield it.next()
+            except StopIteration:
+                its.remove(it)
 
 
 class ReplConnection(BufferedHTTPConnection):
@@ -153,7 +194,8 @@ class Replicator(Daemon):
                          % self.stats)
         dump_recon_cache(
             {'replication_stats': self.stats,
-             'replication_time': time.time() - self.stats['start']},
+             'replication_time': time.time() - self.stats['start'],
+             'replication_last': time.time()},
             self.rcache, self.logger)
         self.logger.info(' '.join(['%s:%s' % item for item in
                          self.stats.items() if item[0] in
@@ -458,31 +500,6 @@ class Replicator(Daemon):
     def report_up_to_date(self, full_info):
         return True
 
-    def roundrobin_datadirs(self, datadirs):
-        """
-        Generator to walk the data dirs in a round robin manner, evenly
-        hitting each device on the system.
-
-        :param datadirs: a list of paths to walk
-        """
-
-        def walk_datadir(datadir, node_id):
-            partitions = os.listdir(datadir)
-            random.shuffle(partitions)
-            for partition in partitions:
-                part_dir = os.path.join(datadir, partition)
-                for root, dirs, files in os.walk(part_dir, topdown=False):
-                    for fname in (f for f in files if f.endswith('.db')):
-                        object_file = os.path.join(root, fname)
-                        yield (partition, object_file, node_id)
-        its = [walk_datadir(datadir, node_id) for datadir, node_id in datadirs]
-        while its:
-            for it in its:
-                try:
-                    yield it.next()
-                except StopIteration:
-                    its.remove(it)
-
     def run_once(self, *args, **kwargs):
         """Run a replication pass once."""
         self._zero_stats()
@@ -505,7 +522,7 @@ class Replicator(Daemon):
                 if os.path.isdir(datadir):
                     dirs.append((datadir, node['id']))
         self.logger.info(_('Beginning replication run'))
-        for part, object_file, node_id in self.roundrobin_datadirs(dirs):
+        for part, object_file, node_id in roundrobin_datadirs(dirs):
             self.cpool.spawn_n(
                 self._replicate_object, part, object_file, node_id)
         self.cpool.waitall()

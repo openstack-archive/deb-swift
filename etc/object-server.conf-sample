@@ -1,6 +1,7 @@
 [DEFAULT]
 # bind_ip = 0.0.0.0
 # bind_port = 6000
+# bind_timeout = 30
 # backlog = 4096
 # workers = 1
 # user = swift
@@ -24,11 +25,16 @@
 # You can enable StatsD logging here:
 # log_statsd_host = localhost
 # log_statsd_port = 8125
-# log_statsd_default_sample_rate = 1
+# log_statsd_default_sample_rate = 1.0
+# log_statsd_sample_rate_factor = 1.0
 # log_statsd_metric_prefix =
+# eventlet_debug = false
+# You can set fallocate_reserve to the number of bytes you'd like fallocate to
+# reserve, whether there is space for the given file size or not.
+# fallocate_reserve = 0
 
 [pipeline:main]
-pipeline = recon object-server
+pipeline = healthcheck recon object-server
 
 [app:object-server]
 use = egg:swift#object
@@ -54,8 +60,14 @@ use = egg:swift#object
 # Comma separated list of headers that can be set in metadata on an object.
 # This list is in addition to X-Object-Meta-* headers and cannot include
 # Content-Type, etag, Content-Length, or deleted
-# allowed_headers = Content-Disposition, Content-Encoding, X-Delete-At, X-Object-Manifest
+# allowed_headers = Content-Disposition, Content-Encoding, X-Delete-At, X-Object-Manifest, X-Static-Large-Object
 # auto_create_account_prefix = .
+
+[filter:healthcheck]
+use = egg:swift#healthcheck
+# An optional filesystem path, which if present, will cause the healthcheck
+# URL to return "503 Service Unavailable" with a body of "DISABLED BY FILE"
+# disable_path =
 
 [filter:recon]
 use = egg:swift#recon

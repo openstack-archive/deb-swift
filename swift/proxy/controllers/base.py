@@ -28,11 +28,13 @@ import time
 import functools
 import inspect
 
-from eventlet import spawn_n, GreenPile, Timeout
+from eventlet import spawn_n, GreenPile
 from eventlet.queue import Queue, Empty, Full
 from eventlet.timeout import Timeout
 
-from swift.common.utils import normalize_timestamp, config_true_value, public
+from swift.common.wsgi import make_pre_authed_request
+from swift.common.utils import normalize_timestamp, config_true_value, \
+    public, split_path, cache_from_env
 from swift.common.bufferedhttp import http_connect
 from swift.common.constraints import MAX_ACCOUNT_NAME_LENGTH
 from swift.common.exceptions import ChunkReadTimeout, ConnectionTimeout
@@ -40,7 +42,7 @@ from swift.common.http import is_informational, is_success, is_redirection, \
     is_server_error, HTTP_OK, HTTP_PARTIAL_CONTENT, HTTP_MULTIPLE_CHOICES, \
     HTTP_BAD_REQUEST, HTTP_NOT_FOUND, HTTP_SERVICE_UNAVAILABLE, \
     HTTP_INSUFFICIENT_STORAGE, HTTP_UNAUTHORIZED
-from swift.common.swob import Request, Response, status_map
+from swift.common.swob import Request, Response
 
 
 def update_headers(response, headers):
@@ -95,17 +97,33 @@ def get_container_memcache_key(account, container):
     return 'container/%s/%s' % (account, container)
 
 
+def headers_to_account_info(headers, status_int=HTTP_OK):
+    """
+    Construct a cacheable dict of account info based on response headers.
+    """
+    headers = dict((k.lower(), v) for k, v in dict(headers).iteritems())
+    return {
+        'status': status_int,
+        'container_count': headers.get('x-account-container-count'),
+        'total_object_count': headers.get('x-account-object-count'),
+        'bytes': headers.get('x-account-bytes-used'),
+        'meta': dict((key[15:], value)
+                     for key, value in headers.iteritems()
+                     if key.startswith('x-account-meta-'))
+    }
+
+
 def headers_to_container_info(headers, status_int=HTTP_OK):
     """
     Construct a cacheable dict of container info based on response headers.
     """
-    headers = dict(headers)
+    headers = dict((k.lower(), v) for k, v in dict(headers).iteritems())
     return {
         'status': status_int,
         'read_acl': headers.get('x-container-read'),
         'write_acl': headers.get('x-container-write'),
         'sync_key': headers.get('x-container-sync-key'),
-        'count': headers.get('x-container-object-count'),
+        'object_count': headers.get('x-container-object-count'),
         'bytes': headers.get('x-container-bytes-used'),
         'versions': headers.get('x-versions-location'),
         'cors': {
@@ -113,13 +131,134 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
                 'x-container-meta-access-control-allow-origin'),
             'allow_headers': headers.get(
                 'x-container-meta-access-control-allow-headers'),
+            'expose_headers': headers.get(
+                'x-container-meta-access-control-expose-headers'),
             'max_age': headers.get(
                 'x-container-meta-access-control-max-age')
         },
-        'meta': dict((key.lower()[17:], value)
+        'meta': dict((key[17:], value)
                      for key, value in headers.iteritems()
-                     if key.lower().startswith('x-container-meta-'))
+                     if key.startswith('x-container-meta-'))
     }
+
+
+def cors_validation(func):
+    """
+    Decorator to check if the request is a CORS request and if so, if it's
+    valid.
+
+    :param func: function to check
+    """
+    @functools.wraps(func)
+    def wrapped(*a, **kw):
+        controller = a[0]
+        req = a[1]
+
+        # The logic here was interpreted from
+        #    http://www.w3.org/TR/cors/#resource-requests
+
+        # Is this a CORS request?
+        req_origin = req.headers.get('Origin', None)
+        if req_origin:
+            # Yes, this is a CORS request so test if the origin is allowed
+            container_info = \
+                controller.container_info(controller.account_name,
+                                          controller.container_name)
+            cors_info = container_info.get('cors', {})
+
+            # Call through to the decorated method
+            resp = func(*a, **kw)
+
+            # Expose,
+            #  - simple response headers,
+            #    http://www.w3.org/TR/cors/#simple-response-header
+            #  - swift specific: etag, x-timestamp, x-trans-id
+            #  - user metadata headers
+            #  - headers provided by the user in
+            #    x-container-meta-access-control-expose-headers
+            expose_headers = ['cache-control', 'content-language',
+                              'content-type', 'expires', 'last-modified',
+                              'pragma', 'etag', 'x-timestamp', 'x-trans-id']
+            for header in resp.headers:
+                if header.startswith('x-container-meta') or \
+                        header.startswith('x-object-meta'):
+                    expose_headers.append(header.lower())
+            if cors_info.get('expose_headers'):
+                expose_headers.extend(
+                    [a.strip()
+                     for a in cors_info['expose_headers'].split(' ')
+                     if a.strip()])
+            resp.headers['Access-Control-Expose-Headers'] = \
+                ', '.join(expose_headers)
+
+            # The user agent won't process the response if the Allow-Origin
+            # header isn't included
+            resp.headers['Access-Control-Allow-Origin'] = req_origin
+
+            return resp
+        else:
+            # Not a CORS request so make the call as normal
+            return func(*a, **kw)
+
+    return wrapped
+
+
+def get_container_info(env, app, swift_source=None):
+    """
+    Get the info structure for a container, based on env and app.
+    This is useful to middlewares.
+    Note: This call bypasses auth. Success does not imply that the
+          request has authorization to the container_info.
+    """
+    cache = cache_from_env(env)
+    if not cache:
+        return None
+    (version, account, container, _) = \
+        split_path(env['PATH_INFO'], 3, 4, True)
+    cache_key = get_container_memcache_key(account, container)
+    # Use a unique environment cache key per container.  If you copy this env
+    # to make a new request, it won't accidentally reuse the old container info
+    env_key = 'swift.%s' % cache_key
+    if env_key not in env:
+        container_info = cache.get(cache_key)
+        if not container_info:
+            resp = make_pre_authed_request(
+                env, 'HEAD', '/%s/%s/%s' % (version, account, container),
+                swift_source=swift_source,
+            ).get_response(app)
+            container_info = headers_to_container_info(
+                resp.headers, resp.status_int)
+        env[env_key] = container_info
+    return env[env_key]
+
+
+def get_account_info(env, app, swift_source=None):
+    """
+    Get the info structure for an account, based on env and app.
+    This is useful to middlewares.
+    Note: This call bypasses auth. Success does not imply that the
+          request has authorization to the account_info.
+    """
+    cache = cache_from_env(env)
+    if not cache:
+        return None
+    (version, account, container, _) = \
+        split_path(env['PATH_INFO'], 2, 4, True)
+    cache_key = get_account_memcache_key(account)
+    # Use a unique environment cache key per account.  If you copy this env
+    # to make a new request, it won't accidentally reuse the old account info
+    env_key = 'swift.%s' % cache_key
+    if env_key not in env:
+        account_info = cache.get(cache_key)
+        if not account_info:
+            resp = make_pre_authed_request(
+                env, 'HEAD', '/%s/%s' % (version, account),
+                swift_source=swift_source,
+            ).get_response(app)
+            account_info = headers_to_account_info(
+                resp.headers, resp.status_int)
+        env[env_key] = account_info
+    return env[env_key]
 
 
 class Controller(object):
@@ -199,7 +338,7 @@ class Controller(object):
         :returns: True if error limited, False otherwise
         """
         now = time.time()
-        if not 'errors' in node:
+        if 'errors' not in node:
             return False
         if 'last_error' in node and node['last_error'] < \
                 now - self.app.error_suppression_interval:
@@ -231,6 +370,11 @@ class Controller(object):
                   or (None, None, None) if it does not exist
         """
         partition, nodes = self.app.account_ring.get_nodes(account)
+        account_info = {'status': 0,
+                        'container_count': 0,
+                        'total_object_count': None,
+                        'bytes': None,
+                        'meta': {}}
         # 0 = no responses, 200 = found, 404 = not found, -1 = mixed responses
         if self.app.memcache:
             cache_key = get_account_memcache_key(account)
@@ -240,13 +384,15 @@ class Controller(object):
                 container_count = 0
             else:
                 result_code = cache_value['status']
-                container_count = cache_value['container_count']
+                try:
+                    container_count = int(cache_value['container_count'])
+                except ValueError:
+                    container_count = 0
             if result_code == HTTP_OK:
                 return partition, nodes, container_count
             elif result_code == HTTP_NOT_FOUND and not autocreate:
                 return None, None, None
         result_code = 0
-        container_count = 0
         attempts_left = len(nodes)
         path = '/%s' % account
         headers = {'x-trans-id': self.trans_id, 'Connection': 'close'}
@@ -258,17 +404,19 @@ class Controller(object):
                 break
             attempts_left -= 1
             try:
+                start_node_timing = time.time()
                 with ConnectionTimeout(self.app.conn_timeout):
                     conn = http_connect(node['ip'], node['port'],
                                         node['device'], partition, 'HEAD',
                                         path, headers)
+                self.app.set_node_timing(node, time.time() - start_node_timing)
                 with Timeout(self.app.node_timeout):
                     resp = conn.getresponse()
-                    body = resp.read()
+                    resp.read()
                     if is_success(resp.status):
                         result_code = HTTP_OK
-                        container_count = int(
-                            resp.getheader('x-account-container-count') or 0)
+                        account_info.update(
+                            headers_to_account_info(resp.getheaders()))
                         break
                     elif resp.status == HTTP_NOT_FOUND:
                         if result_code == 0:
@@ -303,17 +451,21 @@ class Controller(object):
                 cache_timeout = self.app.recheck_account_existence
             else:
                 cache_timeout = self.app.recheck_account_existence * 0.1
+            account_info.update(status=result_code)
             self.app.memcache.set(cache_key,
-                                  {'status': result_code,
-                                  'container_count': container_count},
-                                  timeout=cache_timeout)
+                                  account_info,
+                                  time=cache_timeout)
         if result_code == HTTP_OK:
+            try:
+                container_count = int(account_info['container_count'])
+            except ValueError:
+                container_count = 0
             return partition, nodes, container_count
         return None, None, None
 
     def container_info(self, account, container, account_autocreate=False):
         """
-        Get container information and thusly verify container existance.
+        Get container information and thusly verify container existence.
         This will also make a call to account_info to verify that the
         account exists.
 
@@ -349,13 +501,15 @@ class Controller(object):
         headers = {'x-trans-id': self.trans_id, 'Connection': 'close'}
         for node in self.iter_nodes(part, nodes, self.app.container_ring):
             try:
+                start_node_timing = time.time()
                 with ConnectionTimeout(self.app.conn_timeout):
                     conn = http_connect(node['ip'], node['port'],
                                         node['device'], part, 'HEAD',
                                         path, headers)
+                self.app.set_node_timing(node, time.time() - start_node_timing)
                 with Timeout(self.app.node_timeout):
                     resp = conn.getresponse()
-                    body = resp.read()
+                    resp.read()
                 if is_success(resp.status):
                     container_info.update(
                         headers_to_container_info(resp.getheaders()))
@@ -377,11 +531,11 @@ class Controller(object):
             if container_info['status'] == HTTP_OK:
                 self.app.memcache.set(
                     cache_key, container_info,
-                    timeout=self.app.recheck_container_existence)
+                    time=self.app.recheck_container_existence)
             elif container_info['status'] == HTTP_NOT_FOUND:
                 self.app.memcache.set(
                     cache_key, container_info,
-                    timeout=self.app.recheck_container_existence * 0.1)
+                    time=self.app.recheck_container_existence * 0.1)
         if container_info['status'] == HTTP_OK:
             container_info['partition'] = part
             container_info['nodes'] = nodes
@@ -416,11 +570,13 @@ class Controller(object):
         self.app.logger.thread_locals = logger_thread_locals
         for node in nodes:
             try:
+                start_node_timing = time.time()
                 with ConnectionTimeout(self.app.conn_timeout):
                     conn = http_connect(node['ip'], node['port'],
                                         node['device'], part, method, path,
                                         headers=headers, query_string=query)
                     conn.node = node
+                self.app.set_node_timing(node, time.time() - start_node_timing)
                 with Timeout(self.app.node_timeout):
                     resp = conn.getresponse()
                     if not is_informational(resp.status) and \
@@ -625,6 +781,7 @@ class Controller(object):
                 break
             if self.error_limited(node):
                 continue
+            start_node_timing = time.time()
             try:
                 with ConnectionTimeout(self.app.conn_timeout):
                     headers = dict(req.headers)
@@ -633,6 +790,7 @@ class Controller(object):
                         node['ip'], node['port'], node['device'], partition,
                         req.method, path, headers=headers,
                         query_string=req.query_string)
+                self.app.set_node_timing(node, time.time() - start_node_timing)
                 with Timeout(self.app.node_timeout):
                     possible_source = conn.getresponse()
                     # See NOTE: swift_conn at top of file about this.
@@ -694,49 +852,76 @@ class Controller(object):
         return self.best_response(req, statuses, reasons, bodies,
                                   '%s %s' % (server_type, req.method))
 
-    def OPTIONS_base(self, req):
+    def is_origin_allowed(self, cors_info, origin):
+        """
+        Is the given Origin allowed to make requests to this resource
+
+        :param cors_info: the resource's CORS related metadata headers
+        :param origin: the origin making the request
+        :return: True or False
+        """
+        allowed_origins = set()
+        if cors_info.get('allow_origin'):
+            allowed_origins.update(
+                [a.strip()
+                 for a in cors_info['allow_origin'].split(' ')
+                 if a.strip()])
+        if self.app.cors_allow_origin:
+            allowed_origins.update(self.app.cors_allow_origin)
+        return origin in allowed_origins or '*' in allowed_origins
+
+    @public
+    def OPTIONS(self, req):
         """
         Base handler for OPTIONS requests
 
         :param req: swob.Request object
         :returns: swob.Response object
         """
+        # Prepare the default response
         headers = {'Allow': ', '.join(self.allowed_methods)}
-        resp = Response(status=200, request=req,
-                        headers=headers)
+        resp = Response(status=200, request=req, headers=headers)
+
+        # If this isn't a CORS pre-flight request then return now
         req_origin_value = req.headers.get('Origin', None)
         if not req_origin_value:
-            # NOT a CORS request
             return resp
 
-        # CORS preflight request
+        # This is a CORS preflight request so check it's allowed
         try:
             container_info = \
                 self.container_info(self.account_name, self.container_name)
         except AttributeError:
-            container_info = {}
+            # This should only happen for requests to the Account. A future
+            # change could allow CORS requests to the Account level as well.
+            return resp
+
         cors = container_info.get('cors', {})
-        allowed_origins = set()
-        if cors.get('allow_origin'):
-            allowed_origins.update(cors['allow_origin'].split(' '))
-        if self.app.cors_allow_origin:
-            allowed_origins.update(self.app.cors_allow_origin)
-        if (req_origin_value not in allowed_origins and
-                '*' not in allowed_origins) or (
+
+        # If the CORS origin isn't allowed return a 401
+        if not self.is_origin_allowed(cors, req_origin_value) or (
                 req.headers.get('Access-Control-Request-Method') not in
                 self.allowed_methods):
             resp.status = HTTP_UNAUTHORIZED
-            return resp  # CORS preflight request that isn't valid
+            return resp
+
+        # Always allow the x-auth-token header. This ensures
+        # clients can always make a request to the resource.
+        allow_headers = set()
+        if cors.get('allow_headers'):
+            allow_headers.update(
+                [a.strip()
+                 for a in cors['allow_headers'].split(' ')
+                 if a.strip()])
+        allow_headers.add('x-auth-token')
+
+        # Populate the response with the CORS preflight headers
         headers['access-control-allow-origin'] = req_origin_value
         if cors.get('max_age') is not None:
             headers['access-control-max-age'] = cors.get('max_age')
-        headers['access-control-allow-methods'] = ', '.join(
-            self.allowed_methods)
-        if cors.get('allow_headers'):
-            headers['access-control-allow-headers'] = cors.get('allow_headers')
+        headers['access-control-allow-methods'] = \
+            ', '.join(self.allowed_methods)
+        headers['access-control-allow-headers'] = ', '.join(allow_headers)
         resp.headers = headers
-        return resp
 
-    @public
-    def OPTIONS(self, req):
-        return self.OPTIONS_base(req)
+        return resp

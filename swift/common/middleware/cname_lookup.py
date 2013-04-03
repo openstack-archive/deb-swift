@@ -84,7 +84,10 @@ class CNAMELookupMiddleware(object):
     def __call__(self, env, start_response):
         if not self.storage_domain:
             return self.app(env, start_response)
-        given_domain = env['HTTP_HOST']
+        if 'HTTP_HOST' in env:
+            given_domain = env['HTTP_HOST']
+        else:
+            given_domain = env['SERVER_NAME']
         port = ''
         if ':' in given_domain:
             given_domain, port = given_domain.rsplit(':', 1)
@@ -105,7 +108,7 @@ class CNAMELookupMiddleware(object):
                     if self.memcache:
                         memcache_key = ''.join(['cname-', given_domain])
                         self.memcache.set(memcache_key, found_domain,
-                                          timeout=ttl)
+                                          time=ttl)
                 if found_domain is None or found_domain == a_domain:
                     # no CNAME records or we're at the last lookup
                     error = True
@@ -125,15 +128,16 @@ class CNAMELookupMiddleware(object):
                     break
                 else:
                     # try one more deep in the chain
-                    self.logger.debug(_('Following CNAME chain for  ' \
-                            '%(given_domain)s to %(found_domain)s') %
-                            {'given_domain': given_domain,
-                             'found_domain': found_domain})
+                    self.logger.debug(
+                        _('Following CNAME chain for  '
+                          '%(given_domain)s to %(found_domain)s') %
+                        {'given_domain': given_domain,
+                         'found_domain': found_domain})
                     a_domain = found_domain
             if error:
                 if found_domain:
                     msg = 'CNAME lookup failed after %d tries' % \
-                            self.lookup_depth
+                        self.lookup_depth
                 else:
                     msg = 'CNAME lookup failed to resolve to a valid domain'
                 resp = HTTPBadRequest(request=Request(env), body=msg,

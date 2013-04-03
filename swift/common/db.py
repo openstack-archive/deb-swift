@@ -19,7 +19,6 @@ from __future__ import with_statement
 from contextlib import contextmanager
 import hashlib
 import logging
-import operator
 import os
 from uuid import uuid4
 import sys
@@ -32,7 +31,7 @@ from eventlet import sleep, Timeout
 import sqlite3
 
 from swift.common.utils import json, normalize_timestamp, renamer, \
-        mkdirs, lock_parent_directory, fallocate
+    mkdirs, lock_parent_directory, fallocate
 from swift.common.exceptions import LockTimeout
 
 
@@ -60,7 +59,7 @@ class DatabaseConnectionError(sqlite3.DatabaseError):
 
     def __str__(self):
         return 'DB connection error (%s, %s):\n%s' % (
-                self.path, self.timeout, self.msg)
+            self.path, self.timeout, self.msg)
 
 
 class GreenDBConnection(sqlite3.Connection):
@@ -84,7 +83,7 @@ class GreenDBConnection(sqlite3.Connection):
 
     def execute(self, *args, **kwargs):
         return self._timeout(lambda: sqlite3.Connection.execute(
-                                        self, *args, **kwargs))
+            self, *args, **kwargs))
 
     def commit(self):
         return self._timeout(lambda: sqlite3.Connection.commit(self))
@@ -112,11 +111,8 @@ def chexor(old, name, timestamp):
     """
     if name is None:
         raise Exception('name is None!')
-    old = old.decode('hex')
-    new = hashlib.md5(('%s-%s' % (name, timestamp)).encode('utf_8')).digest()
-    response = ''.join(
-        map(chr, map(operator.xor, map(ord, old), map(ord, new))))
-    return response.encode('hex')
+    new = hashlib.md5(('%s-%s' % (name, timestamp)).encode('utf8')).hexdigest()
+    return '%032x' % (int(old, 16) ^ int(new, 16))
 
 
 def get_db_connection(path, timeout=30, okay_to_create=False):
@@ -131,14 +127,14 @@ def get_db_connection(path, timeout=30, okay_to_create=False):
     try:
         connect_time = time.time()
         conn = sqlite3.connect(path, check_same_thread=False,
-                    factory=GreenDBConnection, timeout=timeout)
+                               factory=GreenDBConnection, timeout=timeout)
         if path != ':memory:' and not okay_to_create:
             # attempt to detect and fail when connect creates the db file
             stat = os.stat(path)
             if stat.st_size == 0 and stat.st_ctime >= connect_time:
                 os.unlink(path)
                 raise DatabaseConnectionError(path,
-                    'DB file created by connect?')
+                                              'DB file created by connect?')
         conn.row_factory = sqlite3.Row
         conn.text_factory = str
         conn.execute('PRAGMA synchronous = NORMAL')
@@ -149,7 +145,7 @@ def get_db_connection(path, timeout=30, okay_to_create=False):
     except sqlite3.DatabaseError:
         import traceback
         raise DatabaseConnectionError(path, traceback.format_exc(),
-                timeout=timeout)
+                                      timeout=timeout)
     return conn
 
 
@@ -186,7 +182,7 @@ class DatabaseBroker(object):
             fd, tmp_db_file = mkstemp(suffix='.tmp', dir=self.db_dir)
             os.close(fd)
             conn = sqlite3.connect(tmp_db_file, check_same_thread=False,
-                        factory=GreenDBConnection, timeout=0)
+                                   factory=GreenDBConnection, timeout=0)
         # creating dbs implicitly does a lot of transactions, so we
         # pick fast, unsafe options here and do a big fsync at the end.
         conn.execute('PRAGMA synchronous = OFF')
@@ -243,8 +239,9 @@ class DatabaseBroker(object):
                 if os.path.exists(self.db_file):
                     # It's as if there was a "condition" where different parts
                     # of the system were "racing" each other.
-                    raise DatabaseConnectionError(self.db_file,
-                            'DB created by someone else while working?')
+                    raise DatabaseConnectionError(
+                        self.db_file,
+                        'DB created by someone else while working?')
                 renamer(tmp_db_file, self.db_file)
             self.conn = get_db_connection(self.db_file, self.timeout)
         else:
@@ -285,7 +282,8 @@ class DatabaseBroker(object):
         dbs_path = os.path.dirname(partition_path)
         device_path = os.path.dirname(dbs_path)
         quar_path = os.path.join(device_path, 'quarantined',
-            self.db_type + 's', os.path.basename(self.db_dir))
+                                 self.db_type + 's',
+                                 os.path.basename(self.db_dir))
         try:
             renamer(self.db_dir, quar_path)
         except OSError, e:
@@ -294,7 +292,7 @@ class DatabaseBroker(object):
             quar_path = "%s-%s" % (quar_path, uuid4().hex)
             renamer(self.db_dir, quar_path)
         detail = _('Quarantined %s to %s due to %s database') % \
-                 (self.db_dir, quar_path, exc_hint)
+                  (self.db_dir, quar_path, exc_hint)
         self.logger.error(detail)
         raise sqlite3.DatabaseError(detail)
 
@@ -498,13 +496,13 @@ class DatabaseBroker(object):
                         INSERT INTO %s_sync (sync_point, remote_id)
                         VALUES (?, ?)
                     ''' % ('incoming' if incoming else 'outgoing'),
-                    (rec['sync_point'], rec['remote_id']))
+                        (rec['sync_point'], rec['remote_id']))
                 except sqlite3.IntegrityError:
                     conn.execute('''
                         UPDATE %s_sync SET sync_point=max(?, sync_point)
                         WHERE remote_id=?
                     ''' % ('incoming' if incoming else 'outgoing'),
-                    (rec['sync_point'], rec['remote_id']))
+                        (rec['sync_point'], rec['remote_id']))
             conn.commit()
 
     def _preallocate(self):
@@ -787,11 +785,11 @@ class ContainerBroker(DatabaseBroker):
                 raise
         with self.get() as conn:
             row = conn.execute(
-                    'SELECT object_count from container_stat').fetchone()
+                'SELECT object_count from container_stat').fetchone()
             return (row[0] == 0)
 
     def _commit_puts(self, item_list=None):
-        """Handles commiting rows in .pending files."""
+        """Handles committing rows in .pending files."""
         if self.db_file == ':memory:' or not os.path.exists(self.pending_file):
             return
         if item_list is None:
@@ -808,10 +806,12 @@ class ContainerBroker(DatabaseBroker):
                         try:
                             (name, timestamp, size, content_type, etag,
                                 deleted) = pickle.loads(entry.decode('base64'))
-                            item_list.append({'name': name, 'created_at':
-                                timestamp, 'size': size, 'content_type':
-                                content_type, 'etag': etag,
-                                'deleted': deleted})
+                            item_list.append({'name': name,
+                                              'created_at': timestamp,
+                                              'size': size,
+                                              'content_type': content_type,
+                                              'etag': etag,
+                                              'deleted': deleted})
                         except Exception:
                             self.logger.exception(
                                 _('Invalid pending entry %(file)s: %(entry)s'),
@@ -1057,7 +1057,7 @@ class ContainerBroker(DatabaseBroker):
         :param marker: marker query
         :param end_marker: end marker query
         :param prefix: prefix query
-        :param delimeter: delimeter for query
+        :param delimiter: delimiter for query
         :param path: if defined, will set the prefix and delimter based on
                      the path
 
@@ -1277,7 +1277,7 @@ class AccountBroker(DatabaseBroker):
             UPDATE account_stat SET account = ?, created_at = ?, id = ?,
                    put_timestamp = ?
             ''', (self.account, normalize_timestamp(time.time()), str(uuid4()),
-            put_timestamp))
+                  put_timestamp))
 
     def get_db_version(self, conn):
         if self._db_version == -1:
@@ -1316,7 +1316,7 @@ class AccountBroker(DatabaseBroker):
             WHERE delete_timestamp < ? """, (timestamp, timestamp, timestamp))
 
     def _commit_puts(self, item_list=None):
-        """Handles commiting rows in .pending files."""
+        """Handles committing rows in .pending files."""
         if self.db_file == ':memory:' or not os.path.exists(self.pending_file):
             return
         if item_list is None:
@@ -1332,14 +1332,15 @@ class AccountBroker(DatabaseBroker):
                     if entry:
                         try:
                             (name, put_timestamp, delete_timestamp,
-                                    object_count, bytes_used, deleted) = \
+                             object_count, bytes_used, deleted) = \
                                 pickle.loads(entry.decode('base64'))
-                            item_list.append({'name': name,
-                                      'put_timestamp': put_timestamp,
-                                      'delete_timestamp': delete_timestamp,
-                                      'object_count': object_count,
-                                      'bytes_used': bytes_used,
-                                      'deleted': deleted})
+                            item_list.append(
+                                {'name': name,
+                                 'put_timestamp': put_timestamp,
+                                 'delete_timestamp': delete_timestamp,
+                                 'object_count': object_count,
+                                 'bytes_used': bytes_used,
+                                 'deleted': deleted})
                         except Exception:
                             self.logger.exception(
                                 _('Invalid pending entry %(file)s: %(entry)s'),
@@ -1365,7 +1366,7 @@ class AccountBroker(DatabaseBroker):
                 raise
         with self.get() as conn:
             row = conn.execute(
-                    'SELECT container_count from account_stat').fetchone()
+                'SELECT container_count from account_stat').fetchone()
             return (row[0] == 0)
 
     def reclaim(self, container_timestamp, sync_timestamp):
@@ -1401,28 +1402,6 @@ class AccountBroker(DatabaseBroker):
                     raise
             DatabaseBroker._reclaim(self, conn, container_timestamp)
             conn.commit()
-
-    def get_container_timestamp(self, container_name):
-        """
-        Get the put_timestamp of a container.
-
-        :param container_name: container name
-
-        :returns: put_timestamp of the container
-        """
-        try:
-            self._commit_puts()
-        except LockTimeout:
-            if not self.stale_reads_ok:
-                raise
-        with self.get() as conn:
-            ret = conn.execute('''
-                SELECT put_timestamp FROM container
-                WHERE name = ? AND deleted != 1''',
-                (container_name,)).fetchone()
-            if ret:
-                ret = ret[0]
-            return ret
 
     def put_container(self, name, put_timestamp, delete_timestamp,
                       object_count, bytes_used):
@@ -1513,8 +1492,8 @@ class AccountBroker(DatabaseBroker):
                 SELECT put_timestamp, delete_timestamp, container_count, status
                 FROM account_stat''').fetchone()
             return row['status'] == 'DELETED' or (
-                    row['container_count'] in (None, '', 0, '0') and
-                    row['delete_timestamp'] > row['put_timestamp'])
+                row['container_count'] in (None, '', 0, '0') and
+                row['delete_timestamp'] > row['put_timestamp'])
 
     def is_status_deleted(self):
         """Only returns true if the status field is set to DELETED."""

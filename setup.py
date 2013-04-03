@@ -22,6 +22,10 @@ from swift import __canonical_version__ as version
 name = 'swift'
 
 
+with open('tools/pip-requires', 'r') as f:
+    requires = [x.strip() for x in f if x.strip()]
+
+
 setup(
     name=name,
     version=version,
@@ -33,14 +37,16 @@ setup(
     packages=find_packages(exclude=['test', 'bin']),
     test_suite='nose.collector',
     classifiers=[
-        'Development Status :: 4 - Beta',
+        'Development Status :: 5 - Production/Stable',
         'License :: OSI Approved :: Apache Software License',
         'Operating System :: POSIX :: Linux',
+        'Programming Language :: Python',
         'Programming Language :: Python :: 2.6',
+        'Programming Language :: Python :: 2.7',
         'Environment :: No Input/Output (Daemon)',
         'Environment :: OpenStack',
     ],
-    install_requires=[],  # removed for better compat
+    install_requires=requires,
     scripts=[
         'bin/swift-account-audit',
         'bin/swift-account-auditor',
@@ -95,7 +101,15 @@ setup(
             'tempurl=swift.common.middleware.tempurl:filter_factory',
             'formpost=swift.common.middleware.formpost:filter_factory',
             'name_check=swift.common.middleware.name_check:filter_factory',
+            'bulk=swift.common.middleware.bulk:filter_factory',
+            'container_quotas=swift.common.middleware.container_quotas:'
+            'filter_factory',
+            'account_quotas=swift.common.middleware.account_quotas:'
+            'filter_factory',
             'proxy_logging=swift.common.middleware.proxy_logging:'
+            'filter_factory',
+            'slo=swift.common.middleware.slo:filter_factory',
+            'list_endpoints=swift.common.middleware.list_endpoints:'
             'filter_factory',
         ],
     },

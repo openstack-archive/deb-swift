@@ -26,9 +26,10 @@
 
 import mimetypes
 import os
-import time
 from ConfigParser import ConfigParser
 import uuid
+from random import shuffle
+from time import time
 
 from eventlet import Timeout
 
@@ -37,11 +38,10 @@ from swift.common.utils import cache_from_env, get_logger, \
     get_remote_client, split_path, config_true_value
 from swift.common.constraints import check_utf8
 from swift.proxy.controllers import AccountController, ObjectController, \
-    ContainerController, Controller
-from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPForbidden, \
+    ContainerController
+from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
     HTTPMethodNotAllowed, HTTPNotFound, HTTPPreconditionFailed, \
-    HTTPRequestEntityTooLarge, HTTPRequestTimeout, HTTPServerError, \
-    HTTPServiceUnavailable, HTTPClientDisconnect, status_map, Request, Response
+    HTTPServerError, Request
 
 
 class Application(object):
@@ -110,6 +110,11 @@ class Application(object):
             a.strip()
             for a in conf.get('cors_allow_origin', '').split(',')
             if a.strip()]
+        self.node_timings = {}
+        self.timing_expiry = int(conf.get('timing_expiry', 300))
+        self.sorting_method = conf.get('sorting_method', 'shuffle').lower()
+        self.allow_static_large_object = config_true_value(
+            conf.get('allow_static_large_object', 'true'))
 
     def get_controller(self, path):
         """
@@ -147,7 +152,8 @@ class Application(object):
             req = self.update_request(Request(env))
             return self.handle_request(req)(env, start_response)
         except UnicodeError:
-            err = HTTPPreconditionFailed(request=req, body='Invalid UTF8')
+            err = HTTPPreconditionFailed(
+                request=req, body='Invalid UTF8 or contains NULL')
             return err(env, start_response)
         except (Exception, Timeout):
             start_response('500 Server Error',
@@ -177,11 +183,12 @@ class Application(object):
             try:
                 if not check_utf8(req.path_info):
                     self.logger.increment('errors')
-                    return HTTPPreconditionFailed(request=req,
-                                                  body='Invalid UTF8')
+                    return HTTPPreconditionFailed(
+                        request=req, body='Invalid UTF8 or contains NULL')
             except UnicodeError:
                 self.logger.increment('errors')
-                return HTTPPreconditionFailed(request=req, body='Invalid UTF8')
+                return HTTPPreconditionFailed(
+                    request=req, body='Invalid UTF8 or contains NULL')
 
             try:
                 controller, path_parts = self.get_controller(req.path)
@@ -241,6 +248,33 @@ class Application(object):
         except (Exception, Timeout):
             self.logger.exception(_('ERROR Unhandled exception in request'))
             return HTTPServerError(request=req)
+
+    def sort_nodes(self, nodes):
+        '''
+        Sorts nodes in-place (and returns the sorted list) according to
+        the configured strategy. The default "sorting" is to randomly
+        shuffle the nodes. If the "timing" strategy is chosen, the nodes
+        are sorted according to the stored timing data.
+        '''
+        # In the case of timing sorting, shuffling ensures that close timings
+        # (ie within the rounding resolution) won't prefer one over another.
+        # Python's sort is stable (http://wiki.python.org/moin/HowTo/Sorting/)
+        shuffle(nodes)
+        if self.sorting_method == 'timing':
+            now = time()
+
+            def key_func(node):
+                timing, expires = self.node_timings.get(node['ip'], (-1.0, 0))
+                return timing if expires > now else -1.0
+            nodes.sort(key=key_func)
+        return nodes
+
+    def set_node_timing(self, node, timing):
+        if self.sorting_method != 'timing':
+            return
+        now = time()
+        timing = round(timing, 3)  # sort timings to the millisecond
+        self.node_timings[node['ip']] = (timing, now + self.timing_expiry)
 
 
 def app_factory(global_conf, **local_conf):

@@ -78,7 +78,10 @@ class DomainRemapMiddleware(object):
     def __call__(self, env, start_response):
         if not self.storage_domain:
             return self.app(env, start_response)
-        given_domain = env['HTTP_HOST']
+        if 'HTTP_HOST' in env:
+            given_domain = env['HTTP_HOST']
+        else:
+            given_domain = env['SERVER_NAME']
         port = ''
         if ':' in given_domain:
             given_domain, port = given_domain.rsplit(':', 1)
@@ -102,7 +105,7 @@ class DomainRemapMiddleware(object):
                 # account prefix is not in config list. bail.
                 return self.app(env, start_response)
             prefix_index = self.reseller_prefixes_lower.index(
-                                                    account_reseller_prefix)
+                account_reseller_prefix)
             real_prefix = self.reseller_prefixes[prefix_index]
             if not account.startswith(real_prefix):
                 account_suffix = account[len(real_prefix):]

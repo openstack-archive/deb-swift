@@ -17,6 +17,7 @@
 
 from __future__ import with_statement
 from test.unit import temptree
+import ctypes
 import errno
 import logging
 import mimetools
@@ -34,8 +35,10 @@ from shutil import rmtree
 from StringIO import StringIO
 from functools import partial
 from tempfile import TemporaryFile, NamedTemporaryFile
+from logging import handlers as logging_handlers
 
 from eventlet import sleep
+from mock import patch
 
 from swift.common.exceptions import (Timeout, MessageTimeout,
                                      ConnectionTimeout)
@@ -124,6 +127,7 @@ class TestUtils(unittest.TestCase):
 
     def setUp(self):
         utils.HASH_PATH_SUFFIX = 'endcap'
+        utils.HASH_PATH_PREFIX = 'startcap'
 
     def test_normalize_timestamp(self):
         """ Test swift.common.utils.normalize_timestamp """
@@ -145,6 +149,36 @@ class TestUtils(unittest.TestCase):
                           "1253327593.00000")
         self.assertRaises(ValueError, utils.normalize_timestamp, '')
         self.assertRaises(ValueError, utils.normalize_timestamp, 'abc')
+
+    def test_backwards(self):
+        """ Test swift.common.utils.backward """
+
+        # The lines are designed so that the function would encounter
+        # all of the boundary conditions and typical conditions.
+        # Block boundaries are marked with '<>' characters
+        blocksize = 25
+        lines = ['123456789x12345678><123456789\n',  # block larger than rest
+                 '123456789x123>\n',  # block ends just before \n character
+                 '123423456789\n',
+                 '123456789x\n',  # block ends at the end of line
+                 '<123456789x123456789x123\n',
+                 '<6789x123\n',  # block ends at the beginning of the line
+                 '6789x1234\n',
+                 '1234><234\n',  # block ends typically in the middle of line
+                 '123456789x123456789\n']
+
+        with TemporaryFile('r+w') as f:
+            for line in lines:
+                f.write(line)
+
+            count = len(lines) - 1
+            for line in utils.backward(f, blocksize):
+                self.assertEquals(line, lines[count].split('\n')[0])
+                count -= 1
+
+        # Empty file case
+        with TemporaryFile('r') as f:
+            self.assertEquals([], list(utils.backward(f)))
 
     def test_mkdirs(self):
         testroot = os.path.join(os.path.dirname(__file__), 'mkdirs')
@@ -301,7 +335,7 @@ class TestUtils(unittest.TestCase):
         lfo.tell()
 
     def test_parse_options(self):
-        # use mkstemp to get a file that is definately on disk
+        # use mkstemp to get a file that is definitely on disk
         with NamedTemporaryFile() as f:
             conf_file = f.name
             conf, options = utils.parse_options(test_args=[conf_file])
@@ -376,6 +410,62 @@ class TestUtils(unittest.TestCase):
         logger.notice('test6')
         self.assertEquals(sio.getvalue(),
                           'test1\ntest3\ntest4\ntest6\n')
+
+    def test_get_logger_sysloghandler_plumbing(self):
+        orig_sysloghandler = utils.SysLogHandler
+        syslog_handler_args = []
+        def syslog_handler_catcher(*args, **kwargs):
+            syslog_handler_args.append((args, kwargs))
+            return orig_sysloghandler(*args, **kwargs)
+        syslog_handler_catcher.LOG_LOCAL0 = orig_sysloghandler.LOG_LOCAL0
+        syslog_handler_catcher.LOG_LOCAL3 = orig_sysloghandler.LOG_LOCAL3
+
+        try:
+            utils.SysLogHandler = syslog_handler_catcher
+            logger = utils.get_logger({
+                'log_facility': 'LOG_LOCAL3',
+            }, 'server', log_route='server')
+            self.assertEquals([
+                ((), {'address': '/dev/log',
+                      'facility': orig_sysloghandler.LOG_LOCAL3})],
+                syslog_handler_args)
+
+            syslog_handler_args = []
+            logger = utils.get_logger({
+                'log_facility': 'LOG_LOCAL3',
+                'log_address': '/foo/bar',
+            }, 'server', log_route='server')
+            self.assertEquals([
+                ((), {'address': '/foo/bar',
+                      'facility': orig_sysloghandler.LOG_LOCAL3}),
+                # Second call is because /foo/bar didn't exist (and wasn't a
+                # UNIX domain socket).
+                ((), {'facility': orig_sysloghandler.LOG_LOCAL3})],
+                syslog_handler_args)
+
+            # Using UDP with default port
+            syslog_handler_args = []
+            logger = utils.get_logger({
+                'log_udp_host': 'syslog.funtimes.com',
+            }, 'server', log_route='server')
+            self.assertEquals([
+                ((), {'address': ('syslog.funtimes.com',
+                                  logging.handlers.SYSLOG_UDP_PORT),
+                      'facility': orig_sysloghandler.LOG_LOCAL0})],
+                syslog_handler_args)
+
+            # Using UDP with non-default port
+            syslog_handler_args = []
+            logger = utils.get_logger({
+                'log_udp_host': 'syslog.funtimes.com',
+                'log_udp_port': '2123',
+            }, 'server', log_route='server')
+            self.assertEquals([
+                ((), {'address': ('syslog.funtimes.com', 2123),
+                      'facility': orig_sysloghandler.LOG_LOCAL0})],
+                syslog_handler_args)
+        finally:
+            utils.SysLogHandler = orig_sysloghandler
 
     def test_clean_logger_exception(self):
         # setup stream logging
@@ -497,6 +587,10 @@ class TestUtils(unittest.TestCase):
             self.assertEquals(logger.txn_id, '12345')
             logger.warn('test 12345 test')
             self.assertEquals(strip_value(sio), 'test 12345 test\n')
+            # Test multi line collapsing
+            logger.error('my\nerror\nmessage')
+            log_msg = strip_value(sio)
+            self.assert_('my#012error#012message' in log_msg)
 
             # test client_ip
             self.assertFalse(logger.client_ip)
@@ -533,20 +627,28 @@ class TestUtils(unittest.TestCase):
         self.assert_('127.0.0.1' in myips)
 
     def test_hash_path(self):
+        _prefix = utils.HASH_PATH_PREFIX 
+        utils.HASH_PATH_PREFIX = ''
         # Yes, these tests are deliberately very fragile. We want to make sure
         # that if someones changes the results hash_path produces, they know it
-        self.assertEquals(utils.hash_path('a'),
-                          '1c84525acb02107ea475dcd3d09c2c58')
-        self.assertEquals(utils.hash_path('a', 'c'),
-                          '33379ecb053aa5c9e356c68997cbb59e')
-        self.assertEquals(utils.hash_path('a', 'c', 'o'),
-                          '06fbf0b514e5199dfc4e00f42eb5ea83')
-        self.assertEquals(utils.hash_path('a', 'c', 'o', raw_digest=False),
-                          '06fbf0b514e5199dfc4e00f42eb5ea83')
-        self.assertEquals(utils.hash_path('a', 'c', 'o', raw_digest=True),
-                          '\x06\xfb\xf0\xb5\x14\xe5\x19\x9d\xfcN'
-                          '\x00\xf4.\xb5\xea\x83')
-        self.assertRaises(ValueError, utils.hash_path, 'a', object='o')
+        try:
+            self.assertEquals(utils.hash_path('a'),
+                              '1c84525acb02107ea475dcd3d09c2c58')
+            self.assertEquals(utils.hash_path('a', 'c'),
+                              '33379ecb053aa5c9e356c68997cbb59e')
+            self.assertEquals(utils.hash_path('a', 'c', 'o'),
+                              '06fbf0b514e5199dfc4e00f42eb5ea83')
+            self.assertEquals(utils.hash_path('a', 'c', 'o', raw_digest=False),
+                              '06fbf0b514e5199dfc4e00f42eb5ea83')
+            self.assertEquals(utils.hash_path('a', 'c', 'o', raw_digest=True),
+                              '\x06\xfb\xf0\xb5\x14\xe5\x19\x9d\xfcN'
+                              '\x00\xf4.\xb5\xea\x83')
+            self.assertRaises(ValueError, utils.hash_path, 'a', object='o')
+            utils.HASH_PATH_PREFIX = 'abcdef'
+            self.assertEquals(utils.hash_path('a', 'c', 'o', raw_digest=False),
+                              '363f9b535bfb7d17a43a46a358afca0e')
+        finally:
+            utils.HASH_PATH_PREFIX = _prefix
 
     def test_load_libc_function(self):
         self.assert_(callable(
@@ -632,6 +734,8 @@ log_name = %(yarr)s'''
         utils.drop_privileges(user)
         for func in required_func_calls:
             self.assert_(utils.os.called_funcs[func])
+        import pwd
+        self.assertEquals(pwd.getpwnam(user)[5], utils.os.environ['HOME'])
 
         # reset; test same args, OSError trying to get session leader
         utils.os = MockOs(called_funcs=required_func_calls,
@@ -931,6 +1035,146 @@ log_name = %(yarr)s'''
         self.assertEqual(
             utils.rsync_ip('::ffff:192.0.2.128'), '[::ffff:192.0.2.128]')
 
+    def test_fallocate_reserve(self):
+
+        class StatVFS(object):
+            f_frsize = 1024
+            f_bavail = 1
+
+        def fstatvfs(fd):
+            return StatVFS()
+
+        orig_FALLOCATE_RESERVE = utils.FALLOCATE_RESERVE
+        orig_fstatvfs = utils.os.fstatvfs
+        try:
+            fallocate = utils.FallocateWrapper(noop=True)
+            utils.os.fstatvfs = fstatvfs
+            # Want 1023 reserved, have 1024 * 1 free, so succeeds
+            utils.FALLOCATE_RESERVE = 1023
+            StatVFS.f_frsize = 1024
+            StatVFS.f_bavail = 1
+            self.assertEquals(fallocate(0, 1, 0, ctypes.c_uint64(0)), 0)
+            # Want 1023 reserved, have 512 * 2 free, so succeeds
+            utils.FALLOCATE_RESERVE = 1023
+            StatVFS.f_frsize = 512
+            StatVFS.f_bavail = 2
+            self.assertEquals(fallocate(0, 1, 0, ctypes.c_uint64(0)), 0)
+            # Want 1024 reserved, have 1024 * 1 free, so fails
+            utils.FALLOCATE_RESERVE = 1024
+            StatVFS.f_frsize = 1024
+            StatVFS.f_bavail = 1
+            exc = None
+            try:
+                fallocate(0, 1, 0, ctypes.c_uint64(0))
+            except OSError, err:
+                exc = err
+            self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 1024')
+            # Want 1024 reserved, have 512 * 2 free, so fails
+            utils.FALLOCATE_RESERVE = 1024
+            StatVFS.f_frsize = 512
+            StatVFS.f_bavail = 2
+            exc = None
+            try:
+                fallocate(0, 1, 0, ctypes.c_uint64(0))
+            except OSError, err:
+                exc = err
+            self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 1024')
+            # Want 2048 reserved, have 1024 * 1 free, so fails
+            utils.FALLOCATE_RESERVE = 2048
+            StatVFS.f_frsize = 1024
+            StatVFS.f_bavail = 1
+            exc = None
+            try:
+                fallocate(0, 1, 0, ctypes.c_uint64(0))
+            except OSError, err:
+                exc = err
+            self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 2048')
+            # Want 2048 reserved, have 512 * 2 free, so fails
+            utils.FALLOCATE_RESERVE = 2048
+            StatVFS.f_frsize = 512
+            StatVFS.f_bavail = 2
+            exc = None
+            try:
+                fallocate(0, 1, 0, ctypes.c_uint64(0))
+            except OSError, err:
+                exc = err
+            self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 2048')
+            # Want 1023 reserved, have 1024 * 1 free, but file size is 1, so
+            # fails
+            utils.FALLOCATE_RESERVE = 1023
+            StatVFS.f_frsize = 1024
+            StatVFS.f_bavail = 1
+            exc = None
+            try:
+                fallocate(0, 1, 0, ctypes.c_uint64(1))
+            except OSError, err:
+                exc = err
+            self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1023 <= 1023')
+            # Want 1022 reserved, have 1024 * 1 free, and file size is 1, so
+            # succeeds
+            utils.FALLOCATE_RESERVE = 1022
+            StatVFS.f_frsize = 1024
+            StatVFS.f_bavail = 1
+            self.assertEquals(fallocate(0, 1, 0, ctypes.c_uint64(1)), 0)
+            # Want 1023 reserved, have 1024 * 1 free, and file size is 0, so
+            # succeeds
+            utils.FALLOCATE_RESERVE = 1023
+            StatVFS.f_frsize = 1024
+            StatVFS.f_bavail = 1
+            self.assertEquals(fallocate(0, 1, 0, ctypes.c_uint64(0)), 0)
+            # Want 1024 reserved, have 1024 * 1 free, and even though
+            # file size is 0, since we're under the reserve, fails
+            utils.FALLOCATE_RESERVE = 1024
+            StatVFS.f_frsize = 1024
+            StatVFS.f_bavail = 1
+            exc = None
+            try:
+                fallocate(0, 1, 0, ctypes.c_uint64(0))
+            except OSError, err:
+                exc = err
+            self.assertEquals(str(exc), 'FALLOCATE_RESERVE fail 1024 <= 1024')
+        finally:
+            utils.FALLOCATE_RESERVE = orig_FALLOCATE_RESERVE
+            utils.os.fstatvfs = orig_fstatvfs
+
+    def test_fallocate_func(self):
+
+        class FallocateWrapper(object):
+
+            def __init__(self):
+                self.last_call = None
+
+            def __call__(self, *args):
+                self.last_call = list(args)
+                self.last_call[-1] = self.last_call[-1].value
+                return 0
+
+        orig__sys_fallocate = utils._sys_fallocate
+        try:
+            utils._sys_fallocate = FallocateWrapper()
+            # Ensure fallocate calls _sys_fallocate even with 0 bytes
+            utils._sys_fallocate.last_call = None
+            utils.fallocate(1234, 0)
+            self.assertEquals(utils._sys_fallocate.last_call,
+                              [1234, 1, 0, 0])
+            # Ensure fallocate calls _sys_fallocate even with negative bytes
+            utils._sys_fallocate.last_call = None
+            utils.fallocate(1234, -5678)
+            self.assertEquals(utils._sys_fallocate.last_call,
+                              [1234, 1, 0, 0])
+            # Ensure fallocate calls _sys_fallocate properly with positive
+            # bytes
+            utils._sys_fallocate.last_call = None
+            utils.fallocate(1234, 1)
+            self.assertEquals(utils._sys_fallocate.last_call,
+                              [1234, 1, 0, 1])
+            utils._sys_fallocate.last_call = None
+            utils.fallocate(1234, 10 * 1024 * 1024 * 1024)
+            self.assertEquals(utils._sys_fallocate.last_call,
+                              [1234, 1, 0, 10 * 1024 * 1024 * 1024])
+        finally:
+            utils._sys_fallocate = orig__sys_fallocate
+
 
 class TestStatsdLogging(unittest.TestCase):
     def test_get_logger_statsd_client_not_specified(self):
@@ -958,8 +1202,9 @@ class TestStatsdLogging(unittest.TestCase):
     def test_get_logger_statsd_client_non_defaults(self):
         logger = utils.get_logger({
             'log_statsd_host': 'another.host.com',
-            'log_statsd_port': 9876,
-            'log_statsd_default_sample_rate': 0.75,
+            'log_statsd_port': '9876',
+            'log_statsd_default_sample_rate': '0.75',
+            'log_statsd_sample_rate_factor': '0.81',
             'log_statsd_metric_prefix': 'tomato.sauce',
         }, 'some-name', log_route='some-route')
         self.assertEqual(logger.logger.statsd_client._prefix,
@@ -973,6 +1218,8 @@ class TestStatsdLogging(unittest.TestCase):
         self.assertEqual(logger.logger.statsd_client._port, 9876)
         self.assertEqual(logger.logger.statsd_client._default_sample_rate,
                          0.75)
+        self.assertEqual(logger.logger.statsd_client._sample_rate_factor,
+                         0.81)
 
     def test_sample_rates(self):
         logger = utils.get_logger({'log_statsd_host': 'some.host.com'})
@@ -995,6 +1242,42 @@ class TestStatsdLogging(unittest.TestCase):
         payload = mock_socket.sent[0][0]
         self.assertTrue(payload.endswith("|@0.5"))
 
+    def test_sample_rates_with_sample_rate_factor(self):
+        logger = utils.get_logger({
+            'log_statsd_host': 'some.host.com',
+            'log_statsd_default_sample_rate': '0.82',
+            'log_statsd_sample_rate_factor': '0.91',
+        })
+        effective_sample_rate = 0.82 * 0.91
+
+        mock_socket = MockUdpSocket()
+        # encapsulation? what's that?
+        statsd_client = logger.logger.statsd_client
+        self.assertTrue(statsd_client.random is random.random)
+
+        statsd_client._open_socket = lambda *_: mock_socket
+        statsd_client.random = lambda: effective_sample_rate + 0.001
+
+        logger.increment('tribbles')
+        self.assertEqual(len(mock_socket.sent), 0)
+
+        statsd_client.random = lambda: effective_sample_rate - 0.001
+        logger.increment('tribbles')
+        self.assertEqual(len(mock_socket.sent), 1)
+
+        payload = mock_socket.sent[0][0]
+        self.assertTrue(payload.endswith("|@%s" % effective_sample_rate),
+                       payload)
+
+        effective_sample_rate = 0.587 * 0.91
+        statsd_client.random = lambda: effective_sample_rate - 0.001
+        logger.increment('tribbles', sample_rate=0.587)
+        self.assertEqual(len(mock_socket.sent), 2)
+
+        payload = mock_socket.sent[1][0]
+        self.assertTrue(payload.endswith("|@%s" % effective_sample_rate),
+                       payload)
+
     def test_timing_stats(self):
         class MockController(object):
             def __init__(self, status):
@@ -1007,7 +1290,7 @@ class TestStatsdLogging(unittest.TestCase):
                 self.called = 'timing'
                 self.args = args
 
-        @utils.timing_stats
+        @utils.timing_stats()
         def METHOD(controller):
             return Response(status=controller.status)
 
@@ -1271,6 +1554,57 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
             self.assertEquals(logger.thread_locals, ('5678', '5.6.7.8'))
         finally:
             logger.thread_locals = orig_thread_locals
+
+    def test_no_fdatasync(self):
+        called = []
+        class NoFdatasync:
+            pass
+        def fsync(fd):
+            called.append(fd)
+        with patch('swift.common.utils.os', NoFdatasync()):
+            with patch('swift.common.utils.fsync', fsync):
+                utils.fdatasync(12345)
+                self.assertEquals(called, [12345])
+
+    def test_yes_fdatasync(self):
+        called = []
+        class YesFdatasync:
+            def fdatasync(self, fd):
+                called.append(fd)
+        with patch('swift.common.utils.os', YesFdatasync()):
+            utils.fdatasync(12345)
+            self.assertEquals(called, [12345])
+
+    def test_fsync_bad_fullsync(self):
+        called = []
+        class FCNTL:
+            F_FULLSYNC = 123
+            def fcntl(self, fd, op):
+                raise IOError(18)
+        with patch('swift.common.utils.fcntl', FCNTL()):
+            self.assertRaises(OSError, lambda: utils.fsync(12345))
+
+    def test_fsync_f_fullsync(self):
+        called = []
+        class FCNTL:
+            F_FULLSYNC = 123
+            def fcntl(self, fd, op):
+                called[:] = [fd, op]
+                return 0
+        with patch('swift.common.utils.fcntl', FCNTL()):
+            utils.fsync(12345)
+            self.assertEquals(called, [12345, 123])
+
+    def test_fsync_no_fullsync(self):
+        called = []
+        class FCNTL:
+            pass
+        def fsync(fd):
+            called.append(fd)
+        with patch('swift.common.utils.fcntl', FCNTL()):
+            with patch('os.fsync', fsync):
+                utils.fsync(12345)
+                self.assertEquals(called, [12345])
 
 
 if __name__ == '__main__':

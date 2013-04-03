@@ -39,6 +39,11 @@ Additionally, if the auth system sets the request environ's swift_owner key to
 True, the proxy will return additional header information in some requests,
 such as the X-Container-Sync-Key for a container GET or HEAD.
 
+Users with the special group ``.reseller_admin`` can operate on any account.
+For an example usage please see :mod:`swift.common.middleware.tempauth`.
+If a request is coming from a reseller the auth system sets the request environ
+reseller_request to True. This can be used by other middlewares.
+
 TempAuth will now allow OPTIONS requests to go through without a token.
 
 The user starts a session by sending a ReST request to the auth system to
@@ -52,11 +57,11 @@ Swift is able to authenticate against OpenStack keystone via the
 :mod:`swift.common.middleware.keystoneauth` middleware.
 
 In order to use the ``keystoneauth`` middleware the ``authtoken``
-middleware from keystone will need to be configured.
+middleware from python-keystoneclient will need to be configured.
 
 The ``authtoken`` middleware performs the authentication token
 validation and retrieves actual user authentication information. It
-can be found in the Keystone distribution.
+can be found in the python-keystoneclient distribution.
 
 The ``keystoneauth`` middleware performs authorization and mapping the
 ``keystone`` roles to Swift's ACLs.
@@ -88,7 +93,7 @@ and add auth_token and keystoneauth in your
 add the configuration for the authtoken middleware::
 
   [filter:authtoken]
-  paste.filter_factory = keystone.middleware.auth_token:filter_factory
+  paste.filter_factory = keystoneclient.middleware.auth_token:filter_factory
   auth_host = keystonehost
   auth_port = 35357
   auth_protocol = http
@@ -96,6 +101,7 @@ add the configuration for the authtoken middleware::
   admin_tenant_name = service
   admin_user = swift
   admin_password = password
+  cache = swift.cache
 
 The actual values for these variables will need to be set depending on
 your situation.  For more information, please refer to the Keystone
@@ -128,6 +134,11 @@ containers are the ones who has the Keystone role specified in the
 This user who have one of those role will be able to give ACLs to
 other users on containers, see the documentation on ACL here
 :mod:`swift.common.middleware.acl`.
+
+Users with the Keystone role defined in ``reseller_admin_role``
+(``ResellerAdmin`` by default) can operate on any account. The auth system
+sets the request environ reseller_request to True if a request is coming
+from an user with this role. This can be used by other middlewares.
 
 --------------
 Extending Auth

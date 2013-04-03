@@ -1,5 +1,20 @@
 #!/usr/bin/python
 
+# Copyright (c) 2010-2012 OpenStack, LLC.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import json
 import unittest
 from nose import SkipTest
@@ -9,7 +24,7 @@ from swift.common.constraints import MAX_META_COUNT, MAX_META_NAME_LENGTH, \
     MAX_META_OVERALL_SIZE, MAX_META_VALUE_LENGTH
 
 from swift_testing import check_response, retry, skip, skip2, skip3, \
-                          swift_test_user
+                          swift_test_perm, web_front_end
 
 
 class TestContainer(unittest.TestCase):
@@ -382,8 +397,8 @@ class TestContainer(unittest.TestCase):
         # Make the container accessible by the second account
         def post(url, token, parsed, conn):
             conn.request('POST', parsed.path + '/' + self.name, '',
-                {'X-Auth-Token': token, 'X-Container-Read': 'test2',
-                 'X-Container-Write': 'test2'})
+                {'X-Auth-Token': token, 'X-Container-Read': swift_test_perm[1],
+                 'X-Container-Write': swift_test_perm[1]})
             return check_response(conn)
         resp = retry(post)
         resp.read()
@@ -450,7 +465,8 @@ class TestContainer(unittest.TestCase):
         # Now make the container also writeable by the second account
         def post(url, token, parsed, conn):
             conn.request('POST', parsed.path + '/' + self.name, '',
-                {'X-Auth-Token': token, 'X-Container-Write': 'test2'})
+                {'X-Auth-Token': token,
+                 'X-Container-Write': swift_test_perm[1]})
             return check_response(conn)
         resp = retry(post)
         resp.read()
@@ -487,7 +503,7 @@ class TestContainer(unittest.TestCase):
         # Make the container accessible by the third account
         def post(url, token, parsed, conn):
             conn.request('POST', parsed.path + '/' + self.name, '',
-               {'X-Auth-Token': token, 'X-Container-Read': swift_test_user[2]})
+               {'X-Auth-Token': token, 'X-Container-Read': swift_test_perm[2]})
             return check_response(conn)
         resp = retry(post)
         resp.read()
@@ -508,7 +524,7 @@ class TestContainer(unittest.TestCase):
         def post(url, token, parsed, conn):
             conn.request('POST', parsed.path + '/' + self.name, '',
                          {'X-Auth-Token': token,
-                          'X-Container-Write': swift_test_user[2]})
+                          'X-Container-Write': swift_test_perm[2]})
             return check_response(conn)
         resp = retry(post)
         resp.read()
@@ -536,6 +552,21 @@ class TestContainer(unittest.TestCase):
         self.assertEquals(resp.status, 400)
         self.assertEquals(resp.getheader('Content-Type'),
                           'text/html; charset=UTF-8')
+
+    def test_null_name(self):
+        if skip:
+            raise SkipTest
+
+        def put(url, token, parsed, conn):
+            conn.request('PUT', '%s/abc%%00def' % parsed.path, '',
+                         {'X-Auth-Token': token})
+            return check_response(conn)
+        resp = retry(put)
+        if (web_front_end == 'apache2'):
+            self.assertEquals(resp.status, 404)
+        else:
+            self.assertEquals(resp.read(), 'Invalid UTF8 or contains NULL')
+            self.assertEquals(resp.status, 412)
 
 
 if __name__ == '__main__':
