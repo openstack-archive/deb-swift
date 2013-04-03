@@ -13,11 +13,10 @@ Author: Adrian Smith <adrian_f_smith@dell.com>
 Origin: https://review.openstack.org/#/c/19730/
 Bug-Ubuntu: https://bugs.launchpad.net/swift/+bug/1095130
 
-diff --git a/doc/source/cors.rst b/doc/source/cors.rst
-new file mode 100644
-index 0000000..eb2af83
---- /dev/null
-+++ b/doc/source/cors.rst
+Index: swift/doc/source/cors.rst
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ swift/doc/source/cors.rst	2013-04-03 20:36:27.000000000 +0800
 @@ -0,0 +1,151 @@
 +====
 +CORS
@@ -170,11 +169,11 @@ index 0000000..eb2af83
 +.. _CORS: https://developer.mozilla.org/en-US/docs/HTTP/Access_control_CORS
 +.. _preflight request: https://developer.mozilla.org/en-US/docs/HTTP/Access_control_CORS#Preflighted_requests
 +
-diff --git a/doc/source/index.rst b/doc/source/index.rst
-index 2d8b97b..6560a27 100644
---- a/doc/source/index.rst
-+++ b/doc/source/index.rst
-@@ -52,6 +52,7 @@ Overview and Concepts
+Index: swift/doc/source/index.rst
+===================================================================
+--- swift.orig/doc/source/index.rst	2013-04-03 20:33:07.000000000 +0800
++++ swift/doc/source/index.rst	2013-04-03 20:36:27.000000000 +0800
+@@ -52,6 +52,7 @@
      overview_object_versioning
      overview_container_sync
      overview_expiring_objects
@@ -182,11 +181,11 @@ index 2d8b97b..6560a27 100644
      associated_projects
  
  Developer Documentation
-diff --git a/doc/source/misc.rst b/doc/source/misc.rst
-index 0c0d607..5943fa7 100644
---- a/doc/source/misc.rst
-+++ b/doc/source/misc.rst
-@@ -172,34 +172,3 @@ Proxy Logging
+Index: swift/doc/source/misc.rst
+===================================================================
+--- swift.orig/doc/source/misc.rst	2013-04-03 20:33:07.000000000 +0800
++++ swift/doc/source/misc.rst	2013-04-03 20:36:27.000000000 +0800
+@@ -172,34 +172,3 @@
      :members:
      :show-inheritance:
  
@@ -221,11 +220,11 @@ index 0c0d607..5943fa7 100644
 -* If 200, browser makes PUT, POST, DELETE, HEAD, GET request to Swift
 -
 -CORS should be used in conjunction with TempURL and FormPost.
-diff --git a/swift/proxy/controllers/base.py b/swift/proxy/controllers/base.py
-index 200e968..3c93c67 100644
---- a/swift/proxy/controllers/base.py
-+++ b/swift/proxy/controllers/base.py
-@@ -113,6 +113,8 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
+Index: swift/swift/proxy/controllers/base.py
+===================================================================
+--- swift.orig/swift/proxy/controllers/base.py	2013-04-03 20:33:07.000000000 +0800
++++ swift/swift/proxy/controllers/base.py	2013-04-03 20:36:27.000000000 +0800
+@@ -113,6 +113,8 @@
                  'x-container-meta-access-control-allow-origin'),
              'allow_headers': headers.get(
                  'x-container-meta-access-control-allow-headers'),
@@ -234,7 +233,7 @@ index 200e968..3c93c67 100644
              'max_age': headers.get(
                  'x-container-meta-access-control-max-age')
          },
-@@ -122,6 +124,70 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
+@@ -122,6 +124,70 @@
      }
  
  
@@ -305,7 +304,7 @@ index 200e968..3c93c67 100644
  class Controller(object):
      """Base WSGI controller class for the proxy"""
      server_type = 'Base'
-@@ -694,49 +760,76 @@ class Controller(object):
+@@ -694,49 +760,76 @@
          return self.best_response(req, statuses, reasons, bodies,
                                    '%s %s' % (server_type, req.method))
  
@@ -404,11 +403,11 @@ index 200e968..3c93c67 100644
 -    def OPTIONS(self, req):
 -        return self.OPTIONS_base(req)
 +        return resp
-diff --git a/swift/proxy/controllers/container.py b/swift/proxy/controllers/container.py
-index 915e476..c7693b0 100644
---- a/swift/proxy/controllers/container.py
-+++ b/swift/proxy/controllers/container.py
-@@ -32,7 +32,7 @@ from swift.common.utils import normalize_timestamp, public
+Index: swift/swift/proxy/controllers/container.py
+===================================================================
+--- swift.orig/swift/proxy/controllers/container.py	2013-04-03 20:33:07.000000000 +0800
++++ swift/swift/proxy/controllers/container.py	2013-04-03 20:36:27.000000000 +0800
+@@ -32,7 +32,7 @@
  from swift.common.constraints import check_metadata, MAX_CONTAINER_NAME_LENGTH
  from swift.common.http import HTTP_ACCEPTED
  from swift.proxy.controllers.base import Controller, delay_denial, \
@@ -417,7 +416,7 @@ index 915e476..c7693b0 100644
  from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
      HTTPNotFound
  
-@@ -95,17 +95,20 @@ class ContainerController(Controller):
+@@ -95,17 +95,20 @@
  
      @public
      @delay_denial
@@ -438,7 +437,7 @@ index 915e476..c7693b0 100644
      def PUT(self, req):
          """HTTP PUT request handler."""
          error_response = \
-@@ -151,6 +154,7 @@ class ContainerController(Controller):
+@@ -151,6 +154,7 @@
          return resp
  
      @public
@@ -446,7 +445,7 @@ index 915e476..c7693b0 100644
      def POST(self, req):
          """HTTP POST request handler."""
          error_response = \
-@@ -177,6 +181,7 @@ class ContainerController(Controller):
+@@ -177,6 +181,7 @@
          return resp
  
      @public
@@ -454,11 +453,11 @@ index 915e476..c7693b0 100644
      def DELETE(self, req):
          """HTTP DELETE request handler."""
          account_partition, accounts, container_count = \
-diff --git a/swift/proxy/controllers/obj.py b/swift/proxy/controllers/obj.py
-index 0e30936..d72dab0 100644
---- a/swift/proxy/controllers/obj.py
-+++ b/swift/proxy/controllers/obj.py
-@@ -49,7 +49,8 @@ from swift.common.http import is_success, is_client_error, HTTP_CONTINUE, \
+Index: swift/swift/proxy/controllers/obj.py
+===================================================================
+--- swift.orig/swift/proxy/controllers/obj.py	2013-04-03 20:33:07.000000000 +0800
++++ swift/swift/proxy/controllers/obj.py	2013-04-03 20:36:27.000000000 +0800
+@@ -52,7 +52,8 @@
      HTTP_CREATED, HTTP_MULTIPLE_CHOICES, HTTP_NOT_FOUND, \
      HTTP_INTERNAL_SERVER_ERROR, HTTP_SERVICE_UNAVAILABLE, \
      HTTP_INSUFFICIENT_STORAGE
@@ -468,7 +467,7 @@ index 0e30936..d72dab0 100644
  from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPNotFound, \
      HTTPPreconditionFailed, HTTPRequestEntityTooLarge, HTTPRequestTimeout, \
      HTTPServerError, HTTPServiceUnavailable, Request, Response, \
-@@ -405,18 +406,21 @@ class ObjectController(Controller):
+@@ -378,18 +379,21 @@
          return resp
  
      @public
@@ -490,7 +489,7 @@ index 0e30936..d72dab0 100644
      @delay_denial
      def POST(self, req):
          """HTTP POST request handler."""
-@@ -541,6 +545,7 @@ class ObjectController(Controller):
+@@ -514,6 +518,7 @@
                                          _('Expect: 100-continue on %s') % path)
  
      @public
@@ -498,7 +497,7 @@ index 0e30936..d72dab0 100644
      @delay_denial
      def PUT(self, req):
          """HTTP PUT request handler."""
-@@ -838,6 +843,7 @@ class ObjectController(Controller):
+@@ -811,6 +816,7 @@
          return resp
  
      @public
@@ -506,7 +505,7 @@ index 0e30936..d72dab0 100644
      @delay_denial
      def DELETE(self, req):
          """HTTP DELETE request handler."""
-@@ -936,6 +942,7 @@ class ObjectController(Controller):
+@@ -909,6 +915,7 @@
          return resp
  
      @public
@@ -514,11 +513,11 @@ index 0e30936..d72dab0 100644
      @delay_denial
      def COPY(self, req):
          """HTTP COPY request handler."""
-diff --git a/test/unit/proxy/test_server.py b/test/unit/proxy/test_server.py
-index bbac1eb..c5da1d0 100755
---- a/test/unit/proxy/test_server.py
-+++ b/test/unit/proxy/test_server.py
-@@ -52,7 +52,7 @@ from swift.common.utils import mkdirs, normalize_timestamp, NullLogger
+Index: swift/test/unit/proxy/test_server.py
+===================================================================
+--- swift.orig/test/unit/proxy/test_server.py	2013-04-03 20:33:07.000000000 +0800
++++ swift/test/unit/proxy/test_server.py	2013-04-03 20:36:27.000000000 +0800
+@@ -50,7 +50,7 @@
  from swift.common.wsgi import monkey_patch_mimetools
  from swift.proxy.controllers.obj import SegmentedIterable
  from swift.proxy.controllers.base import get_container_memcache_key, \
@@ -527,7 +526,7 @@ index bbac1eb..c5da1d0 100755
  import swift.proxy.controllers
  from swift.common.swob import Request, Response, HTTPNotFound, \
      HTTPUnauthorized
-@@ -184,6 +184,17 @@ def teardown():
+@@ -181,6 +181,17 @@
          Request.__del__ = Request._orig_del
  
  
@@ -545,7 +544,7 @@ index bbac1eb..c5da1d0 100755
  def fake_http_connect(*code_iter, **kwargs):
  
      class FakeConn(object):
-@@ -3690,8 +3701,8 @@ class TestObjectController(unittest.TestCase):
+@@ -3558,8 +3569,8 @@
                  7)
              self.assertEquals('999', resp.headers['access-control-max-age'])
              self.assertEquals(
@@ -556,7 +555,7 @@ index bbac1eb..c5da1d0 100755
              req = Request.blank(
                  '/a/c/o.jpg',
                  {'REQUEST_METHOD': 'OPTIONS'},
-@@ -3750,8 +3761,73 @@ class TestObjectController(unittest.TestCase):
+@@ -3618,8 +3629,73 @@
                  7)
              self.assertEquals('999', resp.headers['access-control-max-age'])
              self.assertEquals(
@@ -632,7 +631,7 @@ index bbac1eb..c5da1d0 100755
  
  
  class TestContainerController(unittest.TestCase):
-@@ -4296,8 +4372,8 @@ class TestContainerController(unittest.TestCase):
+@@ -4164,8 +4240,8 @@
                  6)
              self.assertEquals('999', resp.headers['access-control-max-age'])
              self.assertEquals(
@@ -643,7 +642,7 @@ index bbac1eb..c5da1d0 100755
              req = Request.blank(
                  '/a/c',
                  {'REQUEST_METHOD': 'OPTIONS'},
-@@ -4357,8 +4433,73 @@ class TestContainerController(unittest.TestCase):
+@@ -4225,8 +4301,73 @@
                  6)
              self.assertEquals('999', resp.headers['access-control-max-age'])
              self.assertEquals(
@@ -719,7 +718,7 @@ index bbac1eb..c5da1d0 100755
  
  
  class TestAccountController(unittest.TestCase):
-@@ -4394,6 +4535,22 @@ class TestAccountController(unittest.TestCase):
+@@ -4262,6 +4403,22 @@
                  self.assertTrue(
                      verb in resp.headers['Allow'])
              self.assertEquals(len(resp.headers['Allow'].split(', ')), 4)
@@ -742,6 +741,3 @@ index bbac1eb..c5da1d0 100755
              self.app.allow_account_management = True
              controller = proxy_server.AccountController(self.app, 'account')
              req = Request.blank('/account', {'REQUEST_METHOD': 'OPTIONS'})
--- 
-1.7.9.5
-
