@@ -2,8 +2,7 @@ swift (1.8.0~rc2-1) experimental; urgency=low
 
   * New upstream release.
   * Fixed typoe dependency to python-swiftclient (and not python-swift-client).
-  * Removed now applied upstream patch Fix-keystoneauth-with-OPTIONS-headers
-  * Refreshes debian/patches/Add-handler-for-CORS-actual-requests.patch.
+  * Removed patches now applied upstream.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 03 Apr 2013 20:31:31 +0800
 
