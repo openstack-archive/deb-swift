@@ -1,14 +1,14 @@
-Description: Allow all headers requested for CORS.
+Description: Allow all headers requested for CORS
  We allow all headers requested in preflight request. The CORS specification
  does leave the door open for this, as mentioned in
- http://www.w3.org/TR/cors/#resource-preflight-requests.
+ http://www.w3.org/TR/cors/#resource-preflight-requests
  .
  Note: Since the list of headers can be unbounded simply returning headers can
  be enough.
-Author: Chmouel Boudjnah <chmouel@enovance.com>
-Origin: https://review.openstack.org/#/c/24415/
 Bug-Ubuntu: https://bugs.launchpad.net/swift/+bug/1155034
-Date: Sat, 16 Mar 2013 09:40:38 +0100
+Author: Chmouel Boudjnah <chmouel@enovance.com>
+Origin: upstream, https://review.openstack.org/#/c/24978/
+Date: 2013-04-16
 
 diff --git a/doc/source/cors.rst b/doc/source/cors.rst
 index 8ddf7d8..ca218ae 100644
@@ -81,10 +81,10 @@ index 4a4d13f..3886db8 100644
  
          return resp
 diff --git a/test/unit/proxy/test_server.py b/test/unit/proxy/test_server.py
-index 3e9640f..e65aba3 100644
+index d510d30..5ae3c57 100644
 --- a/test/unit/proxy/test_server.py
 +++ b/test/unit/proxy/test_server.py
-@@ -3911,7 +3911,6 @@ class TestObjectController(unittest.TestCase):
+@@ -3999,7 +3999,6 @@ class TestObjectController(unittest.TestCase):
                  return {
                      'cors': {
                          'allow_origin': 'http://foo.bar:8080 https://foo.bar',
@@ -92,7 +92,7 @@ index 3e9640f..e65aba3 100644
                          'max_age': '999',
                      }
                  }
-@@ -3934,9 +3933,6 @@ class TestObjectController(unittest.TestCase):
+@@ -4022,9 +4021,6 @@ class TestObjectController(unittest.TestCase):
                  len(resp.headers['access-control-allow-methods'].split(', ')),
                  7)
              self.assertEquals('999', resp.headers['access-control-max-age'])
@@ -102,7 +102,7 @@ index 3e9640f..e65aba3 100644
              req = Request.blank(
                  '/a/c/o.jpg',
                  {'REQUEST_METHOD': 'OPTIONS'},
-@@ -3971,7 +3967,6 @@ class TestObjectController(unittest.TestCase):
+@@ -4059,7 +4055,6 @@ class TestObjectController(unittest.TestCase):
                  return {
                      'cors': {
                          'allow_origin': '*',
@@ -110,7 +110,7 @@ index 3e9640f..e65aba3 100644
                          'max_age': '999',
                      }
                  }
-@@ -3994,9 +3989,6 @@ class TestObjectController(unittest.TestCase):
+@@ -4082,9 +4077,6 @@ class TestObjectController(unittest.TestCase):
                  len(resp.headers['access-control-allow-methods'].split(', ')),
                  7)
              self.assertEquals('999', resp.headers['access-control-max-age'])
@@ -120,7 +120,7 @@ index 3e9640f..e65aba3 100644
  
      def test_CORS_valid(self):
          with save_globals():
-@@ -4739,7 +4731,6 @@ class TestContainerController(unittest.TestCase):
+@@ -4827,7 +4819,6 @@ class TestContainerController(unittest.TestCase):
                  return {
                      'cors': {
                          'allow_origin': 'http://foo.bar:8080 https://foo.bar',
@@ -128,7 +128,7 @@ index 3e9640f..e65aba3 100644
                          'max_age': '999',
                      }
                  }
-@@ -4762,9 +4753,6 @@ class TestContainerController(unittest.TestCase):
+@@ -4850,9 +4841,6 @@ class TestContainerController(unittest.TestCase):
                  len(resp.headers['access-control-allow-methods'].split(', ')),
                  6)
              self.assertEquals('999', resp.headers['access-control-max-age'])
@@ -138,7 +138,7 @@ index 3e9640f..e65aba3 100644
              req = Request.blank(
                  '/a/c',
                  {'REQUEST_METHOD': 'OPTIONS'},
-@@ -4800,7 +4788,6 @@ class TestContainerController(unittest.TestCase):
+@@ -4888,7 +4876,6 @@ class TestContainerController(unittest.TestCase):
                  return {
                      'cors': {
                          'allow_origin': '*',
@@ -146,7 +146,7 @@ index 3e9640f..e65aba3 100644
                          'max_age': '999',
                      }
                  }
-@@ -4823,8 +4810,20 @@ class TestContainerController(unittest.TestCase):
+@@ -4911,8 +4898,20 @@ class TestContainerController(unittest.TestCase):
                  len(resp.headers['access-control-allow-methods'].split(', ')),
                  6)
              self.assertEquals('999', resp.headers['access-control-max-age'])
@@ -169,5 +169,5 @@ index 3e9640f..e65aba3 100644
  
      def test_CORS_valid(self):
 -- 
-1.7.10.4
+1.7.9.5
 
