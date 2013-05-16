@@ -1,0 +1,173 @@
+Description: Allow all headers requested for CORS
+ We allow all headers requested in preflight request. The CORS specification
+ does leave the door open for this, as mentioned in
+ http://www.w3.org/TR/cors/#resource-preflight-requests
+ .
+ Note: Since the list of headers can be unbounded simply returning headers can
+ be enough.
+Bug-Ubuntu: https://bugs.launchpad.net/swift/+bug/1155034
+Author: Chmouel Boudjnah <chmouel@enovance.com>
+Origin: upstream, https://review.openstack.org/#/c/24978/
+Date: 2013-04-16
+
+diff --git a/doc/source/cors.rst b/doc/source/cors.rst
+index 8ddf7d8..ca218ae 100644
+--- a/doc/source/cors.rst
++++ b/doc/source/cors.rst
+@@ -22,10 +22,6 @@ The supported headers are,
+ |X-Container-Meta-Access-Control-Max-Age       | Max age for the Origin to    |
+ |                                              | hold the preflight results.  |
+ +----------------------------------------------+------------------------------+
+-|X-Container-Meta-Access-Control-Allow-Headers | Headers to be allowed in     |
+-|                                              | actual request by browser,   |
+-|                                              | space separated.             |
+-+----------------------------------------------+------------------------------+
+ |X-Container-Meta-Access-Control-Expose-Headers| Headers exposed to the user  |
+ |                                              | agent (e.g. browser) in the  |
+ |                                              | the actual request response. |
+diff --git a/swift/proxy/controllers/base.py b/swift/proxy/controllers/base.py
+index 4a4d13f..3886db8 100644
+--- a/swift/proxy/controllers/base.py
++++ b/swift/proxy/controllers/base.py
+@@ -34,7 +34,7 @@ from eventlet.timeout import Timeout
+ 
+ from swift.common.wsgi import make_pre_authed_request
+ from swift.common.utils import normalize_timestamp, config_true_value, \
+-    public, split_path, cache_from_env
++    public, split_path, cache_from_env, list_from_csv
+ from swift.common.bufferedhttp import http_connect
+ from swift.common.constraints import MAX_ACCOUNT_NAME_LENGTH
+ from swift.common.exceptions import ChunkReadTimeout, ConnectionTimeout
+@@ -129,8 +129,6 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
+         'cors': {
+             'allow_origin': headers.get(
+                 'x-container-meta-access-control-allow-origin'),
+-            'allow_headers': headers.get(
+-                'x-container-meta-access-control-allow-headers'),
+             'expose_headers': headers.get(
+                 'x-container-meta-access-control-expose-headers'),
+             'max_age': headers.get(
+@@ -905,15 +903,15 @@ class Controller(object):
+             resp.status = HTTP_UNAUTHORIZED
+             return resp
+ 
+-        # Always allow the x-auth-token header. This ensures
+-        # clients can always make a request to the resource.
++        # Allow all headers requested in the request. The CORS
++        # specification does leave the door open for this, as mentioned in
++        # http://www.w3.org/TR/cors/#resource-preflight-requests
++        # Note: Since the list of headers can be unbounded
++        # simply returning headers can be enough.
+         allow_headers = set()
+-        if cors.get('allow_headers'):
++        if req.headers.get('Access-Control-Request-Headers'):
+             allow_headers.update(
+-                [a.strip()
+-                 for a in cors['allow_headers'].split(' ')
+-                 if a.strip()])
+-        allow_headers.add('x-auth-token')
++                list_from_csv(req.headers['Access-Control-Request-Headers']))
+ 
+         # Populate the response with the CORS preflight headers
+         headers['access-control-allow-origin'] = req_origin_value
+@@ -921,7 +919,8 @@ class Controller(object):
+             headers['access-control-max-age'] = cors.get('max_age')
+         headers['access-control-allow-methods'] = \
+             ', '.join(self.allowed_methods)
+-        headers['access-control-allow-headers'] = ', '.join(allow_headers)
++        if allow_headers:
++            headers['access-control-allow-headers'] = ', '.join(allow_headers)
+         resp.headers = headers
+ 
+         return resp
+diff --git a/test/unit/proxy/test_server.py b/test/unit/proxy/test_server.py
+index d510d30..5ae3c57 100644
+--- a/test/unit/proxy/test_server.py
++++ b/test/unit/proxy/test_server.py
+@@ -3999,7 +3999,6 @@ class TestObjectController(unittest.TestCase):
+                 return {
+                     'cors': {
+                         'allow_origin': 'http://foo.bar:8080 https://foo.bar',
+-                        'allow_headers': 'x-foo',
+                         'max_age': '999',
+                     }
+                 }
+@@ -4022,9 +4021,6 @@ class TestObjectController(unittest.TestCase):
+                 len(resp.headers['access-control-allow-methods'].split(', ')),
+                 7)
+             self.assertEquals('999', resp.headers['access-control-max-age'])
+-            self.assertEquals(
+-                'x-auth-token, x-foo',
+-                sortHeaderNames(resp.headers['access-control-allow-headers']))
+             req = Request.blank(
+                 '/a/c/o.jpg',
+                 {'REQUEST_METHOD': 'OPTIONS'},
+@@ -4059,7 +4055,6 @@ class TestObjectController(unittest.TestCase):
+                 return {
+                     'cors': {
+                         'allow_origin': '*',
+-                        'allow_headers': 'x-foo',
+                         'max_age': '999',
+                     }
+                 }
+@@ -4082,9 +4077,6 @@ class TestObjectController(unittest.TestCase):
+                 len(resp.headers['access-control-allow-methods'].split(', ')),
+                 7)
+             self.assertEquals('999', resp.headers['access-control-max-age'])
+-            self.assertEquals(
+-                'x-auth-token, x-foo',
+-                sortHeaderNames(resp.headers['access-control-allow-headers']))
+ 
+     def test_CORS_valid(self):
+         with save_globals():
+@@ -4827,7 +4819,6 @@ class TestContainerController(unittest.TestCase):
+                 return {
+                     'cors': {
+                         'allow_origin': 'http://foo.bar:8080 https://foo.bar',
+-                        'allow_headers': 'x-foo',
+                         'max_age': '999',
+                     }
+                 }
+@@ -4850,9 +4841,6 @@ class TestContainerController(unittest.TestCase):
+                 len(resp.headers['access-control-allow-methods'].split(', ')),
+                 6)
+             self.assertEquals('999', resp.headers['access-control-max-age'])
+-            self.assertEquals(
+-                'x-auth-token, x-foo',
+-                sortHeaderNames(resp.headers['access-control-allow-headers']))
+             req = Request.blank(
+                 '/a/c',
+                 {'REQUEST_METHOD': 'OPTIONS'},
+@@ -4888,7 +4876,6 @@ class TestContainerController(unittest.TestCase):
+                 return {
+                     'cors': {
+                         'allow_origin': '*',
+-                        'allow_headers': 'x-foo',
+                         'max_age': '999',
+                     }
+                 }
+@@ -4911,8 +4898,20 @@ class TestContainerController(unittest.TestCase):
+                 len(resp.headers['access-control-allow-methods'].split(', ')),
+                 6)
+             self.assertEquals('999', resp.headers['access-control-max-age'])
++
++            req = Request.blank(
++                '/a/c/o.jpg',
++                {'REQUEST_METHOD': 'OPTIONS'},
++                headers={'Origin': 'https://bar.baz',
++                         'Access-Control-Request-Headers':
++                         'x-foo, x-bar, x-auth-token',
++                         'Access-Control-Request-Method': 'GET'}
++            )
++            req.content_length = 0
++            resp = controller.OPTIONS(req)
++            self.assertEquals(200, resp.status_int)
+             self.assertEquals(
+-                'x-auth-token, x-foo',
++                sortHeaderNames('x-foo, x-bar, x-auth-token'),
+                 sortHeaderNames(resp.headers['access-control-allow-headers']))
+ 
+     def test_CORS_valid(self):
+-- 
+1.7.9.5
+

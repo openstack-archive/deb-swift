@@ -7,23 +7,24 @@ Uploaders: Julien Danjou <acid@debian.org>,
            Ghe Rivero <ghe.rivero@stackops.com>,
            Mehdi Abaakouk <sileht@sileht.net>
 Build-Depends: debhelper (>= 9),
- python-all (>=2.6.6-3~)
-Build-Depends-Indep: openstack-pkg-tools,
+ python-all (>=2.6.6-3~), openstack-pkg-tools
+Build-Depends-Indep: python-coverage,
  python-eventlet (>= 0.9.8),
  python-greenlet (>= 0.3.1),
  python-mock,
  python-netifaces,
- python-nose, 
- python-openssl,   
+ python-nose,
+ python-nosexcover,
+ python-openssl,
  python-paste,
  python-pastedeploy,
  python-setuptools,
  python-simplejson,
- python-sphinx (>= 1.0),
+ python-sphinx (>= 1.1.2),
  python-swiftclient,
- python-webob,
+ python-webob (>= 1.2),
  python-xattr
-Standards-Version: 3.9.3
+Standards-Version: 3.9.4
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/swift.git;a=summary
 Vcs-Git: git://anonscm.debian.org/openstack/swift.git
 Homepage: http://launchpad.net/swift
@@ -32,17 +33,19 @@ Package: python-swift
 Architecture: all
 Section: python
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: adduser, ${python:Depends}, ${misc:Depends},
+Depends: adduser,
+ python-eventlet (>= 0.9.8),
+ python-greenlet (>= 0.3.1),
+ python-netifaces,
  python-openssl,
- python-setuptools,
  python-paste,
  python-pastedeploy,
- python-webob (>= 0.9.7.1~hg20100111-1~racklabs1),
+ python-setuptools,
  python-simplejson,
+ python-webob (>= 1.2),
  python-xattr,
- python-netifaces,
- python-greenlet (>= 0.3.1),
- python-eventlet (>= 0.9.8)
+ ${misc:Depends},
+ ${python:Depends},
 Provides: ${python:Provides}
 Description: distributed virtual object store - Python libraries
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object

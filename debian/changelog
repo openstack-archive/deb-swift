@@ -1,4 +1,16 @@
-swift (1.8.0~rc2-1) experimental; urgency=low
+swift (1.8.0-2) experimental; urgency=low
+
+  * Updates the Allow-all-headers-requested-for-CORS.patch.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 15 May 2013 22:32:52 +0800
+
+swift (1.8.0-1) experimental; urgency=low
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 03 Apr 2013 20:30:31 +0800
+
+swift (1.7.5-3) experimental; urgency=low
 
   * New upstream release.
   * Fixed typoe dependency to python-swiftclient (and not python-swift-client).
