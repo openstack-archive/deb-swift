@@ -1,5 +1,6 @@
-swift (1.8.0-2) experimental; urgency=low
+swift (1.8.0-2) unstable; urgency=low
 
+  * Upload to unstable.
   * Updates the Allow-all-headers-requested-for-CORS.patch.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 15 May 2013 22:32:52 +0800
