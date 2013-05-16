@@ -27,7 +27,7 @@ import tempfile
 from contextlib import contextmanager
 from eventlet.green import subprocess
 from eventlet import Timeout, tpool
-from test.unit import FakeLogger
+from test.unit import FakeLogger, mock
 from swift.common import utils
 from swift.common.utils import hash_path, mkdirs, normalize_timestamp
 from swift.common import ring
@@ -118,21 +118,24 @@ def _create_test_ring(path):
         {'id': 2, 'device': 'sda', 'zone': 2, 'ip': '127.0.0.2', 'port': 6000},
         {'id': 3, 'device': 'sda', 'zone': 4, 'ip': '127.0.0.3', 'port': 6000},
         {'id': 4, 'device': 'sda', 'zone': 5, 'ip': '127.0.0.4', 'port': 6000},
-        {'id': 5, 'device': 'sda', 'zone': 6, 'ip': '127.0.0.5', 'port': 6000},
-        {'id': 6, 'device': 'sda', 'zone': 7, 'ip': '127.0.0.6', 'port': 6000},
+        {'id': 5, 'device': 'sda', 'zone': 6,
+         'ip': 'fe80::202:b3ff:fe1e:8329', 'port': 6000},
+        {'id': 6, 'device': 'sda', 'zone': 7,
+         'ip': '2001:0db8:85a3:0000:0000:8a2e:0370:7334', 'port': 6000},
         ]
     intended_part_shift = 30
     intended_reload_time = 15
     pickle.dump(ring.RingData(intended_replica2part2dev_id,
         intended_devs, intended_part_shift),
         GzipFile(testgz, 'wb'))
-    return ring.Ring(testgz, reload_time=intended_reload_time)
+    return ring.Ring(path, ring_name='object', reload_time=intended_reload_time)
 
 
 class TestObjectReplicator(unittest.TestCase):
 
     def setUp(self):
         utils.HASH_PATH_SUFFIX = 'endcap'
+        utils.HASH_PATH_PREFIX = ''
         # Setup a test ring (stolen from common/test_ring.py)
         self.testdir = tempfile.mkdtemp()
         self.devices = os.path.join(self.testdir, 'node')
@@ -152,6 +155,7 @@ class TestObjectReplicator(unittest.TestCase):
             timeout='300', stats_interval='1')
         self.replicator = object_replicator.ObjectReplicator(
             self.conf)
+        self.replicator.logger = FakeLogger()
 
     def tearDown(self):
         process_errors = []
@@ -180,7 +184,7 @@ class TestObjectReplicator(unittest.TestCase):
                  self.ring.get_part_nodes(int(cur_part)) \
                      if node['ip'] not in _ips()]
         for node in nodes:
-            rsync_mod = '[%s]::object/sda/objects/%s' % (node['ip'], cur_part)
+            rsync_mod = '%s::object/sda/objects/%s' % (node['ip'], cur_part)
             process_arg_checker.append(
                 (0, '', ['rsync', whole_path_from, rsync_mod]))
         with _mock_process(process_arg_checker):
@@ -206,6 +210,72 @@ class TestObjectReplicator(unittest.TestCase):
                                                       recalculate=['a83'])
         self.assertEquals(hashed, 1)
         self.assert_('a83' in hashes)
+
+    def test_get_hashes_bad_dir(self):
+        df = DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o', FakeLogger())
+        mkdirs(df.datadir)
+        with open(os.path.join(self.objects, '0', 'bad'), 'wb') as f:
+            f.write('1234567890')
+        part = os.path.join(self.objects, '0')
+        hashed, hashes = object_replicator.get_hashes(part)
+        self.assertEquals(hashed, 1)
+        self.assert_('a83' in hashes)
+        self.assert_('bad' not in hashes)
+
+    def test_get_hashes_unmodified(self):
+        df = DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o', FakeLogger())
+        mkdirs(df.datadir)
+        with open(os.path.join(df.datadir, normalize_timestamp(
+                    time.time()) + '.ts'), 'wb') as f:
+            f.write('1234567890')
+        part = os.path.join(self.objects, '0')
+        hashed, hashes = object_replicator.get_hashes(part)
+        i = [0]
+        def getmtime(filename):
+            i[0] += 1
+            return 1
+        with mock({'os.path.getmtime': getmtime}):
+            hashed, hashes = object_replicator.get_hashes(
+                part, recalculate=['a83'])
+        self.assertEquals(i[0], 2)
+
+    def test_get_hashes_unmodified_and_zero_bytes(self):
+        df = DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o', FakeLogger())
+        mkdirs(df.datadir)
+        part = os.path.join(self.objects, '0')
+        open(os.path.join(part, object_replicator.HASH_FILE), 'w')
+        # Now the hash file is zero bytes.
+        i = [0]
+        def getmtime(filename):
+            i[0] += 1
+            return 1
+        with mock({'os.path.getmtime': getmtime}):
+            hashed, hashes = object_replicator.get_hashes(
+                part, recalculate=[])
+        # getmtime will actually not get called.  Initially, the pickle.load
+        # will raise an exception first and later, force_rewrite will
+        # short-circuit the if clause to determine whether to write out a fresh
+        # hashes_file.
+        self.assertEquals(i[0], 0)
+        self.assertTrue('a83' in hashes)
+
+    def test_get_hashes_modified(self):
+        df = DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o', FakeLogger())
+        mkdirs(df.datadir)
+        with open(os.path.join(df.datadir, normalize_timestamp(
+                    time.time()) + '.ts'), 'wb') as f:
+            f.write('1234567890')
+        part = os.path.join(self.objects, '0')
+        hashed, hashes = object_replicator.get_hashes(part)
+        i = [0]
+        def getmtime(filename):
+            if i[0] < 3:
+                i[0] += 1
+            return i[0]
+        with mock({'os.path.getmtime': getmtime}):
+            hashed, hashes = object_replicator.get_hashes(
+                part, recalculate=['a83'])
+        self.assertEquals(i[0], 3)
 
     def test_hash_suffix_hash_dir_is_file_quarantine(self):
         df = DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o', FakeLogger())
@@ -304,7 +374,7 @@ class TestObjectReplicator(unittest.TestCase):
         whole_path_from = os.path.join(self.objects, '0', data_dir)
         hashes_file = os.path.join(self.objects, '0',
                                    object_replicator.HASH_FILE)
-        # test that non existant file except caught
+        # test that non existent file except caught
         self.assertEquals(object_replicator.invalidate_hash(whole_path_from),
                           None)
         # test that hashes get cleared
@@ -327,6 +397,28 @@ class TestObjectReplicator(unittest.TestCase):
         self.assertTrue(self.replicator.check_ring())
         self.replicator.next_check = orig_check - 30
         self.assertFalse(self.replicator.check_ring())
+
+    def test_collect_jobs_mkdirs_error(self):
+
+        def blowup_mkdirs(path):
+            raise OSError('Ow!')
+
+        mkdirs_orig = object_replicator.mkdirs
+        try:
+            rmtree(self.objects, ignore_errors=1)
+            object_replicator.mkdirs = blowup_mkdirs
+            jobs = self.replicator.collect_jobs()
+            self.assertTrue('exception' in self.replicator.logger.log_dict)
+            self.assertEquals(
+                len(self.replicator.logger.log_dict['exception']), 1)
+            exc_args, exc_kwargs, exc_str = \
+                self.replicator.logger.log_dict['exception'][0]
+            self.assertEquals(len(exc_args), 1)
+            self.assertTrue(exc_args[0].startswith('ERROR creating '))
+            self.assertEquals(exc_kwargs, {})
+            self.assertEquals(exc_str, 'Ow!')
+        finally:
+            object_replicator.mkdirs = mkdirs_orig
 
     def test_collect_jobs(self):
         jobs = self.replicator.collect_jobs()
@@ -351,6 +443,44 @@ class TestObjectReplicator(unittest.TestCase):
             self.assertEquals(jobs_by_part[part]['path'],
                               os.path.join(self.objects, part))
 
+    def test_collect_jobs_removes_zbf(self):
+        """
+        After running xfs_repair, a partition directory could become a
+        zero-byte file.  If this happens, collect_jobs() should clean it up and
+        *not* create a job which will hit an exception as it tries to listdir()
+        a file.
+        """
+        # Surprise! Partition dir 1 is actually a zero-byte-file
+        part_1_path = os.path.join(self.objects, '1')
+        rmtree(part_1_path)
+        with open(part_1_path, 'w'):
+            pass
+        self.assertTrue(os.path.isfile(part_1_path))  # sanity check
+        jobs = self.replicator.collect_jobs()
+        jobs_to_delete = [j for j in jobs if j['delete']]
+        jobs_to_keep = [j for j in jobs if not j['delete']]
+        jobs_by_part = {}
+        for job in jobs:
+            jobs_by_part[job['partition']] = job
+        self.assertEquals(len(jobs_to_delete), 0)
+        self.assertEquals(
+            [node['id'] for node in jobs_by_part['0']['nodes']], [1, 2])
+        self.assertFalse('1' in jobs_by_part)
+        self.assertEquals(
+            [node['id'] for node in jobs_by_part['2']['nodes']], [2, 3])
+        self.assertEquals(
+            [node['id'] for node in jobs_by_part['3']['nodes']], [3, 1])
+        for part in ['0', '2', '3']:
+            for node in jobs_by_part[part]['nodes']:
+                self.assertEquals(node['device'], 'sda')
+            self.assertEquals(jobs_by_part[part]['path'],
+                              os.path.join(self.objects, part))
+        self.assertFalse(os.path.exists(part_1_path))
+        self.assertEquals(
+            [(('Removing partition directory which was a file: %s',
+               part_1_path), {})],
+            self.replicator.logger.log_dict['warning'])
+
     def test_delete_partition(self):
         df = DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o', FakeLogger())
         mkdirs(df.datadir)
@@ -359,6 +489,21 @@ class TestObjectReplicator(unittest.TestCase):
         part_path = os.path.join(self.objects, '1')
         self.assertTrue(os.access(part_path, os.F_OK))
         self.replicator.replicate()
+        self.assertFalse(os.access(part_path, os.F_OK))
+
+    def test_delete_partition_override_params(self):
+        df = DiskFile(self.devices, 'sda', '0', 'a', 'c', 'o', FakeLogger())
+        mkdirs(df.datadir)
+        ohash = hash_path('a', 'c', 'o')
+        data_dir = ohash[-3:]
+        part_path = os.path.join(self.objects, '1')
+        self.assertTrue(os.access(part_path, os.F_OK))
+        self.replicator.replicate(override_devices=['sdb'])
+        self.assertTrue(os.access(part_path, os.F_OK))
+        self.replicator.replicate(override_partitions=['9'])
+        self.assertTrue(os.access(part_path, os.F_OK))
+        self.replicator.replicate(override_devices=['sda'],
+                                  override_partitions=['1'])
         self.assertFalse(os.access(part_path, os.F_OK))
 
     def test_run_once_recover_from_failure(self):
@@ -387,8 +532,8 @@ class TestObjectReplicator(unittest.TestCase):
                      self.ring.get_part_nodes(int(cur_part)) \
                          if node['ip'] not in _ips()]
             for node in nodes:
-                rsync_mod = '[%s]::object/sda/objects/%s' % (node['ip'],
-                                                             cur_part)
+                rsync_mod = '%s::object/sda/objects/%s' % (node['ip'],
+                                                           cur_part)
                 process_arg_checker.append(
                     (0, '', ['rsync', whole_path_from, rsync_mod]))
             self.assertTrue(os.access(os.path.join(self.objects,
@@ -433,7 +578,7 @@ class TestObjectReplicator(unittest.TestCase):
             replicator.logger.exception = \
                 lambda *args, **kwargs: fake_exc(self, *args, **kwargs)
             # Write some files into '1' and run replicate- they should be moved
-            # to the other partitoins and then node should get deleted.
+            # to the other partitions and then node should get deleted.
             cur_part = '1'
             df = DiskFile(self.devices, 'sda', cur_part, 'a', 'c', 'o',
                           FakeLogger())
@@ -451,8 +596,8 @@ class TestObjectReplicator(unittest.TestCase):
                      self.ring.get_part_nodes(int(cur_part)) \
                          if node['ip'] not in _ips()]
             for node in nodes:
-                rsync_mod = '[%s]::object/sda/objects/%s' % (node['ip'],
-                                                             cur_part)
+                rsync_mod = '%s::object/sda/objects/%s' % (node['ip'],
+                                                           cur_part)
                 process_arg_checker.append(
                     (0, '', ['rsync', whole_path_from, rsync_mod]))
             self.assertTrue(os.access(os.path.join(self.objects,

@@ -27,11 +27,14 @@ import time
 from bisect import bisect
 from hashlib import md5
 
+from swift.common.utils import json
+
 DEFAULT_MEMCACHED_PORT = 11211
 
 CONN_TIMEOUT = 0.3
 IO_TIMEOUT = 2.0
 PICKLE_FLAG = 1
+JSON_FLAG = 2
 NODE_WEIGHT = 50
 PICKLE_PROTOCOL = 2
 TRY_COUNT = 3
@@ -47,6 +50,18 @@ def md5hash(key):
     return md5(key).hexdigest()
 
 
+def sanitize_timeout(timeout):
+    """
+    Sanitize a timeout value to use an absolute expiration time if the delta
+    is greater than 30 days (in seconds). Note that the memcached server
+    translates negative values to mean a delta of 30 days in seconds (and 1
+    additional second), client beware.
+    """
+    if timeout > (30 * 24 * 60 * 60):
+        timeout += time.time()
+    return timeout
+
+
 class MemcacheConnectionError(Exception):
     pass
 
@@ -57,7 +72,8 @@ class MemcacheRing(object):
     """
 
     def __init__(self, servers, connect_timeout=CONN_TIMEOUT,
-                 io_timeout=IO_TIMEOUT, tries=TRY_COUNT):
+                 io_timeout=IO_TIMEOUT, tries=TRY_COUNT,
+                 allow_pickle=False, allow_unpickle=False):
         self._ring = {}
         self._errors = dict(((serv, []) for serv in servers))
         self._error_limited = dict(((serv, 0) for serv in servers))
@@ -69,19 +85,21 @@ class MemcacheRing(object):
         self._client_cache = dict(((server, []) for server in servers))
         self._connect_timeout = connect_timeout
         self._io_timeout = io_timeout
+        self._allow_pickle = allow_pickle
+        self._allow_unpickle = allow_unpickle or allow_pickle
 
     def _exception_occurred(self, server, e, action='talking'):
         if isinstance(e, socket.timeout):
             logging.error(_("Timeout %(action)s to memcached: %(server)s"),
-                {'action': action, 'server': server})
+                          {'action': action, 'server': server})
         else:
             logging.exception(_("Error %(action)s to memcached: %(server)s"),
-                {'action': action, 'server': server})
+                              {'action': action, 'server': server})
         now = time.time()
         self._errors[server].append(time.time())
         if len(self._errors[server]) > ERROR_LIMIT_COUNT:
             self._errors[server] = [err for err in self._errors[server]
-                                          if err > now - ERROR_LIMIT_TIME]
+                                    if err > now - ERROR_LIMIT_TIME]
             if len(self._errors[server]) > ERROR_LIMIT_COUNT:
                 self._error_limited[server] = now + ERROR_LIMIT_DURATION
                 logging.error(_('Error limiting server %s'), server)
@@ -124,26 +142,43 @@ class MemcacheRing(object):
         """ Returns a server connection to the pool """
         self._client_cache[server].append((fp, sock))
 
-    def set(self, key, value, serialize=True, timeout=0):
+    def set(self, key, value, serialize=True, timeout=0, time=0,
+            min_compress_len=0):
         """
         Set a key/value pair in memcache
 
         :param key: key
         :param value: value
-        :param serialize: if True, value is pickled before sending to memcache
-        :param timeout: ttl in memcache
+        :param serialize: if True, value is serialized with JSON before sending
+                          to memcache, or with pickle if configured to use
+                          pickle instead of JSON (to avoid cache poisoning)
+        :param timeout: ttl in memcache, this parameter is now deprecated. It
+                        will be removed in next release of OpenStack,
+                        use time parameter instead in the future
+        :time: equivalent to timeout, this parameter is added to keep the
+               signature compatible with python-memcached interface. This
+               implementation will take this value and sign it to the
+               parameter timeout
+        :min_compress_len: minimum compress length, this parameter was added
+                           to keep the signature compatible with
+                           python-memcached interface. This implementation
+                           ignores it.
         """
         key = md5hash(key)
-        if timeout > 0:
-            timeout += time.time()
+        if timeout:
+            logging.warn("parameter timeout has been deprecated, use time")
+        timeout = sanitize_timeout(time or timeout)
         flags = 0
-        if serialize:
+        if serialize and self._allow_pickle:
             value = pickle.dumps(value, PICKLE_PROTOCOL)
             flags |= PICKLE_FLAG
+        elif serialize:
+            value = json.dumps(value)
+            flags |= JSON_FLAG
         for (server, fp, sock) in self._get_conns(key):
             try:
-                sock.sendall('set %s %d %d %s noreply\r\n%s\r\n' % \
-                              (key, flags, timeout, len(value), value))
+                sock.sendall('set %s %d %d %s noreply\r\n%s\r\n' %
+                             (key, flags, timeout, len(value), value))
                 self._return_conn(server, fp, sock)
                 return
             except Exception, e:
@@ -151,8 +186,9 @@ class MemcacheRing(object):
 
     def get(self, key):
         """
-        Gets the object specified by key.  It will also unpickle the object
-        before returning if it is pickled in memcache.
+        Gets the object specified by key.  It will also unserialize the object
+        before returning if it is serialized in memcache with JSON, or if it
+        is pickled and unpickling is allowed.
 
         :param key: key
         :returns: value of the key in memcache
@@ -168,7 +204,12 @@ class MemcacheRing(object):
                         size = int(line[3])
                         value = fp.read(size)
                         if int(line[2]) & PICKLE_FLAG:
-                            value = pickle.loads(value)
+                            if self._allow_unpickle:
+                                value = pickle.loads(value)
+                            else:
+                                value = None
+                        elif int(line[2]) & JSON_FLAG:
+                            value = json.loads(value)
                         fp.readline()
                     line = fp.readline().strip().split()
                 self._return_conn(server, fp, sock)
@@ -176,7 +217,7 @@ class MemcacheRing(object):
             except Exception, e:
                 self._exception_occurred(server, e)
 
-    def incr(self, key, delta=1, timeout=0):
+    def incr(self, key, delta=1, time=0, timeout=0):
         """
         Increments a key which has a numeric value by delta.
         If the key can't be found, it's added as delta or 0 if delta < 0.
@@ -189,14 +230,21 @@ class MemcacheRing(object):
         :param key: key
         :param delta: amount to add to the value of key (or set as the value
                       if the key is not found) will be cast to an int
-        :param timeout: ttl in memcache
+        :param time: the time to live. This parameter deprecates parameter
+                     timeout. The addition of this parameter is to make the
+                     interface consistent with set and set_multi methods
+        :param timeout: ttl in memcache, deprecated, will be removed in future
+                        OpenStack releases
         :raises MemcacheConnectionError:
         """
+        if timeout:
+            logging.warn("parameter timeout has been deprecated, use time")
         key = md5hash(key)
         command = 'incr'
         if delta < 0:
             command = 'decr'
         delta = str(abs(int(delta)))
+        timeout = sanitize_timeout(time or timeout)
         for (server, fp, sock) in self._get_conns(key):
             try:
                 sock.sendall('%s %s %s\r\n' % (command, key, delta))
@@ -205,8 +253,8 @@ class MemcacheRing(object):
                     add_val = delta
                     if command == 'decr':
                         add_val = '0'
-                    sock.sendall('add %s %d %d %s\r\n%s\r\n' % \
-                                  (key, 0, timeout, len(add_val), add_val))
+                    sock.sendall('add %s %d %d %s\r\n%s\r\n' %
+                                 (key, 0, timeout, len(add_val), add_val))
                     line = fp.readline().strip().split()
                     if line[0].upper() == 'NOT_STORED':
                         sock.sendall('%s %s %s\r\n' % (command, key, delta))
@@ -222,7 +270,7 @@ class MemcacheRing(object):
                 self._exception_occurred(server, e)
         raise MemcacheConnectionError("No Memcached connections succeeded.")
 
-    def decr(self, key, delta=1, timeout=0):
+    def decr(self, key, delta=1, time=0, timeout=0):
         """
         Decrements a key which has a numeric value by delta. Calls incr with
         -delta.
@@ -231,10 +279,17 @@ class MemcacheRing(object):
         :param delta: amount to subtract to the value of key (or set the
                       value to 0 if the key is not found) will be cast to
                       an int
-        :param timeout: ttl in memcache
+        :param time: the time to live. This parameter depcates parameter
+                     timeout. The addition of this parameter is to make the
+                     interface consistent with set and set_multi methods
+        :param timeout: ttl in memcache, deprecated, will be removed in future
+                        OpenStack releases
         :raises MemcacheConnectionError:
         """
-        self.incr(key, delta=-delta, timeout=timeout)
+        if timeout:
+            logging.warn("parameter timeout has been deprecated, use time")
+
+        self.incr(key, delta=-delta, time=(time or timeout))
 
     def delete(self, key):
         """
@@ -251,26 +306,44 @@ class MemcacheRing(object):
             except Exception, e:
                 self._exception_occurred(server, e)
 
-    def set_multi(self, mapping, server_key, serialize=True, timeout=0):
+    def set_multi(self, mapping, server_key, serialize=True, timeout=0,
+                  time=0, min_compress_len=0):
         """
         Sets multiple key/value pairs in memcache.
 
         :param mapping: dictonary of keys and values to be set in memcache
         :param servery_key: key to use in determining which server in the ring
                             is used
-        :param serialize: if True, value is pickled before sending to memcache
-        :param timeout: ttl for memcache
+        :param serialize: if True, value is serialized with JSON before sending
+                          to memcache, or with pickle if configured to use
+                          pickle instead of JSON (to avoid cache poisoning)
+        :param timeout: ttl for memcache. This parameter is now deprecated, it
+                        will be removed in next release of OpenStack, use time
+                        parameter instead in the future
+        :time: equalvent to timeout, this parameter is added to keep the
+               signature compatible with python-memcached interface. This
+               implementation will take this value and sign it to parameter
+               timeout
+        :min_compress_len: minimum compress length, this parameter was added
+                           to keep the signature compatible with
+                           python-memcached interface. This implementation
+                           ignores it
         """
+        if timeout:
+            logging.warn("parameter timeout has been deprecated, use time")
+
         server_key = md5hash(server_key)
-        if timeout > 0:
-            timeout += time.time()
+        timeout = sanitize_timeout(time or timeout)
         msg = ''
         for key, value in mapping.iteritems():
             key = md5hash(key)
             flags = 0
-            if serialize:
+            if serialize and self._allow_pickle:
                 value = pickle.dumps(value, PICKLE_PROTOCOL)
                 flags |= PICKLE_FLAG
+            elif serialize:
+                value = json.dumps(value)
+                flags |= JSON_FLAG
             msg += ('set %s %d %d %s noreply\r\n%s\r\n' %
                     (key, flags, timeout, len(value), value))
         for (server, fp, sock) in self._get_conns(server_key):
@@ -302,7 +375,12 @@ class MemcacheRing(object):
                         size = int(line[3])
                         value = fp.read(size)
                         if int(line[2]) & PICKLE_FLAG:
-                            value = pickle.loads(value)
+                            if self._allow_unpickle:
+                                value = pickle.loads(value)
+                            else:
+                                value = None
+                        elif int(line[2]) & JSON_FLAG:
+                            value = json.loads(value)
                         responses[line[1]] = value
                         fp.readline()
                     line = fp.readline().strip().split()

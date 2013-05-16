@@ -18,12 +18,12 @@ import time
 import eventlet
 from contextlib import contextmanager
 from threading import Thread
-from webob import Request
 
 from test.unit import FakeLogger
 from swift.common.middleware import ratelimit
-from swift.proxy.server import get_container_memcache_key
+from swift.proxy.controllers.base import get_container_memcache_key
 from swift.common.memcached import MemcacheConnectionError
+from swift.common.swob import Request
 
 
 class FakeMemcache(object):
@@ -36,11 +36,11 @@ class FakeMemcache(object):
     def get(self, key):
         return self.store.get(key)
 
-    def set(self, key, value, serialize=False, timeout=0):
+    def set(self, key, value, serialize=False, time=0):
         self.store[key] = value
         return True
 
-    def incr(self, key, delta=1, timeout=0):
+    def incr(self, key, delta=1, time=0):
         if self.error_on_incr:
             raise MemcacheConnectionError('Memcache restarting')
         if self.init_incr_return_neg:
@@ -52,8 +52,8 @@ class FakeMemcache(object):
             self.store[key] = 0
         return int(self.store[key])
 
-    def decr(self, key, delta=1, timeout=0):
-        return self.incr(key, delta=-delta, timeout=timeout)
+    def decr(self, key, delta=1, time=0):
+        return self.incr(key, delta=-delta, time=time)
 
     @contextmanager
     def soft_lock(self, key, timeout=0, retries=5):
@@ -184,7 +184,7 @@ class TestRateLimit(unittest.TestCase):
                      'container_ratelimit_3': 200}
         fake_memcache = FakeMemcache()
         fake_memcache.store[get_container_memcache_key('a', 'c')] = \
-            {'container_size': 5}
+            {'count': 5}
         the_app = ratelimit.RateLimitMiddleware(None, conf_dict,
                                                 logger=FakeLogger())
         the_app.memcache_client = fake_memcache
@@ -198,6 +198,19 @@ class TestRateLimit(unittest.TestCase):
                     'GET', 'a', 'c', 'o')), 0)
         self.assertEquals(len(the_app.get_ratelimitable_key_tuples(
                     'PUT', 'a', 'c', 'o')), 1)
+
+    def test_ratelimit_old_memcache_format(self):
+        current_rate = 13
+        conf_dict = {'account_ratelimit': current_rate,
+                     'container_ratelimit_3': 200}
+        fake_memcache = FakeMemcache()
+        fake_memcache.store[get_container_memcache_key('a', 'c')] = \
+            {'container_size': 5}
+        the_app = ratelimit.RateLimitMiddleware(None, conf_dict,
+                                                logger=FakeLogger())
+        the_app.memcache_client = fake_memcache
+        tuples = the_app.get_ratelimitable_key_tuples('PUT', 'a', 'c', 'o')
+        self.assertEquals(tuples, [('ratelimit/a/c', 200.0)])
 
     def test_account_ratelimit(self):
         current_rate = 5
@@ -378,7 +391,7 @@ class TestRateLimit(unittest.TestCase):
                'swift.cache': FakeMemcache(),
                'SERVER_PROTOCOL': 'HTTP/1.0'}
 
-        app = lambda *args, **kwargs: None
+        app = lambda *args, **kwargs: ['fake_app']
         rate_mid = ratelimit.RateLimitMiddleware(app, {},
                                                  logger=FakeLogger())
 
@@ -387,7 +400,7 @@ class TestRateLimit(unittest.TestCase):
             def __call__(self, *args, **kwargs):
                 pass
         resp = rate_mid.__call__(env, a_callable())
-        self.assert_('404 Not Found' in resp[0])
+        self.assert_('fake_app' == resp[0])
 
     def test_no_memcache(self):
         current_rate = 13

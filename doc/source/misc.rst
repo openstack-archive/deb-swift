@@ -44,6 +44,14 @@ TempAuth
 
 .. _acls:
 
+KeystoneAuth
+============
+
+.. automodule:: swift.common.middleware.keystoneauth
+    :members:
+    :show-inheritance:
+
+
 ACLs
 ====
 
@@ -60,22 +68,22 @@ WSGI
     :members:
     :show-inheritance:
 
-.. _client:
-
-Client
-======
-
-.. automodule:: swift.common.client
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 .. _direct_client:
 
 Direct Client
 =============
 
 .. automodule:: swift.common.direct_client
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+.. _internal_client:
+
+Internal Client
+===============
+
+.. automodule:: swift.common.internal_client
     :members:
     :undoc-members:
     :show-inheritance:
@@ -130,13 +138,6 @@ Ratelimit
     :members:
     :show-inheritance:
 
-Swift3
-======
-
-.. automodule:: swift.common.middleware.swift3
-    :members:
-    :show-inheritance:
-
 StaticWeb
 =========
 
@@ -155,5 +156,63 @@ FormPost
 ========
 
 .. automodule:: swift.common.middleware.formpost
+    :members:
+    :show-inheritance:
+
+Domain Remap
+============
+
+.. automodule:: swift.common.middleware.domain_remap
+    :members:
+    :show-inheritance:
+
+CNAME Lookup
+============
+
+.. automodule:: swift.common.middleware.cname_lookup
+    :members:
+    :show-inheritance:
+
+Proxy Logging
+=============
+
+.. automodule:: swift.common.middleware.proxy_logging
+    :members:
+    :show-inheritance:
+
+Bulk Operations (Delete and Archive Auto Extraction)
+====================================================
+
+.. automodule:: swift.common.middleware.bulk
+    :members:
+    :show-inheritance:
+
+Container Quotas
+================
+
+.. automodule:: swift.common.middleware.container_quotas
+    :members:
+    :show-inheritance:
+
+.. _slo-doc:
+
+Static Large Objects
+====================
+
+.. automodule:: swift.common.middleware.slo
+    :members:
+    :show-inheritance:
+
+List Endpoints
+==============
+
+.. automodule:: swift.common.middleware.list_endpoints
+    :members:
+    :show-inheritance:
+
+Account Quotas
+================
+
+.. automodule:: swift.common.middleware.account_quotas
     :members:
     :show-inheritance:

@@ -15,17 +15,12 @@
 
 import os
 import time
-import uuid
-import errno
-from hashlib import md5
-from random import random
 
 from eventlet import Timeout
 
 from swift.obj import server as object_server
-from swift.obj.replicator import invalidate_hash
-from swift.common.utils import get_logger, renamer, audit_location_generator, \
-    ratelimit_sleep, TRUE_VALUES
+from swift.common.utils import get_logger, audit_location_generator, \
+    ratelimit_sleep, config_true_value, dump_recon_cache
 from swift.common.exceptions import AuditException, DiskFileError, \
     DiskFileNotExist
 from swift.common.daemon import Daemon
@@ -36,12 +31,11 @@ SLEEP_BETWEEN_AUDITS = 30
 class AuditorWorker(object):
     """Walk through file system to audit object"""
 
-    def __init__(self, conf, zero_byte_only_at_fps=0):
+    def __init__(self, conf, logger, zero_byte_only_at_fps=0):
         self.conf = conf
-        self.logger = get_logger(conf, log_route='object-auditor')
+        self.logger = logger
         self.devices = conf.get('devices', '/srv/node')
-        self.mount_check = conf.get('mount_check', 'true').lower() in \
-            TRUE_VALUES
+        self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.max_files_per_second = float(conf.get('files_per_second', 20))
         self.max_bytes_per_second = float(conf.get('bytes_per_second',
                                                    10000000))
@@ -59,6 +53,9 @@ class AuditorWorker(object):
         self.passes = 0
         self.quarantines = 0
         self.errors = 0
+        self.recon_cache_path = conf.get('recon_cache_path',
+                                         '/var/cache/swift')
+        self.rcache = os.path.join(self.recon_cache_path, "object.recon")
 
     def audit_all_objects(self, mode='once'):
         self.logger.info(_('Begin object audit "%s" mode (%s)' %
@@ -68,7 +65,6 @@ class AuditorWorker(object):
         self.total_files_processed = 0
         total_quarantines = 0
         total_errors = 0
-        files_running_time = 0
         time_auditing = 0
         all_locs = audit_location_generator(self.devices,
                                             object_server.DATADIR,
@@ -77,6 +73,7 @@ class AuditorWorker(object):
         for path, device, partition in all_locs:
             loop_time = time.time()
             self.object_audit(path, device, partition)
+            self.logger.timing_since('timing', loop_time)
             self.files_running_time = ratelimit_sleep(
                 self.files_running_time, self.max_files_per_second)
             self.total_files_processed += 1
@@ -89,14 +86,23 @@ class AuditorWorker(object):
                     'files/sec: %(frate).2f , bytes/sec: %(brate).2f, '
                     'Total time: %(total).2f, Auditing time: %(audit).2f, '
                     'Rate: %(audit_rate).2f') % {
-                            'type': self.auditor_type,
-                            'start_time': time.ctime(reported),
-                            'passes': self.passes, 'quars': self.quarantines,
-                            'errors': self.errors,
-                            'frate': self.passes / (now - reported),
-                            'brate': self.bytes_processed / (now - reported),
-                            'total': (now - begin), 'audit': time_auditing,
-                            'audit_rate': time_auditing / (now - begin)})
+                        'type': self.auditor_type,
+                        'start_time': time.ctime(reported),
+                        'passes': self.passes, 'quars': self.quarantines,
+                        'errors': self.errors,
+                        'frate': self.passes / (now - reported),
+                        'brate': self.bytes_processed / (now - reported),
+                        'total': (now - begin), 'audit': time_auditing,
+                        'audit_rate': time_auditing / (now - begin)})
+                dump_recon_cache({'object_auditor_stats_%s' %
+                                  self.auditor_type: {
+                                      'errors': self.errors,
+                                      'passes': self.passes,
+                                      'quarantined': self.quarantines,
+                                      'bytes_processed': self.bytes_processed,
+                                      'start_time': reported,
+                                      'audit_time': time_auditing}},
+                                 self.rcache, self.logger)
                 reported = now
                 total_quarantines += self.quarantines
                 total_errors += self.errors
@@ -167,13 +173,16 @@ class AuditorWorker(object):
             finally:
                 df.close(verify_file=False)
         except AuditException, err:
+            self.logger.increment('quarantines')
             self.quarantines += 1
             self.logger.error(_('ERROR Object %(obj)s failed audit and will '
-                'be quarantined: %(err)s'), {'obj': path, 'err': err})
+                                'be quarantined: %(err)s'),
+                              {'obj': path, 'err': err})
             object_server.quarantine_renamer(
                 os.path.join(self.devices, device), path)
             return
         except (Exception, Timeout):
+            self.logger.increment('errors')
             self.errors += 1
             self.logger.exception(_('ERROR Trying to audit %s'), path)
             return
@@ -186,8 +195,8 @@ class ObjectAuditor(Daemon):
     def __init__(self, conf, **options):
         self.conf = conf
         self.logger = get_logger(conf, log_route='object-auditor')
-        self.conf_zero_byte_fps = int(conf.get(
-                'zero_byte_files_per_second', 50))
+        self.conf_zero_byte_fps = int(
+            conf.get('zero_byte_files_per_second', 50))
 
     def _sleep(self):
         time.sleep(SLEEP_BETWEEN_AUDITS)
@@ -215,6 +224,6 @@ class ObjectAuditor(Daemon):
         """Run the object audit once."""
         mode = kwargs.get('mode', 'once')
         zero_byte_only_at_fps = kwargs.get('zero_byte_fps', 0)
-        worker = AuditorWorker(self.conf,
+        worker = AuditorWorker(self.conf, self.logger,
                                zero_byte_only_at_fps=zero_byte_only_at_fps)
         worker.audit_all_objects(mode=mode)

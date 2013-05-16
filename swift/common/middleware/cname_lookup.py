@@ -13,18 +13,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from webob import Request
-from webob.exc import HTTPBadRequest
-import dns.resolver
-from dns.exception import DNSException
-from dns.resolver import NXDOMAIN, NoAnswer
 
+"""
+CNAME Lookup Middleware
+
+Middleware that translates an unknown domain in the host header to
+something that ends with the configured storage_domain by looking up
+the given domain's CNAME record in DNS.
+
+This middleware will continue to follow a CNAME chain in DNS until it finds
+a record ending in the configured storage domain or it reaches the configured
+maximum lookup depth. If a match is found, the environment's Host header is
+rewritten and the request is passed further down the WSGI chain.
+"""
+
+try:
+    import dns.resolver
+    from dns.exception import DNSException
+    from dns.resolver import NXDOMAIN, NoAnswer
+except ImportError:
+    # catch this to allow docs to be built without the dependency
+    MODULE_DEPENDENCY_MET = False
+else:  # executed if the try block finishes with no errors
+    MODULE_DEPENDENCY_MET = True
+
+from swift.common.swob import Request, HTTPBadRequest
 from swift.common.utils import cache_from_env, get_logger
 
 
 def lookup_cname(domain):  # pragma: no cover
     """
-    Given a domain, returns it's DNS CNAME mapping and DNS ttl.
+    Given a domain, returns its DNS CNAME mapping and DNS ttl.
 
     :param domain: domain to query on
     :returns: (ttl, result)
@@ -41,12 +60,19 @@ def lookup_cname(domain):  # pragma: no cover
 
 class CNAMELookupMiddleware(object):
     """
-    Middleware that translates a unknown domain in the host header to
-    something that ends with the configured storage_domain by looking up
-    the given domain's CNAME record in DNS.
+    CNAME Lookup Middleware
+
+    See above for a full description.
+
+    :param app: The next WSGI filter or app in the paste.deploy
+                chain.
+    :param conf: The configuration dict for the middleware.
     """
 
     def __init__(self, app, conf):
+        if not MODULE_DEPENDENCY_MET:
+            # reraise the exception if the dependency wasn't met
+            raise ImportError('dnspython is required for this module')
         self.app = app
         self.storage_domain = conf.get('storage_domain', 'example.com')
         if self.storage_domain and self.storage_domain[0] != '.':
@@ -58,7 +84,10 @@ class CNAMELookupMiddleware(object):
     def __call__(self, env, start_response):
         if not self.storage_domain:
             return self.app(env, start_response)
-        given_domain = env['HTTP_HOST']
+        if 'HTTP_HOST' in env:
+            given_domain = env['HTTP_HOST']
+        else:
+            given_domain = env['SERVER_NAME']
         port = ''
         if ':' in given_domain:
             given_domain, port = given_domain.rsplit(':', 1)
@@ -79,7 +108,7 @@ class CNAMELookupMiddleware(object):
                     if self.memcache:
                         memcache_key = ''.join(['cname-', given_domain])
                         self.memcache.set(memcache_key, found_domain,
-                                          timeout=ttl)
+                                          time=ttl)
                 if found_domain is None or found_domain == a_domain:
                     # no CNAME records or we're at the last lookup
                     error = True
@@ -99,15 +128,16 @@ class CNAMELookupMiddleware(object):
                     break
                 else:
                     # try one more deep in the chain
-                    self.logger.debug(_('Following CNAME chain for  ' \
-                            '%(given_domain)s to %(found_domain)s') %
-                            {'given_domain': given_domain,
-                             'found_domain': found_domain})
+                    self.logger.debug(
+                        _('Following CNAME chain for  '
+                          '%(given_domain)s to %(found_domain)s') %
+                        {'given_domain': given_domain,
+                         'found_domain': found_domain})
                     a_domain = found_domain
             if error:
                 if found_domain:
                     msg = 'CNAME lookup failed after %d tries' % \
-                            self.lookup_depth
+                        self.lookup_depth
                 else:
                     msg = 'CNAME lookup failed to resolve to a valid domain'
                 resp = HTTPBadRequest(request=Request(env), body=msg,

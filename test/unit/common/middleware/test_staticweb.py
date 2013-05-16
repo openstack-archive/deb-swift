@@ -20,9 +20,9 @@ except ImportError:
 import unittest
 from contextlib import contextmanager
 
-from webob import Request, Response
-
+from swift.common.swob import Request, Response
 from swift.common.middleware import staticweb
+from test.unit import FakeLogger
 
 
 class FakeMemcache(object):
@@ -33,11 +33,11 @@ class FakeMemcache(object):
     def get(self, key):
         return self.store.get(key)
 
-    def set(self, key, value, timeout=0):
+    def set(self, key, value, time=0):
         self.store[key] = value
         return True
 
-    def incr(self, key, timeout=0):
+    def incr(self, key, time=0):
         self.store[key] = self.store.setdefault(key, 0) + 1
         return self.store[key]
 
@@ -93,6 +93,15 @@ class FakeApp(object):
     </body>
 </html>
             ''')(env, start_response)
+        elif env['PATH_INFO'] == '/v1/a/c3b':
+            return self.listing(env, start_response,
+                                {'x-container-read': '.r:*',
+                                 'x-container-meta-web-index': 'index.html',
+                                 'x-container-meta-web-listings': 't'})
+        elif env['PATH_INFO'] == '/v1/a/c3b/index.html':
+            resp = Response(status='204 No Content')
+            resp.app_iter = iter([])
+            return resp(env, start_response)
         elif env['PATH_INFO'] == '/v1/a/c3/subdir':
             return Response(status='404 Not Found')(env, start_response)
         elif env['PATH_INFO'] == '/v1/a/c3/subdir/':
@@ -200,6 +209,14 @@ class FakeApp(object):
                                '/absolute/listing.css'})
         elif env['PATH_INFO'] == '/v1/a/c9/subdir/':
             return Response(status='404 Not Found')(env, start_response)
+        elif env['PATH_INFO'] in ('/v1/a/c10', '/v1/a/c10/'):
+            return self.listing(env, start_response,
+                          {'x-container-read': '.r:*',
+                           'x-container-meta-web-listings': 't'})
+        elif env['PATH_INFO'] == '/v1/a/c10/\xe2\x98\x83/':
+            return Response(status='404 Not Found')(env, start_response)
+        elif env['PATH_INFO'] == '/v1/a/c10/\xe2\x98\x83/\xe2\x98\x83/':
+            return Response(status='404 Not Found')(env, start_response)
         else:
             raise Exception('Unknown path %r' % env['PATH_INFO'])
 
@@ -207,8 +224,8 @@ class FakeApp(object):
         if env['PATH_INFO'] in ('/v1/a/c3', '/v1/a/c4', '/v1/a/c8', \
                '/v1/a/c9') and \
                env['QUERY_STRING'] == 'delimiter=/&format=json&prefix=subdir/':
-            headers.update({'X-Container-Object-Count': '11',
-                            'X-Container-Bytes-Used': '73741',
+            headers.update({'X-Container-Object-Count': '12',
+                            'X-Container-Bytes-Used': '73763',
                             'X-Container-Read': '.r:*',
                             'Content-Type': 'application/json; charset=utf-8'})
             body = '''
@@ -224,15 +241,15 @@ class FakeApp(object):
             '''.strip()
         elif env['PATH_INFO'] == '/v1/a/c3' and env['QUERY_STRING'] == \
                 'delimiter=/&format=json&prefix=subdiry/':
-            headers.update({'X-Container-Object-Count': '11',
-                            'X-Container-Bytes-Used': '73741',
+            headers.update({'X-Container-Object-Count': '12',
+                            'X-Container-Bytes-Used': '73763',
                             'X-Container-Read': '.r:*',
                             'Content-Type': 'application/json; charset=utf-8'})
             body = '[]'
         elif env['PATH_INFO'] == '/v1/a/c3' and env['QUERY_STRING'] == \
                 'limit=1&format=json&delimiter=/&limit=1&prefix=subdirz/':
-            headers.update({'X-Container-Object-Count': '11',
-                            'X-Container-Bytes-Used': '73741',
+            headers.update({'X-Container-Object-Count': '12',
+                            'X-Container-Bytes-Used': '73763',
                             'X-Container-Read': '.r:*',
                             'Content-Type': 'application/json; charset=utf-8'})
             body = '''
@@ -243,8 +260,8 @@ class FakeApp(object):
             '''.strip()
         elif env['PATH_INFO'] == '/v1/a/c6' and env['QUERY_STRING'] == \
                 'limit=1&format=json&delimiter=/&limit=1&prefix=subdir/':
-            headers.update({'X-Container-Object-Count': '11',
-                            'X-Container-Bytes-Used': '73741',
+            headers.update({'X-Container-Object-Count': '12',
+                            'X-Container-Bytes-Used': '73763',
                             'X-Container-Read': '.r:*',
                             'X-Container-Web-Listings': 't',
                             'Content-Type': 'application/json; charset=utf-8'})
@@ -254,11 +271,27 @@ class FakeApp(object):
                   "content_type":"text/plain",
                   "last_modified":"2011-03-24T04:27:52.709100"}]
             '''.strip()
+        elif env['PATH_INFO'] == '/v1/a/c10' and (env['QUERY_STRING'] == \
+                'delimiter=/&format=json&prefix=%E2%98%83/' or
+                env['QUERY_STRING'] == \
+                'delimiter=/&format=json&prefix=%E2%98%83/%E2%98%83/'):
+            headers.update({'X-Container-Object-Count': '12',
+                            'X-Container-Bytes-Used': '73763',
+                            'X-Container-Read': '.r:*',
+                            'X-Container-Web-Listings': 't',
+                            'Content-Type': 'application/json; charset=utf-8'})
+            body = '''
+                [{"name":"\u2603/\u2603/one.txt",
+                  "hash":"73f1dd69bacbf0847cc9cffa3c6b23a1", "bytes":22,
+                  "content_type":"text/plain",
+                  "last_modified":"2011-03-24T04:27:52.709100"},
+                 {"subdir":"\u2603/\u2603/"}]
+            '''.strip()
         elif 'prefix=' in env['QUERY_STRING']:
-            return Response(status='204 No Content')
+            return Response(status='204 No Content')(env, start_response)
         elif 'format=json' in env['QUERY_STRING']:
-            headers.update({'X-Container-Object-Count': '11',
-                            'X-Container-Bytes-Used': '73741',
+            headers.update({'X-Container-Object-Count': '12',
+                            'X-Container-Bytes-Used': '73763',
                             'Content-Type': 'application/json; charset=utf-8'})
             body = '''
                 [{"name":"401error.html",
@@ -301,16 +334,21 @@ class FakeApp(object):
                   "last_modified":"2011-03-24T04:27:52.751260"},
                  {"name":"two.txt", "hash":"10abb84c63a5cff379fdfd6385918833",
                   "bytes":22, "content_type":"text/plain",
-                  "last_modified":"2011-03-24T04:27:52.825110"}]
+                  "last_modified":"2011-03-24T04:27:52.825110"},
+                 {"name":"\u2603/\u2603/one.txt",
+                  "hash":"73f1dd69bacbf0847cc9cffa3c6b23a1", "bytes":22,
+                  "content_type":"text/plain",
+                  "last_modified":"2011-03-24T04:27:52.935560"}]
             '''.strip()
         else:
-            headers.update({'X-Container-Object-Count': '11',
-                            'X-Container-Bytes-Used': '73741',
+            headers.update({'X-Container-Object-Count': '12',
+                            'X-Container-Bytes-Used': '73763',
                             'Content-Type': 'text/plain; charset=utf-8'})
             body = '\n'.join(['401error.html', '404error.html', 'index.html',
                               'listing.css', 'one.txt', 'subdir/1.txt',
                               'subdir/2.txt', u'subdir/\u2603.txt', 'subdir2',
-                              'subdir3/subsubdir/index.html', 'two.txt'])
+                              'subdir3/subsubdir/index.html', 'two.txt',
+                              u'\u2603/\u2603/one.txt'])
         return Response(status='200 Ok', headers=headers,
                         body=body)(env, start_response)
 
@@ -468,6 +506,11 @@ class TestStaticWeb(unittest.TestCase):
         self.assertEquals(resp.status_int, 404)
         self.assert_("Chrome's 404 fancy-page sucks." not in resp.body)
 
+    def test_container3bindexhtml(self):
+        resp = Request.blank('/v1/a/c3b/').get_response(self.test_staticweb)
+        self.assertEquals(resp.status_int, 204)
+        self.assertEquals(resp.body, '')
+
     def test_container4indexhtml(self):
         resp = Request.blank('/v1/a/c4/').get_response(self.test_staticweb)
         self.assertEquals(resp.status_int, 200)
@@ -602,6 +645,22 @@ class TestStaticWeb(unittest.TestCase):
         self.assert_('<link' in resp.body)
         self.assert_('href="/absolute/listing.css"' in resp.body)
 
+    def test_container10unicodesubdirlisting(self):
+        resp = Request.blank(
+                '/v1/a/c10/').get_response(self.test_staticweb)
+        self.assertEquals(resp.status_int, 200)
+        self.assert_('Listing of /v1/a/c10/' in resp.body)
+        resp = Request.blank(
+                '/v1/a/c10/\xe2\x98\x83/').get_response(self.test_staticweb)
+        self.assertEquals(resp.status_int, 200)
+        self.assert_('Listing of /v1/a/c10/\xe2\x98\x83/' in resp.body)
+        resp = Request.blank(
+                '/v1/a/c10/\xe2\x98\x83/\xe2\x98\x83/'
+        ).get_response(self.test_staticweb)
+        self.assertEquals(resp.status_int, 200)
+        self.assert_(
+                'Listing of /v1/a/c10/\xe2\x98\x83/\xe2\x98\x83/' in resp.body)
+
     def test_subrequest_once_if_possible(self):
         resp = Request.blank(
                 '/v1/a/c4/one.txt').get_response(self.test_staticweb)
@@ -609,6 +668,7 @@ class TestStaticWeb(unittest.TestCase):
         self.assertEquals(resp.headers['x-object-meta-test'], 'value')
         self.assertEquals(resp.body, '1')
         self.assertEquals(self.app.calls, 1)
+
 
 if __name__ == '__main__':
     unittest.main()

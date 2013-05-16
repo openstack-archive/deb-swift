@@ -13,42 +13,54 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from webob import Request
-from webob.exc import HTTPBadRequest
+
+"""
+Domain Remap Middleware
+
+Middleware that translates container and account parts of a domain to
+path parameters that the proxy server understands.
+
+container.account.storageurl/object gets translated to
+container.account.storageurl/path_root/account/container/object
+
+account.storageurl/path_root/container/object gets translated to
+account.storageurl/path_root/account/container/object
+
+Browsers can convert a host header to lowercase, so check that reseller
+prefix on the account is the correct case. This is done by comparing the
+items in the reseller_prefixes config option to the found prefix. If they
+match except for case, the item from reseller_prefixes will be used
+instead of the found reseller prefix. The reseller_prefixes list is
+exclusive. If defined, any request with an account prefix not in that list
+will be ignored by this middleware. reseller_prefixes defaults to 'AUTH'.
+
+Note that this middleware requires that container names and account names
+(except as described above) must be DNS-compatible. This means that the
+account name created in the system and the containers created by users
+cannot exceed 63 characters or have UTF-8 characters. These are
+restrictions over and above what swift requires and are not explicitly
+checked. Simply put, the this middleware will do a best-effort attempt to
+derive account and container names from elements in the domain name and
+put those derived values into the URL path (leaving the Host header
+unchanged).
+
+Also note that using container sync with remapped domain names is not
+advised. With container sync, you should use the true storage end points as
+sync destinations.
+"""
+
+from swift.common.swob import Request, HTTPBadRequest
 
 
 class DomainRemapMiddleware(object):
     """
-    Middleware that translates container and account parts of a domain to
-    path parameters that the proxy server understands.
+    Domain Remap Middleware
 
-    container.account.storageurl/object gets translated to
-    container.account.storageurl/path_root/account/container/object
+    See above for a full description.
 
-    account.storageurl/path_root/container/object gets translated to
-    account.storageurl/path_root/account/container/object
-
-    Browsers can convert a host header to lowercase, so check that reseller
-    prefix on the account is the correct case. This is done by comparing the
-    items in the reseller_prefixes config option to the found prefix. If they
-    match except for case, the item from reseller_prefixes will be used
-    instead of the found reseller prefix. The reseller_prefixes list is
-    exclusive. If defined, any request with an account prefix not in that list
-    will be ignored by this middleware. reseller_prefixes defaults to 'AUTH'.
-
-    Note that this middleware requires that container names and account names
-    (except as described above) must be DNS-compatible. This means that the
-    account name created in the system and the containers created by users
-    cannot exceed 63 characters or have UTF-8 characters. These are
-    restrictions over and above what swift requires and are not explicitly
-    checked. Simply put, the this middleware will do a best-effort attempt to
-    derive account and container names from elements in the domain name and
-    put those derived values into the URL path (leaving the Host header
-    unchanged).
-
-    Also note that using container sync with remapped domain names is not
-    advised. With container sync, you should use the true storage end points as
-    sync destinations.
+    :param app: The next WSGI filter or app in the paste.deploy
+                chain.
+    :param conf: The configuration dict for the middleware.
     """
 
     def __init__(self, app, conf):
@@ -66,7 +78,10 @@ class DomainRemapMiddleware(object):
     def __call__(self, env, start_response):
         if not self.storage_domain:
             return self.app(env, start_response)
-        given_domain = env['HTTP_HOST']
+        if 'HTTP_HOST' in env:
+            given_domain = env['HTTP_HOST']
+        else:
+            given_domain = env['SERVER_NAME']
         port = ''
         if ':' in given_domain:
             given_domain, port = given_domain.rsplit(':', 1)
@@ -90,7 +105,7 @@ class DomainRemapMiddleware(object):
                 # account prefix is not in config list. bail.
                 return self.app(env, start_response)
             prefix_index = self.reseller_prefixes_lower.index(
-                                                    account_reseller_prefix)
+                account_reseller_prefix)
             real_prefix = self.reseller_prefixes[prefix_index]
             if not account.startswith(real_prefix):
                 account_suffix = account[len(real_prefix):]

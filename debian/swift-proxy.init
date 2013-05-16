@@ -31,7 +31,7 @@ chown ${SWIFT_USER} ${PID_DIR}
 
 case "$1" in
 start)
-	log_daemon_msg "Starting ${PRINT_NAME=}" "${SERVICE_NAME}"
+	log_daemon_msg "Starting ${PRINT_NAME}" "${SERVICE_NAME}"
 	start-stop-daemon --start --chuid ${SWIFT_USER}:${SWIFT_GRP} -b -m --pidfile $PID_FILE --exec ${DAEMON} -- ${DAEMON_ARGS}
 	log_end_msg $?
 ;;

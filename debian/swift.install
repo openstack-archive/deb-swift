@@ -1,7 +1,11 @@
 usr/bin/swift-bench
-usr/bin/swift-ring-builder
-usr/bin/swift-get-nodes
-usr/bin/swift
+usr/bin/swift-bench-client
 usr/bin/swift-dispersion-populate
 usr/bin/swift-dispersion-report
+usr/bin/swift-form-signature
+usr/bin/swift-get-nodes
+usr/bin/swift-oldies
+usr/bin/swift-orphans
 usr/bin/swift-recon
+usr/bin/swift-ring-builder
+usr/bin/swift-temp-url

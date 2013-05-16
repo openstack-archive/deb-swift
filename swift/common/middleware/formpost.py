@@ -64,7 +64,7 @@ additional ``<input type="file" name="filexx" />`` attributes if
 desired.
 
 The expires attribute is the Unix timestamp before which the form
-must be submitted before it's invalidated.
+must be submitted before it is invalidated.
 
 The signature attribute is the HMAC-SHA1 signature of the form. Here is
 sample code for computing the signature::
@@ -107,10 +107,11 @@ import rfc822
 from hashlib import sha1
 from StringIO import StringIO
 from time import gmtime, strftime, time
-from time import time
 from urllib import quote, unquote
 
-from swift.common.utils import get_logger, streq_const_time
+from swift.common.utils import streq_const_time
+from swift.common.wsgi import make_pre_authed_env
+from swift.common.http import HTTP_BAD_REQUEST
 
 
 #: The size of data to read from the form at any given time.
@@ -284,6 +285,9 @@ class FormPost(object):
 
     See above for a full description.
 
+    The proxy logs created for any subrequests made will have swift.source set
+    to "FP".
+
     :param app: The next WSGI filter or app in the paste.deploy
                 chain.
     :param conf: The configuration dict for the middleware.
@@ -294,8 +298,6 @@ class FormPost(object):
         self.app = app
         #: The filter configuration dict.
         self.conf = conf
-        #: The logger to use with this middleware.
-        self.logger = get_logger(conf, log_route='formpost')
 
     def __call__(self, env, start_response):
         """
@@ -311,32 +313,28 @@ class FormPost(object):
                     _parse_attrs(env.get('CONTENT_TYPE') or '')
                 if content_type == 'multipart/form-data' and \
                         'boundary' in attrs:
-                    resp_status = [0]
-
-                    def _start_response(status, headers, exc_info=None):
-                        resp_status[0] = int(status.split(' ', 1)[0])
-                        start_response(status, headers, exc_info)
-
-                    self._log_request(env, resp_status)
-                    return self._translate_form(env, start_response,
-                                                attrs['boundary'])
+                    env['HTTP_USER_AGENT'] += ' FormPost'
+                    status, headers, body = self._translate_form(
+                        env, attrs['boundary'])
+                    start_response(status, headers)
+                    return body
             except (FormInvalid, EOFError), err:
-                self._log_request(env, 400)
                 body = 'FormPost: %s' % err
-                start_response('400 Bad Request',
+                start_response(
+                    '400 Bad Request',
                     (('Content-Type', 'text/plain'),
                      ('Content-Length', str(len(body)))))
                 return [body]
         return self.app(env, start_response)
 
-    def _translate_form(self, env, start_response, boundary):
+    def _translate_form(self, env, boundary):
         """
         Translates the form data into subrequests and issues a
         response.
 
         :param env: The WSGI environment dict.
-        :param start_response: The WSGI start_response hook.
-        :returns: Response as per WSGI.
+        :param boundary: The MIME type boundary to look for.
+        :returns: status_line, headers_list, body
         """
         key = self._get_key(env)
         status = message = ''
@@ -359,8 +357,8 @@ class FormPost(object):
                 if 'content-type' not in attributes and 'content-type' in hdrs:
                     attributes['content-type'] = \
                         hdrs['Content-Type'] or 'application/octet-stream'
-                status, message = self._perform_subrequest(env, start_response,
-                                                           attributes, fp, key)
+                status, message = self._perform_subrequest(env, attributes, fp,
+                                                           key)
                 if status[:1] != '2':
                     break
             else:
@@ -379,33 +377,35 @@ class FormPost(object):
         if not status:
             status = '400 Bad Request'
             message = 'no files to process'
-        if not attributes.get('redirect'):
+        redirect = attributes.get('redirect')
+        if not redirect:
             body = status
             if message:
                 body = status + '\r\nFormPost: ' + message.title()
-            start_response(status, [('Content-Type', 'text/plain'),
-                                    ('Content-Length', len(body))])
-            return [body]
+            headers = [('Content-Type', 'text/plain'),
+                       ('Content-Length', len(body))]
+            return status, headers, body
         status = status.split(' ', 1)[0]
-        body = '<html><body><p><a href="%s?status=%s&message=%s">Click to ' \
-               'continue...</a></p></body></html>' % \
-               (attributes['redirect'], quote(status), quote(message))
-        start_response('303 See Other',
-            [('Location', '%s?status=%s&message=%s' %
-                (attributes['redirect'], quote(status), quote(message))),
-             ('Content-Length', str(len(body)))])
-        return [body]
+        if '?' in redirect:
+            redirect += '&'
+        else:
+            redirect += '?'
+        redirect += 'status=%s&message=%s' % (quote(status), quote(message))
+        body = '<html><body><p><a href="%s">' \
+               'Click to continue...</a></p></body></html>' % redirect
+        headers = [('Location', redirect), ('Content-Length', str(len(body)))]
+        return '303 See Other', headers, body
 
-    def _perform_subrequest(self, env, start_response, attributes, fp, key):
+    def _perform_subrequest(self, orig_env, attributes, fp, key):
         """
-        Performs the subrequest and returns a new response.
+        Performs the subrequest and returns the response.
 
-        :param env: The WSGI environment dict.
-        :param start_response: The WSGI start_response hook.
+        :param orig_env: The WSGI environment dict; will only be used
+                         to form a new env for the subrequest.
         :param attributes: dict of the attributes of the form so far.
         :param fp: The file-like object containing the request body.
         :param key: The account key to validate the signature with.
-        :returns: Response as per WSGI.
+        :returns: (status_line, message)
         """
         if not key:
             return '401 Unauthorized', 'invalid signature'
@@ -413,15 +413,12 @@ class FormPost(object):
             max_file_size = int(attributes.get('max_file_size') or 0)
         except ValueError:
             raise FormInvalid('max_file_size not an integer')
-        subenv = {'REQUEST_METHOD': 'PUT',
-                  'SCRIPT_NAME': '',
-                  'SERVER_NAME': env['SERVER_NAME'],
-                  'SERVER_PORT': env['SERVER_PORT'],
-                  'SERVER_PROTOCOL': env['SERVER_PROTOCOL'],
-                  'HTTP_TRANSFER_ENCODING': 'chunked',
-                  'wsgi.input': _CappedFileLikeObject(fp, max_file_size),
-                  'swift.cache': env['swift.cache']}
-        subenv['PATH_INFO'] = env['PATH_INFO']
+        subenv = make_pre_authed_env(orig_env, 'PUT', agent=None,
+                                     swift_source='FP')
+        if 'QUERY_STRING' in subenv:
+            del subenv['QUERY_STRING']
+        subenv['HTTP_TRANSFER_ENCODING'] = 'chunked'
+        subenv['wsgi.input'] = _CappedFileLikeObject(fp, max_file_size)
         if subenv['PATH_INFO'][-1] != '/' and \
                 subenv['PATH_INFO'].count('/') < 4:
             subenv['PATH_INFO'] += '/'
@@ -429,31 +426,33 @@ class FormPost(object):
         if 'content-type' in attributes:
             subenv['CONTENT_TYPE'] = \
                 attributes['content-type'] or 'application/octet-stream'
+        elif 'CONTENT_TYPE' in subenv:
+            del subenv['CONTENT_TYPE']
         try:
             if int(attributes.get('expires') or 0) < time():
                 return '401 Unauthorized', 'form expired'
         except ValueError:
             raise FormInvalid('expired not an integer')
         hmac_body = '%s\n%s\n%s\n%s\n%s' % (
-                        env['PATH_INFO'],
-                        attributes.get('redirect') or '',
-                        attributes.get('max_file_size') or '0',
-                        attributes.get('max_file_count') or '0',
-                        attributes.get('expires') or '0'
-                    )
+            orig_env['PATH_INFO'],
+            attributes.get('redirect') or '',
+            attributes.get('max_file_size') or '0',
+            attributes.get('max_file_count') or '0',
+            attributes.get('expires') or '0')
         sig = hmac.new(key, hmac_body, sha1).hexdigest()
         if not streq_const_time(sig, (attributes.get('signature') or
                                       'invalid')):
             return '401 Unauthorized', 'invalid signature'
-        subenv['swift.authorize'] = lambda req: None
-        subenv['swift.authorize_override'] = True
-        subenv['REMOTE_USER'] = '.wsgi.formpost'
         substatus = [None]
 
         def _start_response(status, headers, exc_info=None):
             substatus[0] = status
 
-        self.app(subenv, _start_response)
+        i = iter(self.app(subenv, _start_response))
+        try:
+            i.next()
+        except StopIteration:
+            pass
         return substatus[0], ''
 
     def _get_key(self, env):
@@ -474,19 +473,12 @@ class FormPost(object):
         if memcache:
             key = memcache.get('temp-url-key/%s' % account)
         if not key:
-            newenv = {'REQUEST_METHOD': 'HEAD', 'SCRIPT_NAME': '',
-                      'PATH_INFO': '/v1/' + account, 'CONTENT_LENGTH': '0',
-                      'SERVER_PROTOCOL': 'HTTP/1.0',
-                      'HTTP_USER_AGENT': 'FormPost', 'wsgi.version': (1, 0),
-                      'wsgi.url_scheme': 'http', 'wsgi.input': StringIO('')}
-            for name in ('SERVER_NAME', 'SERVER_PORT', 'wsgi.errors',
-                         'wsgi.multithread', 'wsgi.multiprocess',
-                         'wsgi.run_once', 'swift.cache', 'swift.trans_id'):
-                if name in env:
-                    newenv[name] = env[name]
-            newenv['swift.authorize'] = lambda req: None
-            newenv['swift.authorize_override'] = True
-            newenv['REMOTE_USER'] = '.wsgi.formpost'
+            newenv = make_pre_authed_env(env, 'HEAD', '/v1/' + account,
+                                         agent=None, swift_source='FP')
+            if 'QUERY_STRING' in newenv:
+                del newenv['QUERY_STRING']
+            newenv['CONTENT_LENGTH'] = '0'
+            newenv['wsgi.input'] = StringIO('')
             key = [None]
 
             def _start_response(status, response_headers, exc_info=None):
@@ -494,50 +486,15 @@ class FormPost(object):
                     if h.lower() == 'x-account-meta-temp-url-key':
                         key[0] = v
 
-            self.app(newenv, _start_response)
+            i = iter(self.app(newenv, _start_response))
+            try:
+                i.next()
+            except StopIteration:
+                pass
             key = key[0]
             if key and memcache:
-                memcache.set('temp-url-key/%s' % account, key, timeout=60)
+                memcache.set('temp-url-key/%s' % account, key, time=60)
         return key
-
-    def _log_request(self, env, response_status_int):
-        """
-        Used when a request might not be logged by the underlying
-        WSGI application, but we'd still like to record what
-        happened. An early 401 Unauthorized is a good example of
-        this.
-
-        :param env: The WSGI environment for the request.
-        :param response_status_int: The HTTP status we'll be replying
-                                    to the request with.
-        """
-        the_request = quote(unquote(env.get('PATH_INFO') or '/'))
-        if env.get('QUERY_STRING'):
-            the_request = the_request + '?' + env['QUERY_STRING']
-        client = env.get('HTTP_X_CLUSTER_CLIENT_IP')
-        if not client and 'HTTP_X_FORWARDED_FOR' in env:
-            # remote host for other lbs
-            client = env['HTTP_X_FORWARDED_FOR'].split(',')[0].strip()
-        if not client:
-            client = env.get('REMOTE_ADDR')
-        self.logger.info(' '.join(quote(str(x)) for x in (
-            client or '-',
-            env.get('REMOTE_ADDR') or '-',
-            strftime('%d/%b/%Y/%H/%M/%S', gmtime()),
-            env.get('REQUEST_METHOD') or 'GET',
-            the_request,
-            env.get('SERVER_PROTOCOL') or '1.0',
-            response_status_int,
-            env.get('HTTP_REFERER') or '-',
-            (env.get('HTTP_USER_AGENT') or '-') + ' FormPOST',
-            env.get('HTTP_X_AUTH_TOKEN') or '-',
-            '-',
-            '-',
-            '-',
-            env.get('swift.trans_id') or '-',
-            '-',
-            '-',
-        )))
 
 
 def filter_factory(global_conf, **local_conf):

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import os
-from os.path import basename, dirname, isdir, join
+from os.path import basename, dirname, isdir, isfile, join
 import random
 import shutil
 import time
@@ -32,12 +32,14 @@ from eventlet.support.greenlets import GreenletExit
 
 from swift.common.ring import Ring
 from swift.common.utils import whataremyips, unlink_older_than, lock_path, \
-        compute_eta, get_logger, write_pickle, renamer, dump_recon_cache, \
-        TRUE_VALUES
+    compute_eta, get_logger, write_pickle, renamer, dump_recon_cache, \
+    rsync_ip, mkdirs, config_true_value, list_from_csv, get_hub
 from swift.common.bufferedhttp import http_connect
 from swift.common.daemon import Daemon
+from swift.common.http import HTTP_OK, HTTP_INSUFFICIENT_STORAGE
+from swift.common.exceptions import PathNotDir
 
-hubs.use_hub('poll')
+hubs.use_hub(get_hub())
 
 PICKLE_PROTOCOL = 2
 ONE_WEEK = 604800
@@ -74,9 +76,17 @@ def hash_suffix(path, reclaim_age):
     Performs reclamation and returns an md5 of all (remaining) files.
 
     :param reclaim_age: age in seconds at which to remove tombstones
+    :raises PathNotDir: if given path is not a valid directory
+    :raises OSError: for non-ENOTDIR errors
     """
     md5 = hashlib.md5()
-    for hsh in sorted(os.listdir(path)):
+    try:
+        path_contents = sorted(os.listdir(path))
+    except OSError, err:
+        if err.errno in (errno.ENOTDIR, errno.ENOENT):
+            raise PathNotDir()
+        raise
+    for hsh in path_contents:
         hsh_path = join(path, hsh)
         try:
             files = os.listdir(hsh_path)
@@ -165,50 +175,60 @@ def get_hashes(partition_dir, recalculate=[], do_listdir=False,
 
     hashed = 0
     hashes_file = join(partition_dir, HASH_FILE)
-    with lock_path(partition_dir):
-        modified = False
-        hashes = {}
-        try:
-            with open(hashes_file, 'rb') as fp:
-                hashes = pickle.load(fp)
-        except Exception:
-            do_listdir = True
-        if do_listdir:
-            hashes = dict(((suff, hashes.get(suff, None))
-                       for suff in os.listdir(partition_dir)
-                       if len(suff) == 3 and isdir(join(partition_dir, suff))))
+    modified = False
+    force_rewrite = False
+    hashes = {}
+    mtime = -1
+    try:
+        with open(hashes_file, 'rb') as fp:
+            hashes = pickle.load(fp)
+        mtime = os.path.getmtime(hashes_file)
+    except Exception:
+        do_listdir = True
+        force_rewrite = True
+    if do_listdir:
+        for suff in os.listdir(partition_dir):
+            if len(suff) == 3:
+                hashes.setdefault(suff, None)
+        modified = True
+    hashes.update((hash_, None) for hash_ in recalculate)
+    for suffix, hash_ in hashes.items():
+        if not hash_:
+            suffix_dir = join(partition_dir, suffix)
+            try:
+                hashes[suffix] = hash_suffix(suffix_dir, reclaim_age)
+                hashed += 1
+            except PathNotDir:
+                del hashes[suffix]
+            except OSError:
+                logging.exception(_('Error hashing suffix'))
             modified = True
-        for hash_ in recalculate:
-            hashes[hash_] = None
-        for suffix, hash_ in hashes.items():
-            if not hash_:
-                suffix_dir = join(partition_dir, suffix)
-                if os.path.exists(suffix_dir):
-                    try:
-                        hashes[suffix] = hash_suffix(suffix_dir, reclaim_age)
-                        hashed += 1
-                    except OSError:
-                        logging.exception(_('Error hashing suffix'))
-                        hashes[suffix] = None
-                else:
-                    del hashes[suffix]
-                modified = True
-                sleep()
-        if modified:
-            write_pickle(hashes, hashes_file, partition_dir, PICKLE_PROTOCOL)
+    if modified:
+        with lock_path(partition_dir):
+            if force_rewrite or not os.path.exists(hashes_file) or \
+                    os.path.getmtime(hashes_file) == mtime:
+                write_pickle(
+                    hashes, hashes_file, partition_dir, PICKLE_PROTOCOL)
+                return hashed, hashes
+        return get_hashes(partition_dir, recalculate, do_listdir,
+                          reclaim_age)
+    else:
         return hashed, hashes
 
 
-def tpooled_get_hashes(*args, **kwargs):
+def tpool_reraise(func, *args, **kwargs):
     """
     Hack to work around Eventlet's tpool not catching and reraising Timeouts.
-    We return the Timeout, Timeout if it's raised, the caller looks for it
-    and reraises it if found.
     """
-    try:
-        return get_hashes(*args, **kwargs)
-    except Timeout, err:
-        return err, err
+    def inner():
+        try:
+            return func(*args, **kwargs)
+        except BaseException, err:
+            return err
+    resp = tpool.execute(inner)
+    if isinstance(resp, BaseException):
+        raise resp
+    return resp
 
 
 class ObjectReplicator(Daemon):
@@ -228,15 +248,13 @@ class ObjectReplicator(Daemon):
         self.conf = conf
         self.logger = get_logger(conf, log_route='object-replicator')
         self.devices_dir = conf.get('devices', '/srv/node')
-        self.mount_check = conf.get('mount_check', 'true').lower() in \
-                              ('true', 't', '1', 'on', 'yes', 'y')
-        self.vm_test_mode = conf.get(
-                'vm_test_mode', 'no').lower() in ('yes', 'true', 'on', '1')
+        self.mount_check = config_true_value(conf.get('mount_check', 'true'))
+        self.vm_test_mode = config_true_value(conf.get('vm_test_mode', 'no'))
         self.swift_dir = conf.get('swift_dir', '/etc/swift')
         self.port = int(conf.get('bind_port', 6000))
         self.concurrency = int(conf.get('concurrency', 1))
         self.stats_interval = int(conf.get('stats_interval', '300'))
-        self.object_ring = Ring(join(self.swift_dir, 'object.ring.gz'))
+        self.object_ring = Ring(self.swift_dir, ring_name='object')
         self.ring_check_interval = int(conf.get('ring_check_interval', 15))
         self.next_check = time.time() + self.ring_check_interval
         self.reclaim_age = int(conf.get('reclaim_age', 86400 * 7))
@@ -246,11 +264,9 @@ class ObjectReplicator(Daemon):
         self.rsync_io_timeout = conf.get('rsync_io_timeout', '30')
         self.http_timeout = int(conf.get('http_timeout', 60))
         self.lockup_timeout = int(conf.get('lockup_timeout', 1800))
-        self.recon_enable = conf.get(
-                'recon_enable', 'no').lower() in TRUE_VALUES
-        self.recon_cache_path = conf.get(
-                'recon_cache_path', '/var/cache/swift')
-        self.recon_object = os.path.join(self.recon_cache_path, "object.recon")
+        self.recon_cache_path = conf.get('recon_cache_path',
+                                         '/var/cache/swift')
+        self.rcache = os.path.join(self.recon_cache_path, "object.recon")
 
     def _rsync(self, args):
         """
@@ -262,8 +278,9 @@ class ObjectReplicator(Daemon):
         ret_val = None
         try:
             with Timeout(self.rsync_timeout):
-                proc = subprocess.Popen(args, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT)
+                proc = subprocess.Popen(args,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT)
                 results = proc.stdout.read()
                 ret_val = proc.wait()
         except Timeout:
@@ -282,7 +299,7 @@ class ObjectReplicator(Daemon):
                 self.logger.error(result)
         if ret_val:
             self.logger.error(_('Bad rsync return code: %(args)s -> %(ret)d'),
-                    {'args': str(args), 'ret': ret_val})
+                              {'args': str(args), 'ret': ret_val})
         elif results:
             self.logger.info(
                 _("Successful rsync of %(src)s at %(dst)s (%(time).03f)"),
@@ -317,10 +334,11 @@ class ObjectReplicator(Daemon):
             '--timeout=%s' % self.rsync_io_timeout,
             '--contimeout=%s' % self.rsync_io_timeout,
         ]
+        node_ip = rsync_ip(node['ip'])
         if self.vm_test_mode:
-            rsync_module = '[%s]::object%s' % (node['ip'], node['port'])
+            rsync_module = '%s::object%s' % (node_ip, node['port'])
         else:
-            rsync_module = '[%s]::object' % node['ip']
+            rsync_module = '%s::object' % node_ip
         had_any = False
         for suffix in suffixes:
             spath = join(job['path'], suffix)
@@ -357,6 +375,7 @@ class ObjectReplicator(Daemon):
             return [suff for suff in os.listdir(path)
                     if len(suff) == 3 and isdir(join(path, suff))]
         self.replication_count += 1
+        self.logger.increment('partition.delete.count.%s' % (job['device'],))
         begin = time.time()
         try:
             responses = []
@@ -366,19 +385,22 @@ class ObjectReplicator(Daemon):
                     success = self.rsync(node, job, suffixes)
                     if success:
                         with Timeout(self.http_timeout):
-                            http_connect(node['ip'], node['port'],
+                            http_connect(
+                                node['ip'], node['port'],
                                 node['device'], job['partition'], 'REPLICATE',
                                 '/' + '-'.join(suffixes),
-                          headers={'Content-Length': '0'}).getresponse().read()
+                                headers={'Content-Length': '0'}).\
+                                getresponse().read()
                     responses.append(success)
-            if not suffixes or (len(responses) == \
-                        self.object_ring.replica_count and all(responses)):
+            if not suffixes or (len(responses) ==
+                                len(job['nodes']) and all(responses)):
                 self.logger.info(_("Removing partition: %s"), job['path'])
                 tpool.execute(shutil.rmtree, job['path'], ignore_errors=True)
         except (Exception, Timeout):
             self.logger.exception(_("Error syncing handoff partition"))
         finally:
             self.partition_times.append(time.time() - begin)
+            self.logger.timing_since('partition.delete.timing', begin)
 
     def update(self, job):
         """
@@ -387,68 +409,75 @@ class ObjectReplicator(Daemon):
         :param job: a dict containing info about the partition to be replicated
         """
         self.replication_count += 1
+        self.logger.increment('partition.update.count.%s' % (job['device'],))
         begin = time.time()
         try:
-            hashed, local_hash = tpool.execute(tpooled_get_hashes, job['path'],
-                    do_listdir=(self.replication_count % 10) == 0,
-                    reclaim_age=self.reclaim_age)
-            # See tpooled_get_hashes "Hack".
-            if isinstance(hashed, BaseException):
-                raise hashed
+            hashed, local_hash = tpool_reraise(
+                get_hashes, job['path'],
+                do_listdir=(self.replication_count % 10) == 0,
+                reclaim_age=self.reclaim_age)
             self.suffix_hash += hashed
-            attempts_left = self.object_ring.replica_count - 1
-            nodes = itertools.chain(job['nodes'],
-                        self.object_ring.get_more_nodes(int(job['partition'])))
+            self.logger.update_stats('suffix.hashes', hashed)
+            attempts_left = len(job['nodes'])
+            nodes = itertools.chain(
+                job['nodes'],
+                self.object_ring.get_more_nodes(int(job['partition'])))
             while attempts_left > 0:
                 # If this throws StopIterator it will be caught way below
                 node = next(nodes)
                 attempts_left -= 1
                 try:
                     with Timeout(self.http_timeout):
-                        resp = http_connect(node['ip'], node['port'],
-                                node['device'], job['partition'], 'REPLICATE',
+                        resp = http_connect(
+                            node['ip'], node['port'],
+                            node['device'], job['partition'], 'REPLICATE',
                             '', headers={'Content-Length': '0'}).getresponse()
-                        if resp.status == 507:
+                        if resp.status == HTTP_INSUFFICIENT_STORAGE:
                             self.logger.error(_('%(ip)s/%(device)s responded'
-                                    ' as unmounted'), node)
+                                                ' as unmounted'), node)
                             attempts_left += 1
                             continue
-                        if resp.status != 200:
+                        if resp.status != HTTP_OK:
                             self.logger.error(_("Invalid response %(resp)s "
-                                "from %(ip)s"),
-                                {'resp': resp.status, 'ip': node['ip']})
+                                                "from %(ip)s"),
+                                              {'resp': resp.status,
+                                               'ip': node['ip']})
                             continue
                         remote_hash = pickle.loads(resp.read())
                         del resp
                     suffixes = [suffix for suffix in local_hash if
-                            local_hash[suffix] != remote_hash.get(suffix, -1)]
+                                local_hash[suffix] !=
+                                remote_hash.get(suffix, -1)]
                     if not suffixes:
                         continue
-                    hashed, recalc_hash = tpool.execute(tpooled_get_hashes,
+                    hashed, recalc_hash = tpool_reraise(
+                        get_hashes,
                         job['path'], recalculate=suffixes,
                         reclaim_age=self.reclaim_age)
-                    # See tpooled_get_hashes "Hack".
-                    if isinstance(hashed, BaseException):
-                        raise hashed
+                    self.logger.update_stats('suffix.hashes', hashed)
                     local_hash = recalc_hash
                     suffixes = [suffix for suffix in local_hash if
-                            local_hash[suffix] != remote_hash.get(suffix, -1)]
+                                local_hash[suffix] !=
+                                remote_hash.get(suffix, -1)]
                     self.rsync(node, job, suffixes)
                     with Timeout(self.http_timeout):
-                        conn = http_connect(node['ip'], node['port'],
+                        conn = http_connect(
+                            node['ip'], node['port'],
                             node['device'], job['partition'], 'REPLICATE',
                             '/' + '-'.join(suffixes),
                             headers={'Content-Length': '0'})
                         conn.getresponse().read()
                     self.suffix_sync += len(suffixes)
+                    self.logger.update_stats('suffix.syncs', len(suffixes))
                 except (Exception, Timeout):
                     self.logger.exception(_("Error syncing with node: %s") %
-                                            node)
+                                          node)
             self.suffix_count += len(local_hash)
         except (Exception, Timeout):
             self.logger.exception(_("Error syncing partition"))
         finally:
             self.partition_times.append(time.time() - begin)
+            self.logger.timing_since('partition.update.timing', begin)
 
     def stats_line(self):
         """
@@ -457,29 +486,34 @@ class ObjectReplicator(Daemon):
         if self.replication_count:
             elapsed = (time.time() - self.start) or 0.000001
             rate = self.replication_count / elapsed
-            self.logger.info(_("%(replicated)d/%(total)d (%(percentage).2f%%)"
-                " partitions replicated in %(time).2fs (%(rate).2f/sec, "
-                "%(remaining)s remaining)"),
+            self.logger.info(
+                _("%(replicated)d/%(total)d (%(percentage).2f%%)"
+                  " partitions replicated in %(time).2fs (%(rate).2f/sec, "
+                  "%(remaining)s remaining)"),
                 {'replicated': self.replication_count, 'total': self.job_count,
                  'percentage': self.replication_count * 100.0 / self.job_count,
                  'time': time.time() - self.start, 'rate': rate,
                  'remaining': '%d%s' % compute_eta(self.start,
-                           self.replication_count, self.job_count)})
+                                                   self.replication_count,
+                                                   self.job_count)})
             if self.suffix_count:
-                self.logger.info(_("%(checked)d suffixes checked - "
-                    "%(hashed).2f%% hashed, %(synced).2f%% synced"),
+                self.logger.info(
+                    _("%(checked)d suffixes checked - "
+                      "%(hashed).2f%% hashed, %(synced).2f%% synced"),
                     {'checked': self.suffix_count,
                      'hashed': (self.suffix_hash * 100.0) / self.suffix_count,
                      'synced': (self.suffix_sync * 100.0) / self.suffix_count})
                 self.partition_times.sort()
-                self.logger.info(_("Partition times: max %(max).4fs, "
-                    "min %(min).4fs, med %(med).4fs"),
+                self.logger.info(
+                    _("Partition times: max %(max).4fs, "
+                      "min %(min).4fs, med %(med).4fs"),
                     {'max': self.partition_times[-1],
                      'min': self.partition_times[0],
                      'med': self.partition_times[
-                                len(self.partition_times) // 2]})
+                         len(self.partition_times) // 2]})
         else:
-            self.logger.info(_("Nothing replicated for %s seconds."),
+            self.logger.info(
+                _("Nothing replicated for %s seconds."),
                 (time.time() - self.start))
 
     def kill_coros(self):
@@ -520,7 +554,8 @@ class ObjectReplicator(Daemon):
         jobs = []
         ips = whataremyips()
         for local_dev in [dev for dev in self.object_ring.devs
-                if dev and dev['ip'] in ips and dev['port'] == self.port]:
+                          if dev and dev['ip'] in ips and
+                          dev['port'] == self.port]:
             dev_path = join(self.devices_dir, local_dev['device'])
             obj_path = join(dev_path, 'objects')
             tmp_path = join(dev_path, 'tmp')
@@ -529,25 +564,38 @@ class ObjectReplicator(Daemon):
                 continue
             unlink_older_than(tmp_path, time.time() - self.reclaim_age)
             if not os.path.exists(obj_path):
+                try:
+                    mkdirs(obj_path)
+                except Exception:
+                    self.logger.exception('ERROR creating %s' % obj_path)
                 continue
             for partition in os.listdir(obj_path):
                 try:
-                    nodes = [node for node in
+                    job_path = join(obj_path, partition)
+                    if isfile(job_path):
+                        # Clean up any (probably zero-byte) files where a
+                        # partition should be.
+                        self.logger.warning('Removing partition directory '
+                                            'which was a file: %s', job_path)
+                        os.remove(job_path)
+                        continue
+                    part_nodes = \
                         self.object_ring.get_part_nodes(int(partition))
+                    nodes = [node for node in part_nodes
                              if node['id'] != local_dev['id']]
-                    jobs.append(dict(path=join(obj_path, partition),
-                        nodes=nodes,
-                        delete=len(nodes) > self.object_ring.replica_count - 1,
-                        partition=partition))
-                except ValueError:
+                    jobs.append(
+                        dict(path=job_path,
+                             device=local_dev['device'],
+                             nodes=nodes,
+                             delete=len(nodes) > len(part_nodes) - 1,
+                             partition=partition))
+                except (ValueError, OSError):
                     continue
         random.shuffle(jobs)
-        # Partititons that need to be deleted take priority
-        jobs.sort(key=lambda job: not job['delete'])
         self.job_count = len(jobs)
         return jobs
 
-    def replicate(self):
+    def replicate(self, override_devices=[], override_partitions=[]):
         """Run a replication pass"""
         self.start = time.time()
         self.suffix_count = 0
@@ -563,9 +611,18 @@ class ObjectReplicator(Daemon):
             self.run_pool = GreenPool(size=self.concurrency)
             jobs = self.collect_jobs()
             for job in jobs:
+                if override_devices and job['device'] not in override_devices:
+                    continue
+                if override_partitions and \
+                        job['partition'] not in override_partitions:
+                    continue
+                dev_path = join(self.devices_dir, job['device'])
+                if self.mount_check and not os.path.ismount(dev_path):
+                    self.logger.warn(_('%s is not mounted'), job['device'])
+                    continue
                 if not self.check_ring():
                     self.logger.info(_("Ring change detected. Aborting "
-                            "current replication pass."))
+                                       "current replication pass."))
                     return
                 if job['delete']:
                     self.run_pool.spawn(self.update_deleted, job)
@@ -584,16 +641,18 @@ class ObjectReplicator(Daemon):
     def run_once(self, *args, **kwargs):
         start = time.time()
         self.logger.info(_("Running object replicator in script mode."))
-        self.replicate()
+        override_devices = list_from_csv(kwargs.get('devices'))
+        override_partitions = list_from_csv(kwargs.get('partitions'))
+        self.replicate(
+            override_devices=override_devices,
+            override_partitions=override_partitions)
         total = (time.time() - start) / 60
         self.logger.info(
-            _("Object replication complete. (%.02f minutes)"), total)
-        if self.recon_enable:
-            try:
-                dump_recon_cache('object_replication_time', total, \
-                    self.recon_object)
-            except (Exception, Timeout):
-                self.logger.exception(_('Exception dumping recon cache'))
+            _("Object replication complete (once). (%.02f minutes)"), total)
+        if not (override_partitions or override_devices):
+            dump_recon_cache({'object_replication_time': total,
+                              'object_replication_last': time.time()},
+                             self.rcache, self.logger)
 
     def run_forever(self, *args, **kwargs):
         self.logger.info(_("Starting object replicator in daemon mode."))
@@ -606,12 +665,9 @@ class ObjectReplicator(Daemon):
             total = (time.time() - start) / 60
             self.logger.info(
                 _("Object replication complete. (%.02f minutes)"), total)
-            if self.recon_enable:
-                try:
-                    dump_recon_cache('object_replication_time', total, \
-                        self.recon_object)
-                except (Exception, Timeout):
-                    self.logger.exception(_('Exception dumping recon cache'))
+            dump_recon_cache({'object_replication_time': total,
+                              'object_replication_last': time.time()},
+                             self.rcache, self.logger)
             self.logger.debug(_('Replication sleeping for %s seconds.'),
-                self.run_pause)
+                              self.run_pause)
             sleep(self.run_pause)

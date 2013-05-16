@@ -5,17 +5,11 @@ swift-recon-cron.py
 
 import os
 import sys
-import optparse
-from tempfile import NamedTemporaryFile
-try:
-    import simplejson as json
-except ImportError:
-    import json
 from ConfigParser import ConfigParser
 from swift.common.utils import get_logger, dump_recon_cache
 
 
-def async_count(device_dir, logger):
+def get_async_count(device_dir, logger):
     async_count = 0
     for i in os.listdir(device_dir):
         asyncdir = os.path.join(device_dir, i, "async_pending")
@@ -41,22 +35,27 @@ def main():
     conf = dict(c.items('filter:recon'))
     device_dir = conf.get('devices', '/srv/node')
     recon_cache_path = conf.get('recon_cache_path', '/var/cache/swift')
+    recon_lock_path = conf.get('recon_lock_path', '/var/lock')
     cache_file = os.path.join(recon_cache_path, "object.recon")
+    lock_dir = os.path.join(recon_lock_path, "swift-recon-object-cron")
     conf['log_name'] = conf.get('log_name', 'recon-cron')
     logger = get_logger(conf, log_route='recon-cron')
     try:
-        os.mkdir("/var/lock/swift-recon-object-cron")
+        os.mkdir(lock_dir)
     except OSError as e:
         logger.critical(_(str(e)))
         print str(e)
         sys.exit(1)
-    asyncs = async_count(device_dir, logger)
     try:
-        dump_recon_cache('async_pending', asyncs, cache_file)
+        asyncs = get_async_count(device_dir, logger)
     except Exception:
-        logger.exception(_('Exception dumping recon cache'))
+        logger.exception(
+            _('Exception during recon-cron while accessing devices'))
+
+    dump_recon_cache({'async_pending': asyncs}, cache_file, logger)
+
     try:
-        os.rmdir("/var/lock/swift-recon-object-cron")
+        os.rmdir(lock_dir)
     except Exception:
         logger.exception(_('Exception remove cronjob lock'))
 

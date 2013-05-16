@@ -19,7 +19,13 @@ from swift.common import db, db_replicator
 
 class ContainerReplicator(db_replicator.Replicator):
     server_type = 'container'
-    ring_file = 'container.ring.gz'
     brokerclass = db.ContainerBroker
     datadir = container_server.DATADIR
     default_port = 6001
+
+    def report_up_to_date(self, full_info):
+        for key in ('put_timestamp', 'delete_timestamp', 'object_count',
+                    'bytes_used'):
+            if full_info['reported_' + key] != full_info[key]:
+                return False
+        return True

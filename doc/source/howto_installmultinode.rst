@@ -27,11 +27,11 @@ This document shows a cluster using the following types of nodes:
 
 - five Storage nodes
 
-  - Runs the swift-account-server, swift-container-server, and 
+  - Runs the swift-account-server, swift-container-server, and
     swift-object-server processes which control storage of the account
     databases, the container databases, as well as the actual stored
     objects.
-    
+
 .. note::
     Fewer Storage nodes can be used initially, but a minimum of 5 is
     recommended for a production cluster.
@@ -62,7 +62,7 @@ General OS configuration and partitioning for each node
         apt-get install python-software-properties
         add-apt-repository ppa:swift-core/release
         apt-get update
-        apt-get install swift openssh-server
+        apt-get install swift python-swiftclient openssh-server
 
 #. Create and populate configuration directories::
 
@@ -73,22 +73,32 @@ General OS configuration and partitioning for each node
 
         cat >/etc/swift/swift.conf <<EOF
         [swift-hash]
-        # random unique string that can never change (DO NOT LOSE)
+        # random unique strings that can never change (DO NOT LOSE)
+        swift_hash_path_prefix = `od -t x8 -N 8 -A n </dev/random`
         swift_hash_path_suffix = `od -t x8 -N 8 -A n </dev/random`
         EOF
 
 #. On the second and subsequent nodes: Copy that file over. It must be the same on every node in the cluster!::
 
-        scp firstnode.example.com:/etc/swift/swift.conf /etc/swift/  
+        scp firstnode.example.com:/etc/swift/swift.conf /etc/swift/
 
 #. Publish the local network IP address for use by scripts found later in this documentation::
 
         export STORAGE_LOCAL_NET_IP=10.1.2.3
         export PROXY_LOCAL_NET_IP=10.1.2.4
 
+#. Create directory /var/run/swift and change the ownership to the user and group
+   which Swift services will run under. Since the directory is only needed for runtime,
+   when system shuts down, the directory will be gone. It is necessary to have
+   the directory recreated when system is restarted. To do that, also add the
+   following lines into /etc/rc.local before line "exit 0".::
+
+        mkdir -p /var/run/swift
+        chown swift:swift /var/run/swift
+
 .. note::
-    The random string of text in /etc/swift/swift.conf is 
-    used as a salt when hashing to determine mappings in the ring. 
+    The random string of text in /etc/swift/swift.conf is
+    used as a salt when hashing to determine mappings in the ring.
 
 .. _config-proxy:
 
@@ -108,8 +118,10 @@ Configure the Proxy node
         openssl req -new -x509 -nodes -out cert.crt -keyout cert.key
 
 .. note::
-	If you don't create the cert files, Swift silently uses http internally rather than https. This document assumes that you have created
-	these certs, so if you're following along step-by-step, create them.
+    If you don't create the cert files, Swift silently uses http internally rather than https. This document assumes that you have created
+    these certs, so if you're following along step-by-step, create them. In a
+    production cluster, you should terminate SSL before the proxy server. SSL
+    support is provided for testing purposes only.
 
 #. Modify memcached to listen on the default interfaces. Preferably this should be on a local, non-public network. Edit the IP address in /etc/memcached.conf, for example::
 
@@ -128,22 +140,22 @@ Configure the Proxy node
         bind_port = 8080
         workers = 8
         user = swift
-        
+
         [pipeline:main]
         pipeline = healthcheck cache tempauth proxy-server
-        
+
         [app:proxy-server]
         use = egg:swift#proxy
         allow_account_management = true
         account_autocreate = true
-        
+
         [filter:tempauth]
         use = egg:swift#tempauth
         user_system_root = testpass .admin https://$PROXY_LOCAL_NET_IP:8080/v1/AUTH_system
-        
+
         [filter:healthcheck]
         use = egg:swift#healthcheck
-        
+
         [filter:cache]
         use = egg:swift#memcache
         memcache_servers = $PROXY_LOCAL_NET_IP:11211
@@ -151,7 +163,7 @@ Configure the Proxy node
 
    .. note::
 
-    If you run multiple memcache servers, put the multiple IP:port listings    
+    If you run multiple memcache servers, put the multiple IP:port listings
     in the [filter:cache] section of the proxy-server.conf file like:
     `10.1.2.3:11211,10.1.2.4:11211`. Only the proxy server uses memcache.
 
@@ -163,11 +175,11 @@ Configure the Proxy node
     swift-ring-builder account.builder create 18 3 1
     swift-ring-builder container.builder create 18 3 1
     swift-ring-builder object.builder create 18 3 1
-    
+
    .. note::
 
     For more information on building rings, see :doc:`overview_ring`.
-        
+
 #. For every storage device in /srv/node on each node add entries to each ring::
 
     export ZONE=                    # set the zone number for that storage device
@@ -187,7 +199,7 @@ Configure the Proxy node
     swift-ring-builder account.builder
     swift-ring-builder container.builder
     swift-ring-builder object.builder
-    
+
 #. Rebalance the rings::
 
     swift-ring-builder account.builder rebalance
@@ -217,7 +229,7 @@ Configure the Storage nodes
     Extended Attributes (XATTRS). We currently recommend XFS as it
     demonstrated the best overall performance for the swift use case after
     considerable testing and benchmarking at Rackspace. It is also the
-    only filesystem that has been thoroughly tested. These instructions 
+    only filesystem that has been thoroughly tested. These instructions
     assume that you are going to devote /dev/sdb1 to an XFS filesystem.
 
 #. Install Storage node packages::
@@ -242,19 +254,19 @@ Configure the Storage nodes
         log file = /var/log/rsyncd.log
         pid file = /var/run/rsyncd.pid
         address = $STORAGE_LOCAL_NET_IP
-        
+
         [account]
         max connections = 2
         path = /srv/node/
         read only = false
         lock file = /var/lock/account.lock
-        
+
         [container]
         max connections = 2
         path = /srv/node/
         read only = false
         lock file = /var/lock/container.lock
-        
+
         [object]
         max connections = 2
         path = /srv/node/
@@ -280,17 +292,17 @@ Configure the Storage nodes
         [DEFAULT]
         bind_ip = $STORAGE_LOCAL_NET_IP
         workers = 2
-        
+
         [pipeline:main]
         pipeline = account-server
-        
+
         [app:account-server]
         use = egg:swift#account
-        
+
         [account-replicator]
 
         [account-auditor]
-        
+
         [account-reaper]
         EOF
 
@@ -300,18 +312,20 @@ Configure the Storage nodes
         [DEFAULT]
         bind_ip = $STORAGE_LOCAL_NET_IP
         workers = 2
-        
+
         [pipeline:main]
         pipeline = container-server
-        
+
         [app:container-server]
         use = egg:swift#container
-        
+
         [container-replicator]
-        
+
         [container-updater]
-        
+
         [container-auditor]
+
+        [container-sync]
         EOF
 
 #. Create /etc/swift/object-server.conf::
@@ -320,17 +334,17 @@ Configure the Storage nodes
         [DEFAULT]
         bind_ip = $STORAGE_LOCAL_NET_IP
         workers = 2
-        
+
         [pipeline:main]
         pipeline = object-server
-        
+
         [app:object-server]
         use = egg:swift#object
-        
+
         [object-replicator]
-        
+
         [object-updater]
-        
+
         [object-auditor]
         EOF
 
@@ -410,11 +424,11 @@ You run these commands from the Proxy node.
 Adding a Proxy Server
 ---------------------
 
-For reliability's sake you may want to have more than one proxy server. You can set up the additional proxy node in the same manner that you set up the first proxy node but with additional configuration steps. 
+For reliability's sake you may want to have more than one proxy server. You can set up the additional proxy node in the same manner that you set up the first proxy node but with additional configuration steps.
 
 Once you have more than two proxies, you also want to load balance between the two, which means your storage endpoint also changes. You can select from different strategies for load balancing. For example, you could use round robin dns, or an actual load balancer (like pound) in front of the two proxies, and point your storage url to the load balancer.
 
-See :ref:`config-proxy` for the initial setup, and then follow these additional steps. 
+See :ref:`config-proxy` for the initial setup, and then follow these additional steps.
 
 #. Update the list of memcache servers in /etc/swift/proxy-server.conf for all the added proxy servers. If you run multiple memcache servers, use this pattern for the multiple IP:port listings: `10.1.2.3:11211,10.1.2.4:11211` in each proxy server's conf file.::
 
@@ -428,15 +442,14 @@ See :ref:`config-proxy` for the initial setup, and then follow these additional 
         use = egg:swift#tempauth
         user_system_root = testpass .admin http[s]://<LOAD_BALANCER_HOSTNAME>:<PORT>/v1/AUTH_system
 
-#. Next, copy all the ring information to all the nodes, including your new proxy nodes, and ensure the ring info gets to all the storage nodes as well. 
+#. Next, copy all the ring information to all the nodes, including your new proxy nodes, and ensure the ring info gets to all the storage nodes as well.
 
-#. After you sync all the nodes, make sure the admin has the keys in /etc/swift and the ownership for the ring file is correct. 
+#. After you sync all the nodes, make sure the admin has the keys in /etc/swift and the ownership for the ring file is correct.
 
 Troubleshooting Notes
 ---------------------
-If you see problems, look in var/log/syslog (or messages on some distros). 
+If you see problems, look in var/log/syslog (or messages on some distros).
 
-Also, at Rackspace we have seen hints at drive failures by looking at error messages in /var/log/kern.log. 
+Also, at Rackspace we have seen hints at drive failures by looking at error messages in /var/log/kern.log.
 
 There are more debugging hints and tips in the :doc:`admin_guide`.
-

@@ -22,6 +22,10 @@ from swift import __canonical_version__ as version
 name = 'swift'
 
 
+with open('tools/pip-requires', 'r') as f:
+    requires = [x.strip() for x in f if x.strip()]
+
+
 setup(
     name=name,
     version=version,
@@ -33,21 +37,24 @@ setup(
     packages=find_packages(exclude=['test', 'bin']),
     test_suite='nose.collector',
     classifiers=[
-        'Development Status :: 4 - Beta',
+        'Development Status :: 5 - Production/Stable',
         'License :: OSI Approved :: Apache Software License',
         'Operating System :: POSIX :: Linux',
+        'Programming Language :: Python',
         'Programming Language :: Python :: 2.6',
+        'Programming Language :: Python :: 2.7',
         'Environment :: No Input/Output (Daemon)',
-        ],
-    install_requires=[],  # removed for better compat
+        'Environment :: OpenStack',
+    ],
+    install_requires=requires,
     scripts=[
-        'bin/swift',
         'bin/swift-account-audit',
         'bin/swift-account-auditor',
         'bin/swift-account-reaper',
         'bin/swift-account-replicator',
         'bin/swift-account-server',
         'bin/swift-bench',
+        'bin/swift-bench-client',
         'bin/swift-container-auditor',
         'bin/swift-container-replicator',
         'bin/swift-container-server',
@@ -79,7 +86,7 @@ setup(
             'object=swift.obj.server:app_factory',
             'container=swift.container.server:app_factory',
             'account=swift.account.server:app_factory',
-            ],
+        ],
         'paste.filter_factory': [
             'healthcheck=swift.common.middleware.healthcheck:filter_factory',
             'memcache=swift.common.middleware.memcache:filter_factory',
@@ -87,13 +94,23 @@ setup(
             'cname_lookup=swift.common.middleware.cname_lookup:filter_factory',
             'catch_errors=swift.common.middleware.catch_errors:filter_factory',
             'domain_remap=swift.common.middleware.domain_remap:filter_factory',
-            'swift3=swift.common.middleware.swift3:filter_factory',
             'staticweb=swift.common.middleware.staticweb:filter_factory',
             'tempauth=swift.common.middleware.tempauth:filter_factory',
+            'keystoneauth=swift.common.middleware.keystoneauth:filter_factory',
             'recon=swift.common.middleware.recon:filter_factory',
             'tempurl=swift.common.middleware.tempurl:filter_factory',
             'formpost=swift.common.middleware.formpost:filter_factory',
             'name_check=swift.common.middleware.name_check:filter_factory',
-            ],
-        },
-    )
+            'bulk=swift.common.middleware.bulk:filter_factory',
+            'container_quotas=swift.common.middleware.container_quotas:'
+            'filter_factory',
+            'account_quotas=swift.common.middleware.account_quotas:'
+            'filter_factory',
+            'proxy_logging=swift.common.middleware.proxy_logging:'
+            'filter_factory',
+            'slo=swift.common.middleware.slo:filter_factory',
+            'list_endpoints=swift.common.middleware.list_endpoints:'
+            'filter_factory',
+        ],
+    },
+)

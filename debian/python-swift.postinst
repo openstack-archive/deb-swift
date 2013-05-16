@@ -1,11 +1,15 @@
-#!/bin/sh -e
+#!/bin/sh
+
+set -e
 
 #DEBHELPER#
 
 if ! getent passwd swift > /dev/null ; then
-  adduser --system --quiet --disabled-login --disabled-password --no-create-home --group swift
+  adduser --system --quiet --disabled-login --disabled-password --no-create-home --group --shell /bin/false swift
 fi
 
 usermod -G adm swift
 
 chown swift:swift /var/cache/swift
+
+exit 0

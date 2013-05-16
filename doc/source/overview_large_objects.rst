@@ -13,13 +13,18 @@ special manifest file is created that, when downloaded, sends all the segments
 concatenated as a single object. This also offers much greater upload speed
 with the possibility of parallel uploads of the segments.
 
--------------------------------------
-Using ``swift`` for Segmented Objects
--------------------------------------
+---------------------
+Dynamic Large Objects
+---------------------
 
-The quickest way to try out this feature is use the included ``swift`` Swift Tool.
-You can use the ``-S`` option to specify the segment size to use when splitting
-a large file. For example::
+---------------
+Using ``swift``
+---------------
+
+The quickest way to try out this feature is use the ``swift`` Swift Tool
+included with the `python-swiftclient`_ library.  You can use the ``-S``
+option to specify the segment size to use when splitting a large file. For
+example::
 
     swift upload test_container -S 1073741824 large_file
 
@@ -31,10 +36,10 @@ So now, the following ``swift`` command would download the entire large object::
 
     swift download test_container large_file
 
-``swift`` uses a strict convention for its segmented object support. In the above
-example it will upload all the segments into a second container named
-test_container_segments. These segments will have names like
-large_file/1290206778.25/21474836480/00000000,
+``swift`` uses a strict convention for its segmented object
+support. In the above example it will upload all the segments into a
+second container named test_container_segments. These segments will
+have names like large_file/1290206778.25/21474836480/00000000,
 large_file/1290206778.25/21474836480/00000001, etc.
 
 The main benefit for using a separate container is that the main container
@@ -48,14 +53,16 @@ deletes and overwrites, etc. You can override this behavior with the
 ``--leave-segments`` option if desired; this is useful if you want to have
 multiple versions of the same large object available.
 
+.. _`python-swiftclient`: http://github.com/openstack/python-swiftclient
+
 ----------
 Direct API
 ----------
 
-You can also work with the segments and manifests directly with HTTP requests
-instead of having ``swift`` do that for you. You can just upload the segments like
-you would any other object and the manifest is just a zero-byte file with an
-extra ``X-Object-Manifest`` header.
+You can also work with the segments and manifests directly with HTTP
+requests instead of having ``swift`` do that for you. You can just
+upload the segments like you would any other object and the manifest
+is just a zero-byte file with an extra ``X-Object-Manifest`` header.
 
 All the object segments need to be in the same container, have a common object
 name prefix, and their names sort in the order they should be concatenated.
@@ -93,6 +100,19 @@ Here's an example using ``curl`` with tiny 1-byte segments::
     curl -H 'X-Auth-Token: <token>' \
         http://<storage_url>/container/myobject
 
+--------------------
+Static Large Objects
+--------------------
+
+----------
+Direct API
+----------
+
+SLO support centers around the user generated manifest file. After the user
+has uploaded the segments into their account a manifest file needs to be
+built and uploaded. All object segments must be above 1 MB (by default) in
+size. Please see the SLO docs for :ref:`slo-doc` further details.
+
 ----------------
 Additional Notes
 ----------------
@@ -114,11 +134,11 @@ Additional Notes
 
 * The response's ``ETag`` for a ``GET`` or ``HEAD`` on the manifest file will
   be the MD5 sum of the concatenated string of ETags for each of the segments
-  in the ``<container>/<prefix>`` listing, dynamically. Usually in Swift the
-  ETag is the MD5 sum of the contents of the object, and that holds true for
-  each segment independently. But, it's not feasible to generate such an ETag
-  for the manifest itself, so this method was chosen to at least offer change
-  detection.
+  in the manifest (for DLO, from the listing ``<container>/<prefix>``).
+  Usually in Swift the ETag is the MD5 sum of the contents of the object, and
+  that holds true for each segment independently. But it's not meaningful to
+  generate such an ETag for the manifest itself so this method was chosen to
+  at least offer change detection.
 
 
 .. note::
@@ -131,8 +151,8 @@ Additional Notes
 History
 -------
 
-Large object support has gone through various iterations before settling on
-this implementation.
+Dynamic large object support has gone through various iterations before
+settling on this implementation.
 
 The primary factor driving the limitation of object size in swift is
 maintaining balance among the partitions of the ring.  To maintain an even
@@ -165,20 +185,32 @@ The current "user manifest" design was chosen in order to provide a
 transparent download of large objects to the client and still provide the
 uploading client a clean API to support segmented uploads.
 
-Alternative "explicit" user manifest options were discussed which would have
-required a pre-defined format for listing the segments to "finalize" the
-segmented upload.  While this may offer some potential advantages, it was
-decided that pushing an added burden onto the client which could potentially
-limit adoption should be avoided in favor of a simpler "API" (essentially just
-the format of the 'X-Object-Manifest' header).
+To meet an many use cases as possible swift supports two types of large
+object manifests. Dynamic and static large object manifests both support
+the same idea of allowing the user to upload many segments to be later
+downloaded as a single file.
 
-During development it was noted that this "implicit" user manifest approach
-which is based on the path prefix can be potentially affected by the eventual
-consistency window of the container listings, which could theoretically cause
-a GET on the manifest object to return an invalid whole object for that short
-term.  In reality you're unlikely to encounter this scenario unless you're
-running very high concurrency uploads against a small testing environment
-which isn't running the object-updaters or container-replicators.
+Dynamic large objects rely on a container lising to provide the manifest.
+This has the advantage of allowing the user to add/removes segments from the
+manifest at any time. It has the disadvantage of relying on eventually
+consistent container listings. All three copies of the container dbs must
+be updated for a complete list to be guaranteed. Also, all segments must
+be in a single container, which can limit concurrent upload speed.
 
-Like all of swift, Large Object Support is living feature which will continue
-to improve and may change over time.
+Static large objects rely on a user provided manifest file. A user can
+upload objects into multiple containers and then reference those objects
+(segments) in a self generated manifest file. Future GETs to that file will
+download the concatenation of the specified segments. This has the advantage of
+being able to immediately download the complete object once the manifest has
+been successfully PUT. Being able to upload segments into separate containers
+also improves concurrent upload speed. It has the disadvantage that the
+manifest is finalized once PUT. Any changes to it means it has to be replaced.
+
+Between these two methods the user has great flexibility in how (s)he chooses
+to upload and retrieve large objects to swift. Swift does not, however, stop
+the user from harming themselves. In both cases the segments are deletable by
+the user at any time. If a segment was deleted by mistake, a dynamic large
+object, having no way of knowing it was ever there, would happily ignore the
+deleted file and the user will get an incomplete file. A static large object
+would, when failing to retrieve the object specified in the manifest, drop the
+connection and the user would receive partial results.

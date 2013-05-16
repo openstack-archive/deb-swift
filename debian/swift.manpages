@@ -12,3 +12,4 @@ debian/mans/swift/swift-bench.8
 debian/mans/swift/swift-get-nodes.8
 debian/mans/swift/swift-ring-builder.8
 debian/mans/swift/swift-log-stats-collector.8
+debian/mans/swift/swift-dispersion-populate.8

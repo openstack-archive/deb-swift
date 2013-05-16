@@ -23,13 +23,15 @@ from tempfile import mkstemp
 
 from eventlet import spawn, patcher, Timeout
 
+import swift.common.db
 from swift.container.server import DATADIR
 from swift.common.bufferedhttp import http_connect
 from swift.common.db import ContainerBroker
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.ring import Ring
-from swift.common.utils import get_logger, whataremyips
+from swift.common.utils import get_logger, config_true_value, dump_recon_cache
 from swift.common.daemon import Daemon
+from swift.common.http import is_success, HTTP_INTERNAL_SERVER_ERROR
 
 
 class ContainerUpdater(Daemon):
@@ -39,11 +41,9 @@ class ContainerUpdater(Daemon):
         self.conf = conf
         self.logger = get_logger(conf, log_route='container-updater')
         self.devices = conf.get('devices', '/srv/node')
-        self.mount_check = conf.get('mount_check', 'true').lower() in \
-                              ('true', 't', '1', 'on', 'yes', 'y')
-        swift_dir = conf.get('swift_dir', '/etc/swift')
+        self.mount_check = config_true_value(conf.get('mount_check', 'true'))
+        self.swift_dir = conf.get('swift_dir', '/etc/swift')
         self.interval = int(conf.get('interval', 300))
-        self.account_ring_path = os.path.join(swift_dir, 'account.ring.gz')
         self.account_ring = None
         self.concurrency = int(conf.get('concurrency', 4))
         self.slowdown = float(conf.get('slowdown', 0.01))
@@ -56,13 +56,16 @@ class ContainerUpdater(Daemon):
         self.account_suppression_time = \
             float(conf.get('account_suppression_time', 60))
         self.new_account_suppressions = None
+        swift.common.db.DB_PREALLOCATION = \
+            config_true_value(conf.get('db_preallocation', 'f'))
+        self.recon_cache_path = conf.get('recon_cache_path',
+                                         '/var/cache/swift')
+        self.rcache = os.path.join(self.recon_cache_path, "container.recon")
 
     def get_account_ring(self):
         """Get the account ring.  Load it if it hasn't been yet."""
         if not self.account_ring:
-            self.logger.debug(
-                _('Loading account ring from %s'), self.account_ring_path)
-            self.account_ring = Ring(self.account_ring_path)
+            self.account_ring = Ring(self.swift_dir, ring_name='account')
         return self.account_ring
 
     def get_paths(self):
@@ -108,7 +111,8 @@ class ContainerUpdater(Daemon):
             begin = time.time()
             now = time.time()
             expired_suppressions = \
-               [a for a, u in self.account_suppressions.iteritems() if u < now]
+                [a for a, u in self.account_suppressions.iteritems()
+                 if u < now]
             for account in expired_suppressions:
                 del self.account_suppressions[account]
             pid2filename = {}
@@ -153,6 +157,8 @@ class ContainerUpdater(Daemon):
             elapsed = time.time() - begin
             self.logger.info(_('Container update sweep completed: %.02fs'),
                              elapsed)
+            dump_recon_cache({'container_updater_sweep': elapsed},
+                             self.rcache, self.logger)
             if elapsed < self.interval:
                 time.sleep(self.interval - elapsed)
 
@@ -169,11 +175,14 @@ class ContainerUpdater(Daemon):
         for path in self.get_paths():
             self.container_sweep(path)
         elapsed = time.time() - begin
-        self.logger.info(_('Container update single threaded sweep completed: '
+        self.logger.info(_(
+            'Container update single threaded sweep completed: '
             '%(elapsed).02fs, %(success)s successes, %(fail)s failures, '
             '%(no_change)s with no changes'),
             {'elapsed': elapsed, 'success': self.successes,
              'fail': self.failures, 'no_change': self.no_changes})
+        dump_recon_cache({'container_updater_sweep': elapsed},
+                         self.rcache, self.logger)
 
     def container_sweep(self, path):
         """
@@ -193,6 +202,7 @@ class ContainerUpdater(Daemon):
 
         :param dbfile: container DB to process
         """
+        start_time = time.time()
         broker = ContainerBroker(dbfile, logger=self.logger)
         info = broker.get_info()
         # Don't send updates if the container was auto-created since it
@@ -214,11 +224,12 @@ class ContainerUpdater(Daemon):
             successes = 0
             failures = 0
             for event in events:
-                if 200 <= event.wait() < 300:
+                if is_success(event.wait()):
                     successes += 1
                 else:
                     failures += 1
             if successes > failures:
+                self.logger.increment('successes')
                 self.successes += 1
                 self.logger.debug(
                     _('Update report sent for %(container)s %(dbfile)s'),
@@ -227,6 +238,7 @@ class ContainerUpdater(Daemon):
                                 info['delete_timestamp'], info['object_count'],
                                 info['bytes_used'])
             else:
+                self.logger.increment('failures')
                 self.failures += 1
                 self.logger.debug(
                     _('Update report failed for %(container)s %(dbfile)s'),
@@ -236,7 +248,10 @@ class ContainerUpdater(Daemon):
                 if self.new_account_suppressions:
                     print >>self.new_account_suppressions, \
                         info['account'], until
+            # Only track timing data for attempted updates:
+            self.logger.timing_since('timing', start_time)
         else:
+            self.logger.increment('no_changes')
             self.no_changes += 1
 
     def container_report(self, node, part, container, put_timestamp,
@@ -263,9 +278,10 @@ class ContainerUpdater(Daemon):
                              'X-Bytes-Used': bytes,
                              'X-Account-Override-Deleted': 'yes'})
             except (Exception, Timeout):
-                self.logger.exception(_('ERROR account update failed with '
+                self.logger.exception(_(
+                    'ERROR account update failed with '
                     '%(ip)s:%(port)s/%(device)s (will retry later): '), node)
-                return 500
+                return HTTP_INTERNAL_SERVER_ERROR
         with Timeout(self.node_timeout):
             try:
                 resp = conn.getresponse()
@@ -275,4 +291,4 @@ class ContainerUpdater(Daemon):
                 if self.logger.getEffectiveLevel() <= logging.DEBUG:
                     self.logger.exception(
                         _('Exception with %(ip)s:%(port)s/%(device)s'), node)
-                return 500
+                return HTTP_INTERNAL_SERVER_ERROR

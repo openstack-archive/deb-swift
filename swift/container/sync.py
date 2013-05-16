@@ -13,22 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 from time import ctime, time
 from random import random, shuffle
 from struct import unpack_from
 
 from eventlet import sleep, Timeout
 
+import swift.common.db
 from swift.container import server as container_server
-from swift.common.client import ClientException, delete_object, put_object, \
+from swiftclient import ClientException, delete_object, put_object, \
     quote
 from swift.common.direct_client import direct_get_object
 from swift.common.ring import Ring
 from swift.common.db import ContainerBroker
 from swift.common.utils import audit_location_generator, get_logger, \
-    hash_path, normalize_timestamp, TRUE_VALUES, validate_sync_to, whataremyips
+    hash_path, config_true_value, validate_sync_to, whataremyips
 from swift.common.daemon import Daemon
+from swift.common.http import HTTP_UNAUTHORIZED, HTTP_NOT_FOUND
 
 
 class _Iter2FileLikeObject(object):
@@ -143,8 +144,7 @@ class ContainerSync(Daemon):
         self.devices = conf.get('devices', '/srv/node')
         #: Indicates whether mount points should be verified as actual mount
         #: points (normally true, false for tests and SAIO).
-        self.mount_check = \
-            conf.get('mount_check', 'true').lower() in TRUE_VALUES
+        self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         #: Minimum time between full scans. This is to keep the daemon from
         #: running wild on near empty systems.
         self.interval = int(conf.get('interval', 300))
@@ -153,7 +153,8 @@ class ContainerSync(Daemon):
         #: it'll just be resumed next scan.
         self.container_time = int(conf.get('container_time', 60))
         #: The list of hosts we're allowed to send syncs to.
-        self.allowed_sync_hosts = [h.strip()
+        self.allowed_sync_hosts = [
+            h.strip()
             for h in conf.get('allowed_sync_hosts', '127.0.0.1').split(',')
             if h.strip()]
         self.proxy = conf.get('sync_proxy')
@@ -172,13 +173,14 @@ class ContainerSync(Daemon):
         self.reported = time()
         swift_dir = conf.get('swift_dir', '/etc/swift')
         #: swift.common.ring.Ring for locating containers.
-        self.container_ring = container_ring or \
-            Ring(os.path.join(swift_dir, 'container.ring.gz'))
+        self.container_ring = container_ring or Ring(swift_dir,
+                                                     ring_name='container')
         #: swift.common.ring.Ring for locating objects.
-        self.object_ring = object_ring or \
-            Ring(os.path.join(swift_dir, 'object.ring.gz'))
+        self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self._myips = whataremyips()
         self._myport = int(conf.get('bind_port', 6001))
+        swift.common.db.DB_PREALLOCATION = \
+            config_true_value(conf.get('db_preallocation', 'f'))
 
     def run_forever(self):
         """
@@ -271,6 +273,7 @@ class ContainerSync(Daemon):
                         sync_key = value
                 if not sync_to or not sync_key:
                     self.container_skips += 1
+                    self.logger.increment('skips')
                     return
                 sync_to = sync_to.rstrip('/')
                 err = validate_sync_to(sync_to, self.allowed_sync_hosts)
@@ -280,28 +283,33 @@ class ContainerSync(Daemon):
                         {'db_file': broker.db_file,
                          'validate_sync_to_err': err})
                     self.container_failures += 1
+                    self.logger.increment('failures')
                     return
                 stop_at = time() + self.container_time
+                next_sync_point = None
                 while time() < stop_at and sync_point2 < sync_point1:
                     rows = broker.get_items_since(sync_point2, 1)
                     if not rows:
                         break
                     row = rows[0]
-                    if row['ROWID'] >= sync_point1:
+                    if row['ROWID'] > sync_point1:
                         break
                     key = hash_path(info['account'], info['container'],
                                     row['name'], raw_digest=True)
-                    # This node will only intially sync out one third of the
-                    # objects (if 3 replicas, 1/4 if 4, etc.). This section
-                    # will attempt to sync previously skipped rows in case the
-                    # other nodes didn't succeed.
-                    if unpack_from('>I', key)[0] % \
-                            self.container_ring.replica_count != ordinal:
-                        if not self.container_sync_row(row, sync_to, sync_key,
-                                                       broker, info):
-                            return
+                    # This node will only initially sync out one third of the
+                    # objects (if 3 replicas, 1/4 if 4, etc.) and will skip
+                    # problematic rows as needed in case of faults.
+                    # This section will attempt to sync previously skipped
+                    # rows in case the previous attempts by any of the nodes
+                    # didn't succeed.
+                    if not self.container_sync_row(row, sync_to, sync_key,
+                                                   broker, info):
+                        if not next_sync_point:
+                            next_sync_point = sync_point2
                     sync_point2 = row['ROWID']
                     broker.set_x_container_sync_points(None, sync_point2)
+                if next_sync_point:
+                    broker.set_x_container_sync_points(None, next_sync_point)
                 while time() < stop_at:
                     rows = broker.get_items_since(sync_point1, 1)
                     if not rows:
@@ -309,21 +317,22 @@ class ContainerSync(Daemon):
                     row = rows[0]
                     key = hash_path(info['account'], info['container'],
                                     row['name'], raw_digest=True)
-                    # This node will only intially sync out one third of the
+                    # This node will only initially sync out one third of the
                     # objects (if 3 replicas, 1/4 if 4, etc.). It'll come back
                     # around to the section above and attempt to sync
                     # previously skipped rows in case the other nodes didn't
-                    # succeed.
+                    # succeed or in case it failed to do so the first time.
                     if unpack_from('>I', key)[0] % \
-                            self.container_ring.replica_count == ordinal:
-                        if not self.container_sync_row(row, sync_to, sync_key,
-                                                       broker, info):
-                            return
+                            len(nodes) == ordinal:
+                        self.container_sync_row(row, sync_to, sync_key,
+                                                broker, info)
                     sync_point1 = row['ROWID']
                     broker.set_x_container_sync_points(sync_point1, None)
                 self.container_syncs += 1
+                self.logger.increment('syncs')
         except (Exception, Timeout), err:
             self.container_failures += 1
+            self.logger.increment('failures')
             self.logger.exception(_('ERROR Syncing %s'), (broker.db_file))
 
     def container_sync_row(self, row, sync_to, sync_key, broker, info):
@@ -341,16 +350,19 @@ class ContainerSync(Daemon):
         :returns: True on success
         """
         try:
+            start_time = time()
             if row['deleted']:
                 try:
                     delete_object(sync_to, name=row['name'],
-                        headers={'x-timestamp': row['created_at'],
-                                 'x-container-sync-key': sync_key},
-                        proxy=self.proxy)
+                                  headers={'x-timestamp': row['created_at'],
+                                           'x-container-sync-key': sync_key},
+                                  proxy=self.proxy)
                 except ClientException, err:
-                    if err.http_status != 404:
+                    if err.http_status != HTTP_NOT_FOUND:
                         raise
                 self.container_deletes += 1
+                self.logger.increment('deletes')
+                self.logger.timing_since('deletes.timing', start_time)
             else:
                 part, nodes = self.object_ring.get_nodes(
                     info['account'], info['container'],
@@ -362,8 +374,8 @@ class ContainerSync(Daemon):
                 headers = body = None
                 for node in nodes:
                     try:
-                        these_headers, this_body = direct_get_object(node,
-                            part, info['account'], info['container'],
+                        these_headers, this_body = direct_get_object(
+                            node, part, info['account'], info['container'],
                             row['name'], resp_chunk_size=65536)
                         this_timestamp = float(these_headers['x-timestamp'])
                         if this_timestamp > timestamp:
@@ -375,13 +387,16 @@ class ContainerSync(Daemon):
                         # non-404 one. We don't want to mistakenly assume the
                         # object no longer exists just because one says so and
                         # the others errored for some other reason.
-                        if not exc or exc.http_status == 404:
+                        if not exc or exc.http_status == HTTP_NOT_FOUND:
                             exc = err
+                    except (Exception, Timeout), err:
+                        exc = err
                 if timestamp < looking_for_timestamp:
                     if exc:
                         raise exc
-                    raise Exception(_('Unknown exception trying to GET: '
-                        '%(node)r %(account)r %(container)r %(object)r'),
+                    raise Exception(
+                        _('Unknown exception trying to GET: %(node)r '
+                          '%(account)r %(container)r %(object)r'),
                         {'node': node, 'part': part,
                          'account': info['account'],
                          'container': info['container'],
@@ -394,31 +409,37 @@ class ContainerSync(Daemon):
                 headers['x-timestamp'] = row['created_at']
                 headers['x-container-sync-key'] = sync_key
                 put_object(sync_to, name=row['name'], headers=headers,
-                    contents=_Iter2FileLikeObject(body), proxy=self.proxy)
+                           contents=_Iter2FileLikeObject(body),
+                           proxy=self.proxy)
                 self.container_puts += 1
+                self.logger.increment('puts')
+                self.logger.timing_since('puts.timing', start_time)
         except ClientException, err:
-            if err.http_status == 401:
-                self.logger.info(_('Unauth %(sync_from)r '
-                    '=> %(sync_to)r'),
+            if err.http_status == HTTP_UNAUTHORIZED:
+                self.logger.info(
+                    _('Unauth %(sync_from)r => %(sync_to)r'),
                     {'sync_from': '%s/%s' %
                         (quote(info['account']), quote(info['container'])),
                      'sync_to': sync_to})
-            elif err.http_status == 404:
-                self.logger.info(_('Not found %(sync_from)r '
-                    '=> %(sync_to)r'),
+            elif err.http_status == HTTP_NOT_FOUND:
+                self.logger.info(
+                    _('Not found %(sync_from)r => %(sync_to)r \
+                      - object %(obj_name)r'),
                     {'sync_from': '%s/%s' %
                         (quote(info['account']), quote(info['container'])),
-                     'sync_to': sync_to})
+                     'sync_to': sync_to, 'obj_name': row['name']})
             else:
                 self.logger.exception(
                     _('ERROR Syncing %(db_file)s %(row)s'),
                     {'db_file': broker.db_file, 'row': row})
             self.container_failures += 1
+            self.logger.increment('failures')
             return False
         except (Exception, Timeout), err:
             self.logger.exception(
                 _('ERROR Syncing %(db_file)s %(row)s'),
                 {'db_file': broker.db_file, 'row': row})
             self.container_failures += 1
+            self.logger.increment('failures')
             return False
         return True

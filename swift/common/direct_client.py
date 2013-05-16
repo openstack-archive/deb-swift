@@ -26,8 +26,10 @@ from urllib import quote as _quote
 from eventlet import sleep, Timeout
 
 from swift.common.bufferedhttp import http_connect
-from swift.common.client import ClientException, json_loads
+from swiftclient import ClientException, json_loads
 from swift.common.utils import normalize_timestamp
+from swift.common.http import HTTP_NO_CONTENT, HTTP_INSUFFICIENT_STORAGE, \
+    is_success, is_server_error
 
 
 def quote(value, safe='/'):
@@ -69,19 +71,20 @@ def direct_get_account(node, part, account, marker=None, limit=None,
                             'GET', path, query_string=qs)
     with Timeout(response_timeout):
         resp = conn.getresponse()
-    if resp.status < 200 or resp.status >= 300:
+    if not is_success(resp.status):
         resp.read()
         raise ClientException(
-            'Account server %s:%s direct GET %s gave status %s' % (node['ip'],
-                node['port'], repr('/%s/%s%s' % (node['device'], part, path)),
-                resp.status),
+            'Account server %s:%s direct GET %s gave status %s' %
+            (node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)),
+             resp.status),
             http_host=node['ip'], http_port=node['port'],
             http_device=node['device'], http_status=resp.status,
             http_reason=resp.reason)
     resp_headers = {}
     for header, value in resp.getheaders():
         resp_headers[header.lower()] = value
-    if resp.status == 204:
+    if resp.status == HTTP_NO_CONTENT:
         resp.read()
         return resp_headers, []
     return resp_headers, json_loads(resp.read())
@@ -108,15 +111,15 @@ def direct_head_container(node, part, account, container, conn_timeout=5,
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
-    if resp.status < 200 or resp.status >= 300:
+    if not is_success(resp.status):
         raise ClientException(
-                'Container server %s:%s direct HEAD %s gave status %s' %
-                (node['ip'], node['port'],
-                 repr('/%s/%s%s' % (node['device'], part, path)),
-                 resp.status),
-                http_host=node['ip'], http_port=node['port'],
-                http_device=node['device'], http_status=resp.status,
-                http_reason=resp.reason)
+            'Container server %s:%s direct HEAD %s gave status %s' %
+            (node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)),
+             resp.status),
+            http_host=node['ip'], http_port=node['port'],
+            http_device=node['device'], http_status=resp.status,
+            http_reason=resp.reason)
     resp_headers = {}
     for header, value in resp.getheaders():
         resp_headers[header.lower()] = value
@@ -157,19 +160,20 @@ def direct_get_container(node, part, account, container, marker=None,
                             'GET', path, query_string=qs)
     with Timeout(response_timeout):
         resp = conn.getresponse()
-    if resp.status < 200 or resp.status >= 300:
+    if not is_success(resp.status):
         resp.read()
         raise ClientException(
-            'Container server %s:%s direct GET %s gave stats %s' % (node['ip'],
-                node['port'], repr('/%s/%s%s' % (node['device'], part, path)),
-                resp.status),
+            'Container server %s:%s direct GET %s gave stats %s' %
+            (node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)),
+             resp.status),
             http_host=node['ip'], http_port=node['port'],
             http_device=node['device'], http_status=resp.status,
             http_reason=resp.reason)
     resp_headers = {}
     for header, value in resp.getheaders():
         resp_headers[header.lower()] = value
-    if resp.status == 204:
+    if resp.status == HTTP_NO_CONTENT:
         resp.read()
         return resp_headers, []
     return resp_headers, json_loads(resp.read())
@@ -181,19 +185,18 @@ def direct_delete_container(node, part, account, container, conn_timeout=5,
     headers['X-Timestamp'] = normalize_timestamp(time())
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                'DELETE', path, headers)
+                            'DELETE', path, headers)
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
-    if resp.status < 200 or resp.status >= 300:
+    if not is_success(resp.status):
         raise ClientException(
-                'Container server %s:%s direct DELETE %s gave status %s' %
-                (node['ip'], node['port'],
-                repr('/%s/%s%s' % (node['device'], part, path)),
-                resp.status),
-                http_host=node['ip'], http_port=node['port'],
-                http_device=node['device'], http_status=resp.status,
-                http_reason=resp.reason)
+            'Container server %s:%s direct DELETE %s gave status %s' %
+            (node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)), resp.status),
+            http_host=node['ip'], http_port=node['port'],
+            http_device=node['device'], http_status=resp.status,
+            http_reason=resp.reason)
 
 
 def direct_head_object(node, part, account, container, obj, conn_timeout=5,
@@ -218,15 +221,15 @@ def direct_head_object(node, part, account, container, obj, conn_timeout=5,
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
-    if resp.status < 200 or resp.status >= 300:
+    if not is_success(resp.status):
         raise ClientException(
-                'Object server %s:%s direct HEAD %s gave status %s' %
-                (node['ip'], node['port'],
-                 repr('/%s/%s%s' % (node['device'], part, path)),
-                 resp.status),
-                http_host=node['ip'], http_port=node['port'],
-                http_device=node['device'], http_status=resp.status,
-                http_reason=resp.reason)
+            'Object server %s:%s direct HEAD %s gave status %s' %
+            (node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)),
+             resp.status),
+            http_host=node['ip'], http_port=node['port'],
+            http_device=node['device'], http_status=resp.status,
+            http_reason=resp.reason)
     resp_headers = {}
     for header, value in resp.getheaders():
         resp_headers[header.lower()] = value
@@ -253,19 +256,18 @@ def direct_get_object(node, part, account, container, obj, conn_timeout=5,
     path = '/%s/%s/%s' % (account, container, obj)
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                'GET', path, headers=headers)
+                            'GET', path, headers=headers)
     with Timeout(response_timeout):
         resp = conn.getresponse()
-    if resp.status < 200 or resp.status >= 300:
+    if not is_success(resp.status):
         resp.read()
         raise ClientException(
-                'Object server %s:%s direct GET %s gave status %s' %
-                (node['ip'], node['port'],
-                repr('/%s/%s%s' % (node['device'], part, path)),
-                resp.status),
-                http_host=node['ip'], http_port=node['port'],
-                http_device=node['device'], http_status=resp.status,
-                http_reason=resp.reason)
+            'Object server %s:%s direct GET %s gave status %s' %
+            (node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)), resp.status),
+            http_host=node['ip'], http_port=node['port'],
+            http_device=node['device'], http_status=resp.status,
+            http_reason=resp.reason)
     if resp_chunk_size:
 
         def _object_body():
@@ -294,7 +296,7 @@ def direct_put_object(node, part, account, container, name, contents,
     :param account: account name
     :param container: container name
     :param name: object name
-    :param contents: a string to read object data from
+    :param contents: an iterable or string to read object data from
     :param content_length: value to send as content-length header
     :param etag: etag of contents
     :param content_type: value to send as content-type header
@@ -318,23 +320,26 @@ def direct_put_object(node, part, account, container, name, contents,
         headers['Content-Type'] = 'application/octet-stream'
     if not contents:
         headers['Content-Length'] = '0'
+    if isinstance(contents, basestring):
+        contents = [contents]
     headers['X-Timestamp'] = normalize_timestamp(time())
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                'PUT', path, headers=headers)
-    conn.send(contents)
+                            'PUT', path, headers=headers)
+    for chunk in contents:
+        conn.send(chunk)
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
-    if resp.status < 200 or resp.status >= 300:
+    if not is_success(resp.status):
         raise ClientException(
-                'Object server %s:%s direct PUT %s gave status %s' %
-                (node['ip'], node['port'],
-                repr('/%s/%s%s' % (node['device'], part, path)),
-                resp.status),
-                http_host=node['ip'], http_port=node['port'],
-                http_device=node['device'], http_status=resp.status,
-                http_reason=resp.reason)
+            'Object server %s:%s direct PUT %s gave status %s' %
+            (node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)),
+             resp.status),
+            http_host=node['ip'], http_port=node['port'],
+            http_device=node['device'], http_status=resp.status,
+            http_reason=resp.reason)
     return resp.getheader('etag').strip('"')
 
 
@@ -357,23 +362,23 @@ def direct_post_object(node, part, account, container, name, headers,
     headers['X-Timestamp'] = normalize_timestamp(time())
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                'POST', path, headers=headers)
+                            'POST', path, headers=headers)
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
-    if resp.status < 200 or resp.status >= 300:
+    if not is_success(resp.status):
         raise ClientException(
-                'Object server %s:%s direct POST %s gave status %s' %
-                (node['ip'], node['port'],
-                repr('/%s/%s%s' % (node['device'], part, path)),
-                resp.status),
-                http_host=node['ip'], http_port=node['port'],
-                http_device=node['device'], http_status=resp.status,
-                http_reason=resp.reason)
+            'Object server %s:%s direct POST %s gave status %s' %
+            (node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)),
+             resp.status),
+            http_host=node['ip'], http_port=node['port'],
+            http_device=node['device'], http_status=resp.status,
+            http_reason=resp.reason)
 
 
 def direct_delete_object(node, part, account, container, obj,
-        conn_timeout=5, response_timeout=15, headers={}):
+                         conn_timeout=5, response_timeout=15, headers={}):
     """
     Delete object directly from the object server.
 
@@ -390,19 +395,19 @@ def direct_delete_object(node, part, account, container, obj,
     headers['X-Timestamp'] = normalize_timestamp(time())
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                'DELETE', path, headers)
+                            'DELETE', path, headers)
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
-    if resp.status < 200 or resp.status >= 300:
+    if not is_success(resp.status):
         raise ClientException(
-                'Object server %s:%s direct DELETE %s gave status %s' %
-                (node['ip'], node['port'],
-                repr('/%s/%s%s' % (node['device'], part, path)),
-                resp.status),
-                http_host=node['ip'], http_port=node['port'],
-                http_device=node['device'], http_status=resp.status,
-                http_reason=resp.reason)
+            'Object server %s:%s direct DELETE %s gave status %s' %
+            (node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)),
+             resp.status),
+            http_host=node['ip'], http_port=node['port'],
+            http_device=node['device'], http_status=resp.status,
+            http_reason=resp.reason)
 
 
 def retry(func, *args, **kwargs):
@@ -440,15 +445,16 @@ def retry(func, *args, **kwargs):
         except ClientException, err:
             if error_log:
                 error_log(err)
-            if attempts > retries or err.http_status < 500 or \
-                    err.http_status == 507 or err.http_status > 599:
+            if attempts > retries or not is_server_error(err.http_status) or \
+                    err.http_status == HTTP_INSUFFICIENT_STORAGE:
                 raise
         sleep(backoff)
         backoff *= 2
     # Shouldn't actually get down here, but just in case.
     if args and 'ip' in args[0]:
         raise ClientException('Raise too many retries',
-            http_host=args[0]['ip'], http_port=args[0]['port'],
-            http_device=args[0]['device'])
+                              http_host=args[
+                              0]['ip'], http_port=args[0]['port'],
+                              http_device=args[0]['device'])
     else:
         raise ClientException('Raise too many retries')

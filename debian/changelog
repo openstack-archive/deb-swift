@@ -1,14 +1,44 @@
-swift (1.4.8-3) UNRELEASED; urgency=low
+swift (1.8.0~rc2-1) experimental; urgency=low
+
+  * New upstream release.
+  * Fixed typoe dependency to python-swiftclient (and not python-swift-client).
+  * Removed patches now applied upstream.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 03 Apr 2013 20:31:31 +0800
+
+swift (1.7.5-2) experimental; urgency=low
+
+  * Added missing python-swiftclient dependency in swift-account. Thanks to
+    Viktor Křivák for reporting (Closes: #703623).
+  * Adds adds Add-handler-for-CORS-actual-requests.patch.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 22 Mar 2013 01:01:47 +0800
+
+swift (1.7.5-1) experimental; urgency=low
+
+  [ Mehdi Abaakouk ]
+  * New upstream release
+  * Fixed -x switch issue in swift-bench
+
+  [ Thomas Goirand ]
+  * Fixed wrong format URL in debian/copyright.
+  * Added missing AUTHORS file in all packages.
+  * Removed useless X-Python-Version: >= 2.6 in control, since we already
+  Build-Depends: on python-all (>=2.6.6-3~).
+  * Removed \r from debian/copyright.
+  * Added missing Provides: ${python:Provides}, uses same short desc as in
+  Ubuntu, Break with versions << 1.6 (because of the python-swiftclient
+  package).
+  * Imported Ubuntu patch to stop accessing network when building docs.
+  * Fixes a log_daemon_msg typo present in most swift init scripts.
+  * Removes useless "swift is open source software" from long description.
 
   [ Julien Danjou ]
   * Add /var/cache/swift to use swift-recon
   * Add configuration and cron job for swift-recon
   * Move swift-recon-cron to swift-object
 
-  [ Mehdi Abaakouk ]
-  * Update gbp.conf
-
- -- Julien Danjou <acid@debian.org>  Tue, 03 Apr 2012 17:45:30 +0200
+ -- Thomas Goirand <zigo@debian.org>  Mon, 17 Dec 2012 15:34:54 +0000
 
 swift (1.4.8-2) unstable; urgency=high
 

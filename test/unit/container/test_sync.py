@@ -15,18 +15,20 @@
 
 import unittest
 
+import re
+from test.unit import FakeLogger
 from swift.container import sync
 from swift.common import utils
-from swift.common.client import ClientException
+from swiftclient import ClientException
 
 
 utils.HASH_PATH_SUFFIX = 'endcap'
+utils.HASH_PATH_PREFIX = 'endcap'
 
 
 class FakeRing(object):
 
     def __init__(self):
-        self.replica_count = 3
         self.devs = [{'ip': '10.0.0.%s' % x, 'port': 1000 + x, 'device': 'sda'}
                      for x in xrange(3)]
 
@@ -153,7 +155,7 @@ class TestContainerSync(unittest.TestCase):
 
     def test_run_once(self):
         # This runs runs_once with fakes twice, the first causing an interim
-        # report, the second with no interm report.
+        # report, the second with no interim report.
         time_calls = [0]
         audit_location_generator_calls = [0]
 
@@ -421,10 +423,10 @@ class TestContainerSync(unittest.TestCase):
             cs.allowed_sync_hosts = ['127.0.0.1']
             cs.container_sync('isa.db')
             # Succeeds because no rows match
-            self.assertEquals(cs.container_failures, 0)
+            self.assertEquals(cs.container_failures, 1)
             self.assertEquals(cs.container_skips, 0)
             self.assertEquals(fcb.sync_point1, None)
-            self.assertEquals(fcb.sync_point2, 1)
+            self.assertEquals(fcb.sync_point2, -1)
 
             def fake_hash_path(account, container, obj, raw_digest=False):
                 # Ensures that all rows match for full syncing, ordinal is 0
@@ -435,7 +437,7 @@ class TestContainerSync(unittest.TestCase):
             fcb = FakeContainerBroker('path',
                 info={'account': 'a', 'container': 'c',
                       'x_container_sync_point1': 1,
-                      'x_container_sync_point2': -1},
+                      'x_container_sync_point2': 1},
                 metadata={'x-container-sync-to': ('http://127.0.0.1/a/c', 1),
                           'x-container-sync-key': ('key', 1)},
                 items_since=[{'ROWID': 1, 'name': 'o'}])
@@ -444,8 +446,8 @@ class TestContainerSync(unittest.TestCase):
             cs._myport = 1000           # Match
             cs.allowed_sync_hosts = ['127.0.0.1']
             cs.container_sync('isa.db')
-            # Succeeds because the two sync points haven't deviated enough yet
-            self.assertEquals(cs.container_failures, 0)
+            # Succeeds because the two sync points haven't deviated yet
+            self.assertEquals(cs.container_failures, 1)
             self.assertEquals(cs.container_skips, 0)
             self.assertEquals(fcb.sync_point1, -1)
             self.assertEquals(fcb.sync_point2, -1)
@@ -464,9 +466,9 @@ class TestContainerSync(unittest.TestCase):
             cs.container_sync('isa.db')
             # Fails because container_sync_row will fail since the row has no
             # 'deleted' key
-            self.assertEquals(cs.container_failures, 1)
+            self.assertEquals(cs.container_failures, 2)
             self.assertEquals(cs.container_skips, 0)
-            self.assertEquals(fcb.sync_point1, -1)
+            self.assertEquals(fcb.sync_point1, None)
             self.assertEquals(fcb.sync_point2, -1)
 
             fcb = FakeContainerBroker('path',
@@ -483,9 +485,9 @@ class TestContainerSync(unittest.TestCase):
             cs.allowed_sync_hosts = ['127.0.0.1']
             cs.container_sync('isa.db')
             # Fails because delete_object fails
-            self.assertEquals(cs.container_failures, 2)
+            self.assertEquals(cs.container_failures, 3)
             self.assertEquals(cs.container_skips, 0)
-            self.assertEquals(fcb.sync_point1, -1)
+            self.assertEquals(fcb.sync_point1, None)
             self.assertEquals(fcb.sync_point2, -1)
 
             def fake_delete_object(*args, **kwargs):
@@ -506,7 +508,7 @@ class TestContainerSync(unittest.TestCase):
             cs.allowed_sync_hosts = ['127.0.0.1']
             cs.container_sync('isa.db')
             # Succeeds because delete_object succeeds
-            self.assertEquals(cs.container_failures, 2)
+            self.assertEquals(cs.container_failures, 3)
             self.assertEquals(cs.container_skips, 0)
             self.assertEquals(fcb.sync_point1, None)
             self.assertEquals(fcb.sync_point2, 1)
@@ -573,10 +575,11 @@ class TestContainerSync(unittest.TestCase):
             cs.allowed_sync_hosts = ['127.0.0.1']
             cs.container_sync('isa.db')
             # Fails because row is missing 'deleted' key
+            # Nevertheless the fault is skipped
             self.assertEquals(cs.container_failures, 1)
             self.assertEquals(cs.container_skips, 0)
-            self.assertEquals(fcb.sync_point1, -1)
-            self.assertEquals(fcb.sync_point2, -1)
+            self.assertEquals(fcb.sync_point1, 1)
+            self.assertEquals(fcb.sync_point2, None)
 
             fcb = FakeContainerBroker('path',
                 info={'account': 'a', 'container': 'c',
@@ -738,9 +741,10 @@ class TestContainerSync(unittest.TestCase):
                 'key', FakeContainerBroker('broker'), {'account': 'a',
                 'container': 'c'}))
             self.assertEquals(cs.container_puts, 2)
-            self.assertEquals(len(exc), 1)
+            self.assertEquals(len(exc), 3)
             self.assertEquals(str(exc[-1]), 'test exception')
 
+            exc = []
             def fake_direct_get_object(node, part, account, container, obj,
                                        resp_chunk_size=1):
                 exc.append(ClientException('test client exception'))
@@ -753,7 +757,7 @@ class TestContainerSync(unittest.TestCase):
                 'key', FakeContainerBroker('broker'), {'account': 'a',
                 'container': 'c'}))
             self.assertEquals(cs.container_puts, 2)
-            self.assertEquals(len(exc), 4)
+            self.assertEquals(len(exc), 3)
             self.assertEquals(str(exc[-1]), 'test client exception')
 
             def fake_direct_get_object(node, part, account, container, obj,
@@ -766,18 +770,6 @@ class TestContainerSync(unittest.TestCase):
                                 contents=None, proxy=None):
                 raise ClientException('test client exception', http_status=401)
 
-            class FakeLogger(object):
-
-                def __init__(self):
-                    self.err = ''
-                    self.exc = ''
-
-                def info(self, err, *args, **kwargs):
-                    self.err = err
-
-                def exception(self, exc, *args, **kwargs):
-                    self.exc = exc
-
             sync.direct_get_object = fake_direct_get_object
             sync.put_object = fake_put_object
             cs.logger = FakeLogger()
@@ -787,7 +779,8 @@ class TestContainerSync(unittest.TestCase):
                 'key', FakeContainerBroker('broker'), {'account': 'a',
                 'container': 'c'}))
             self.assertEquals(cs.container_puts, 2)
-            self.assertTrue(cs.logger.err.startswith('Unauth '))
+            self.assert_(re.match('Unauth ',
+                                  cs.logger.log_dict['info'][0][0][0]))
 
             def fake_put_object(sync_to, name=None, headers=None,
                                 contents=None, proxy=None):
@@ -795,12 +788,14 @@ class TestContainerSync(unittest.TestCase):
 
             sync.put_object = fake_put_object
             # Fail due to 404
+            cs.logger = FakeLogger()
             self.assertFalse(cs.container_sync_row({'deleted': False,
                 'name': 'object', 'created_at': '1.2'}, 'http://sync/to/path',
                 'key', FakeContainerBroker('broker'), {'account': 'a',
                 'container': 'c'}))
             self.assertEquals(cs.container_puts, 2)
-            self.assertTrue(cs.logger.err.startswith('Not found '))
+            self.assert_(re.match('Not found ',
+                                  cs.logger.log_dict['info'][0][0][0]))
 
             def fake_put_object(sync_to, name=None, headers=None,
                                 contents=None, proxy=None):
@@ -813,7 +808,9 @@ class TestContainerSync(unittest.TestCase):
                 'key', FakeContainerBroker('broker'), {'account': 'a',
                 'container': 'c'}))
             self.assertEquals(cs.container_puts, 2)
-            self.assertTrue(cs.logger.exc.startswith('ERROR Syncing '))
+            self.assertTrue(
+                cs.logger.log_dict['exception'][0][0][0].startswith(
+                    'ERROR Syncing '))
         finally:
             sync.shuffle = orig_shuffle
             sync.put_object = orig_put_object

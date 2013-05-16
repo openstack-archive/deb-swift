@@ -26,11 +26,13 @@ from getpass import getuser
 from shutil import rmtree
 from StringIO import StringIO
 from collections import defaultdict
+from urllib import quote
 
 from eventlet import sleep
-from webob import Request
 
+from swift.common.swob import Request
 from swift.common import wsgi
+
 
 class TestWSGI(unittest.TestCase):
     """ Tests for swift.common.wsgi """
@@ -174,6 +176,25 @@ class TestWSGI(unittest.TestCase):
             wsgi.sleep = old_sleep
             wsgi.time = old_time
 
+    def test_pre_auth_wsgi_input(self):
+        oldenv = {}
+        newenv = wsgi.make_pre_authed_env(oldenv)
+        self.assertTrue('wsgi.input' in newenv)
+        self.assertEquals(newenv['wsgi.input'].read(), '')
+
+        oldenv = {'wsgi.input': StringIO('original wsgi.input')}
+        newenv = wsgi.make_pre_authed_env(oldenv)
+        self.assertTrue('wsgi.input' in newenv)
+        self.assertEquals(newenv['wsgi.input'].read(), '')
+
+        oldenv = {'swift.source': 'UT'}
+        newenv = wsgi.make_pre_authed_env(oldenv)
+        self.assertEquals(newenv['swift.source'], 'UT')
+
+        oldenv = {'swift.source': 'UT'}
+        newenv = wsgi.make_pre_authed_env(oldenv, swift_source='SA')
+        self.assertEquals(newenv['swift.source'], 'SA')
+
     def test_pre_auth_req(self):
         class FakeReq(object):
             @classmethod
@@ -187,6 +208,69 @@ class TestWSGI(unittest.TestCase):
         wsgi.make_pre_authed_request({'HTTP_X_TRANS_ID': '1234'},
                                      'PUT', '/', headers={})
         Request.blank = was_blank
+
+    def test_pre_auth_req_with_quoted_path(self):
+        r = wsgi.make_pre_authed_request(
+            {'HTTP_X_TRANS_ID': '1234'}, 'PUT', path=quote('/a space'),
+            body='tester', headers={})
+        self.assertEquals(r.path, quote('/a space'))
+
+    def test_pre_auth_req_drops_query(self):
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path')
+        self.assertEquals(r.query_string, 'original')
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path?replacement')
+        self.assertEquals(r.query_string, 'replacement')
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path?')
+        self.assertEquals(r.query_string, '')
+
+    def test_pre_auth_req_with_body(self):
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path', 'the body')
+        self.assertEquals(r.body, 'the body')
+
+    def test_pre_auth_creates_script_name(self):
+        e = wsgi.make_pre_authed_env({})
+        self.assertTrue('SCRIPT_NAME' in e)
+
+    def test_pre_auth_copies_script_name(self):
+        e = wsgi.make_pre_authed_env({'SCRIPT_NAME': '/script_name'})
+        self.assertEquals(e['SCRIPT_NAME'], '/script_name')
+
+    def test_pre_auth_copies_script_name_unless_path_overridden(self):
+        e = wsgi.make_pre_authed_env({'SCRIPT_NAME': '/script_name'},
+                                     path='/override')
+        self.assertEquals(e['SCRIPT_NAME'], '')
+        self.assertEquals(e['PATH_INFO'], '/override')
+
+    def test_pre_auth_req_swift_source(self):
+        r = wsgi.make_pre_authed_request(
+            {'QUERY_STRING': 'original'}, 'GET', 'path', 'the body',
+            swift_source='UT')
+        self.assertEquals(r.body, 'the body')
+        self.assertEquals(r.environ['swift.source'], 'UT')
+
+class TestWSGIContext(unittest.TestCase):
+
+    def test_app_call(self):
+        statuses = ['200 Ok', '404 Not Found']
+
+        def app(env, start_response):
+            start_response(statuses.pop(0), [('Content-Length', '3')])
+            yield 'Ok\n'
+
+        wc = wsgi.WSGIContext(app)
+        r = Request.blank('/')
+        it = wc._app_call(r.environ)
+        self.assertEquals(wc._response_status, '200 Ok')
+        self.assertEquals(''.join(it), 'Ok\n')
+        r = Request.blank('/')
+        it = wc._app_call(r.environ)
+        self.assertEquals(wc._response_status, '404 Not Found')
+        self.assertEquals(''.join(it), 'Ok\n')
+
 
 if __name__ == '__main__':
     unittest.main()
