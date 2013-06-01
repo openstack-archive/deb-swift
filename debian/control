@@ -6,24 +6,23 @@ Uploaders: Julien Danjou <acid@debian.org>,
            Thomas Goirand <zigo@debian.org>,
            Ghe Rivero <ghe.rivero@stackops.com>,
            Mehdi Abaakouk <sileht@sileht.net>
-Build-Depends: debhelper (>= 9),
- python-all (>=2.6.6-3~), openstack-pkg-tools
+Build-Depends: debhelper (>= 9), openstack-pkg-tools, python-all (>=2.6.6-3~)
 Build-Depends-Indep: python-coverage,
- python-eventlet (>= 0.9.8),
- python-greenlet (>= 0.3.1),
- python-mock,
- python-netifaces,
- python-nose,
- python-nosexcover,
- python-openssl,
- python-paste,
- python-pastedeploy,
- python-setuptools,
- python-simplejson,
- python-sphinx (>= 1.1.2),
- python-swiftclient,
- python-webob (>= 1.2),
- python-xattr
+                     python-eventlet (>= 0.9.8),
+                     python-greenlet (>= 0.3.1),
+                     python-mock,
+                     python-netifaces,
+                     python-nose,
+                     python-nosexcover,
+                     python-openssl,
+                     python-paste,
+                     python-pastedeploy,
+                     python-setuptools,
+                     python-simplejson,
+                     python-sphinx (>= 1.1.2),
+                     python-swiftclient,
+                     python-webob (>= 1.2),
+                     python-xattr
 Standards-Version: 3.9.4
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/swift.git;a=summary
 Vcs-Git: git://anonscm.debian.org/openstack/swift.git
@@ -34,18 +33,18 @@ Architecture: all
 Section: python
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
- python-eventlet (>= 0.9.8),
- python-greenlet (>= 0.3.1),
- python-netifaces,
- python-openssl,
- python-paste,
- python-pastedeploy,
- python-setuptools,
- python-simplejson,
- python-webob (>= 1.2),
- python-xattr,
- ${misc:Depends},
- ${python:Depends},
+         python-eventlet (>= 0.9.8),
+         python-greenlet (>= 0.3.1),
+         python-netifaces,
+         python-openssl,
+         python-paste,
+         python-pastedeploy,
+         python-setuptools,
+         python-simplejson,
+         python-webob (>= 1.2),
+         python-xattr,
+         ${misc:Depends},
+         ${python:Depends}
 Provides: ${python:Provides}
 Description: distributed virtual object store - Python libraries
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
@@ -73,7 +72,10 @@ Description: distributed virtual object store - Python libraries
 Package: swift
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: python-swift (=${binary:Version}), ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
+Depends: python-swift (=${binary:Version}),
+         ${misc:Depends},
+         ${python:Depends},
+         ${shlibs:Depends}
 Description: distributed virtual object store - common files
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -99,7 +101,12 @@ Description: distributed virtual object store - common files
 Package: swift-proxy
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: lsb-base (>= 3.0-6), swift, python-swift (=${binary:Version}), ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0-6),
+         python-swift (=${binary:Version}),
+         swift,
+         ${misc:Depends},
+         ${python:Depends},
+         ${shlibs:Depends}
 Description: distributed virtual object store - proxy server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -126,7 +133,13 @@ Description: distributed virtual object store - proxy server
 Package: swift-object
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: lsb-base (>= 3.0-6), swift, python-swift (=${binary:Version}), rsync, ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0-6),
+         python-swift (=${binary:Version}),
+         rsync,
+         swift,
+         ${misc:Depends},
+         ${python:Depends},
+         ${shlibs:Depends}
 Provides: ${python:Provides}
 Description: distributed virtual object store - object server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
@@ -153,7 +166,13 @@ Description: distributed virtual object store - object server
 Package: swift-container
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: lsb-base (>= 3.0-6), swift, python-swift (=${binary:Version}), rsync, ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0-6),
+         python-swift (=${binary:Version}),
+         rsync,
+         swift,
+         ${misc:Depends},
+         ${python:Depends},
+         ${shlibs:Depends}
 Provides: ${python:Provides}
 Description: distributed virtual object store - container server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
@@ -180,7 +199,14 @@ Description: distributed virtual object store - container server
 Package: swift-account
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: lsb-base (>= 3.0-6), swift, python-swift (=${binary:Version}), rsync, ${python:Depends}, ${shlibs:Depends}, ${misc:Depends}, python-swiftclient
+Depends: lsb-base (>= 3.0-6),
+         python-swift (=${binary:Version}),
+         python-swiftclient,
+         rsync,
+         swift,
+         ${misc:Depends},
+         ${python:Depends},
+         ${shlibs:Depends}
 Provides: ${python:Provides}
 Description: distributed virtual object store - account server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
@@ -208,7 +234,7 @@ Package: swift-doc
 Architecture: all
 Section: doc
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: libjs-jquery, ${misc:Depends}, libjs-underscore
+Depends: libjs-jquery, libjs-underscore, ${misc:Depends}
 Description: distributed virtual object store - documentation
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
