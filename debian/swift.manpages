@@ -15,5 +15,5 @@ doc/manpages/swift-ring-builder.1
 doc/manpages/swift-orphans.1
 doc/manpages/swift-get-nodes.1
 doc/manpages/swift-dispersion-report.1
-doc/manpages/swift-dispersion-populate
+doc/manpages/swift-dispersion-populate.1
 doc/manpages/dispersion.conf.5
