@@ -1,4 +1,4 @@
-swift (1.8.0-3) UNRELEASED; urgency=low
+swift (1.8.0-3) unstable; urgency=low
 
   * Ran wrap-and-sort.
   * Installs a default configuration file for swift-dispersion-report
