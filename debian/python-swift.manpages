@@ -1,3 +1,4 @@
 debian/mans/python-swift/swift-drive-audit.8
-debian/mans/python-swift/swift-init.8
 debian/mans/python-swift/swift-log-uploader.8
+
+doc/manpages/swift-init.1

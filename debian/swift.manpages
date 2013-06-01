@@ -9,7 +9,11 @@ debian/mans/swift/swauth-prep.8
 debian/mans/swift/swauth-set-account-service.8
 debian/mans/swift/swift-account-audit.8
 debian/mans/swift/swift-bench.8
-debian/mans/swift/swift-get-nodes.8
-debian/mans/swift/swift-ring-builder.8
 debian/mans/swift/swift-log-stats-collector.8
-debian/mans/swift/swift-dispersion-populate.8
+
+doc/manpages/swift-ring-builder.1
+doc/manpages/swift-orphans.1
+doc/manpages/swift-get-nodes.1
+doc/manpages/swift-dispersion-report.1
+doc/manpages/swift-dispersion-populate
+doc/manpages/dispersion.conf.5

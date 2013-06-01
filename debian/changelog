@@ -3,6 +3,7 @@ swift (1.8.0-3) UNRELEASED; urgency=low
   * Ran wrap-and-sort.
   * Installs a default configuration file for swift-dispersion-report
     (Closes: #668775), thanks to Loic Dachary <loic@dachary.org> for reporting.
+  * Now using upstream manpages when available.
 
  -- Thomas Goirand <zigo@debian.org>  Sat, 01 Jun 2013 19:55:10 +0800
 

@@ -1,1 +1,2 @@
-debian/mans/swift-proxy/swift-proxy-server.8
+doc/manpages/swift-proxy-server.1
+doc/manpages/proxy-server.conf.5
