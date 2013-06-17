@@ -1,3 +1,10 @@
+swift (1.8.0-5) UNRELEASED; urgency=low
+
+  * swift-account should be Breaks+Replaces: swift (<< 1.8.0-4~) to allow to
+    do backports.
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 17 Jun 2013 15:14:15 +0800
+
 swift (1.8.0-4) unstable; urgency=low
 
   * Corrects a mistake with the location of the account-server.conf, which
