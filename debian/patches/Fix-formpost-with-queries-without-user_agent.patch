@@ -1,0 +1,71 @@
+Subject: Fix formpost with queries without user_agent
+Author: Chmouel Boudjnah <chmouel@enovance.com>
+Origin: upstream, https://review.openstack.org/#/c/32733/
+Bug-Ubuntu: https://code.launchpad.net/bugs/1190220
+Date: Wed, 12 Jun 2013 16:26:23 +0200
+
+Index: swift/swift/common/middleware/formpost.py
+===================================================================
+--- swift.orig/swift/common/middleware/formpost.py	2013-05-24 03:03:14.000000000 +0800
++++ swift/swift/common/middleware/formpost.py	2013-06-18 22:45:28.000000000 +0800
+@@ -313,7 +313,9 @@
+                     _parse_attrs(env.get('CONTENT_TYPE') or '')
+                 if content_type == 'multipart/form-data' and \
+                         'boundary' in attrs:
+-                    env['HTTP_USER_AGENT'] += ' FormPost'
++                    http_user_agent = "%s FormPost" % (
++                        env.get('HTTP_USER_AGENT', ''))
++                    env['HTTP_USER_AGENT'] = http_user_agent.strip()
+                     status, headers, body = self._translate_form(
+                         env, attrs['boundary'])
+                     start_response(status, headers)
+Index: swift/test/unit/common/middleware/test_formpost.py
+===================================================================
+--- swift.orig/test/unit/common/middleware/test_formpost.py	2013-05-24 03:03:14.000000000 +0800
++++ swift/test/unit/common/middleware/test_formpost.py	2013-06-18 22:45:28.000000000 +0800
+@@ -304,7 +304,7 @@
+         return req
+ 
+     def _make_sig_env_body(self, path, redirect, max_file_size, max_file_count,
+-                           expires, key):
++                           expires, key, user_agent=True):
+         sig = hmac.new(
+             key,
+             '%s\n%s\n%s\n%s\n%s' % (
+@@ -379,6 +379,9 @@
+             'wsgi.url_scheme': 'http',
+             'wsgi.version': (1, 0),
+         }
++        if user_agent is False:
++            del env['HTTP_USER_AGENT']
++
+         return sig, env, body
+ 
+     def test_passthrough(self):
+@@ -1173,6 +1176,26 @@
+             in body)
+         self.assertEquals(len(self.app.requests), 0)
+ 
++    def test_formpost_without_useragent(self):
++        key = 'abc'
++        sig, env, body = self._make_sig_env_body(
++            '/v1/AUTH_test/container', 'http://redirect', 1024, 10,
++            int(time() + 86400), key, user_agent=False)
++        env['wsgi.input'] = StringIO('\r\n'.join(body))
++        env['swift.cache'] = FakeMemcache()
++        env['swift.cache'].set('temp-url-key/AUTH_test', key)
++        self.app = FakeApp(iter([('201 Created', {}, ''),
++                                 ('201 Created', {}, '')]))
++        self.auth = tempauth.filter_factory({})(self.app)
++        self.formpost = formpost.filter_factory({})(self.auth)
++
++        def start_response(s, h, e=None):
++            pass
++        body = ''.join(self.formpost(env, start_response))
++        self.assertTrue('User-Agent' in self.app.requests[0].headers)
++        self.assertEquals(self.app.requests[0].headers['User-Agent'],
++                          'FormPost')
++
+     def test_redirect(self):
+         key = 'abc'
+         sig, env, body = self._make_sig_env_body(

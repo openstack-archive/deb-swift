@@ -1,7 +1,8 @@
-swift (1.8.0-5) UNRELEASED; urgency=low
+swift (1.8.0-5) unstable; urgency=low
 
   * swift-account should be Breaks+Replaces: swift (<< 1.8.0-4~) to allow to
     do backports.
+  * Added Fix-formpost-with-queries-without-user_agent.patch.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 17 Jun 2013 15:14:15 +0800
 
