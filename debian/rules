@@ -10,7 +10,7 @@ include /usr/share/openstack-pkg-tools/pkgos.make
 # clean sphinx build output
 override_dh_clean:
 	dh_clean
-	rm debian/*.upstart
+	rm -f debian/*.upstart
 	rm -rf swift.egg-info
 	rm -rf doc/build/* swift.egg-info/SOURCES.txt
 
