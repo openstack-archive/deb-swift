@@ -1,3 +1,13 @@
+swift (1.8.0-6) unstable; urgency=low
+
+  * Renamed all init script with .init extension in the debian folder, so it is
+    more easy to list them with ls.
+  * Added upstart scripts.
+  * Added myself and Julien in debian/copyright for the packaging, plus
+    Canonical for the upstart jobs.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 28 Jun 2013 15:33:19 +0800
+
 swift (1.8.0-5) unstable; urgency=low
 
   * swift-account should be Breaks+Replaces: swift (<< 1.8.0-4~) to allow to
