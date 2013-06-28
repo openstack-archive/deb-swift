@@ -10,6 +10,7 @@ include /usr/share/openstack-pkg-tools/pkgos.make
 # clean sphinx build output
 override_dh_clean:
 	dh_clean
+	rm debian/*.upstart
 	rm -rf swift.egg-info
 	rm -rf doc/build/* swift.egg-info/SOURCES.txt
 
@@ -46,7 +47,7 @@ override_dh_install:
 override_dh_installinit:
 	if dpkg-vendor --derives-from ubuntu ; then \
 		for i in `ls -1 debian/*.upstart.in` ; do \
-			MYPKG=`echo $$i | cut -d. -f1` ; \
+			MYPKG=`echo $$i | sed s/.upstart.in//` ; \
 			cp $$MYPKG.upstart.in $$MYPKG.upstart ; \
 		done ; \
 	fi
