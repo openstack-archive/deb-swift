@@ -53,12 +53,12 @@ override_dh_installinit:
 	fi
 	dh_installinit --no-start
 
-	dh_installinit --no-start -pswift-container --init-script=swift-container-replicator
-	dh_installinit --no-start -pswift-container --init-script=swift-container-auditor
-	dh_installinit --no-start -pswift-container --init-script=swift-container-updater
-	dh_installinit --no-start -pswift-account --init-script=swift-account-replicator
-	dh_installinit --no-start -pswift-account --init-script=swift-account-auditor
-	dh_installinit --no-start -pswift-account --init-script=swift-account-reaper
-	dh_installinit --no-start -pswift-object --init-script=swift-object-replicator
-	dh_installinit --no-start -pswift-object --init-script=swift-object-auditor
-	dh_installinit --no-start -pswift-object --init-script=swift-object-updater
+	dh_installinit --no-start -pswift-container --name=swift-container-replicator
+	dh_installinit --no-start -pswift-container --name=swift-container-auditor
+	dh_installinit --no-start -pswift-container --name=swift-container-updater
+	dh_installinit --no-start -pswift-account --name=swift-account-replicator
+	dh_installinit --no-start -pswift-account --name=swift-account-auditor
+	dh_installinit --no-start -pswift-account --name=swift-account-reaper
+	dh_installinit --no-start -pswift-object --name=swift-object-replicator
+	dh_installinit --no-start -pswift-object --name=swift-object-auditor
+	dh_installinit --no-start -pswift-object --name=swift-object-updater
