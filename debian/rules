@@ -44,6 +44,12 @@ override_dh_install:
 	install -D -m 0644 $(CURDIR)/etc/object-server.conf-sample	$(CURDIR)/debian/swift-object/etc/swift/object-server.conf
 
 override_dh_installinit:
+	if dpkg-vendor --derives-from ubuntu ; then \
+		for i in `ls -1 debian/*.upstart.in` ; do \
+			MYPKG=`echo $$i | cut -d. -f1` ; \
+			cp $$MYPKG.upstart.in $$MYPKG.upstart ; \
+		done ; \
+	fi
 	dh_installinit --no-start
 
 	dh_installinit --no-start -pswift-container --init-script=swift-container-replicator
