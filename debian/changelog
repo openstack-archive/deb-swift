@@ -1,10 +1,14 @@
 swift (1.8.0-6) unstable; urgency=low
 
+  [ Thomas Goirand ]
   * Renamed all init script with .init extension in the debian folder, so it is
     more easy to list them with ls.
   * Added upstart scripts.
   * Added myself and Julien in debian/copyright for the packaging, plus
     Canonical for the upstart jobs.
+
+  [ Julien Cristau ]
+  * CVE-2013-2161: Check user input in XML responses
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 28 Jun 2013 15:33:19 +0800
 

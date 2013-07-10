@@ -1,3 +1,4 @@
 fix-doc-no-network.patch
 Allow-all-headers-requested-for-CORS.patch
 Fix-formpost-with-queries-without-user_agent.patch
+CVE-2013-2161.patch
