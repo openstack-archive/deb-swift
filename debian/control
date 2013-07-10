@@ -21,7 +21,6 @@ Build-Depends-Indep: python-coverage,
                      python-simplejson,
                      python-sphinx (>= 1.1.2),
                      python-swiftclient,
-                     python-webob (>= 1.2),
                      python-xattr
 Standards-Version: 3.9.4
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/swift.git;a=summary
@@ -41,7 +40,6 @@ Depends: adduser,
          python-pastedeploy,
          python-setuptools,
          python-simplejson,
-         python-webob (>= 1.2),
          python-xattr,
          ${misc:Depends},
          ${python:Depends}

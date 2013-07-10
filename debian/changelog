@@ -6,6 +6,7 @@ swift (1.8.0-6) unstable; urgency=low
   * Added upstart scripts.
   * Added myself and Julien in debian/copyright for the packaging, plus
     Canonical for the upstart jobs.
+  * Removes unwanted python-webob (build-)depends (Closes: #715452).
 
   [ Julien Cristau ]
   * CVE-2013-2161: Check user input in XML responses (closes: #712202)
