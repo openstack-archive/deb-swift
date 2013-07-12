@@ -1,3 +1,10 @@
+swift (1.4.8-2+deb70u1) wheezy-proposed-updates; urgency=low
+
+  * CVE-2013-2161: Applied fix for unchecked user input in Swift XML responses
+    (Closes: #712202).
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 12 Jul 2013 13:54:33 +0800
+
 swift (1.4.8-2) unstable; urgency=high
 
   * CVE-2012-4406: Do not use pickle for serialization in memcache, but JSON
