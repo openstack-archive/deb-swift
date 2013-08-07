@@ -1,2 +1,3 @@
 CVE-2012-4406_Do-not-use-pickle-for-serialization-in-memcache-but-JSON.patch
 CVE-2013-2161.patch
+CVE-2013-4155_DoS_using_superfluous_object_tombstones.patch

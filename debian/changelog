@@ -2,6 +2,8 @@ swift (1.4.8-2+deb7u1) wheezy-proposed-updates; urgency=low
 
   * CVE-2013-2161: Applied fix for unchecked user input in Swift XML responses
     (Closes: #712202).
+  * CVE-2013-4155: Backported fix for Denial of Service using superfluous
+    object tombstones (Closes: #719008).
   * Updated debian/gbp.conf to track Wheezy fixes.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 12 Jul 2013 13:54:33 +0800
