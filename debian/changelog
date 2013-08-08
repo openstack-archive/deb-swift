@@ -7,6 +7,8 @@ swift (1.8.0-6) unstable; urgency=low
   * Added myself and Julien in debian/copyright for the packaging, plus
     Canonical for the upstart jobs.
   * Removes unwanted python-webob (build-)depends (Closes: #715452).
+  * CVE-2013-4155: DoS using superfluous object tombstones. Upstream patch
+    fixes handling of DELETE obj reqs with old timestamp (Closes: #719008).
 
   [ Julien Cristau ]
   * CVE-2013-2161: Check user input in XML responses (closes: #712202)
