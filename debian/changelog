@@ -1,4 +1,4 @@
-swift (1.4.8-2+deb7u1) wheezy-proposed-updates; urgency=low
+swift (1.4.8-2+deb7u1) wheezy-security; urgency=high
 
   * CVE-2013-2161: Applied fix for unchecked user input in Swift XML responses
     (Closes: #712202).
