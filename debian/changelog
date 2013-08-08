@@ -1,4 +1,4 @@
-swift (1.8.0-7) unstable; urgency=low
+swift (1.8.0-7) unstable; urgency=high
 
   * CVE-2013-4155: DoS using superfluous object tombstones. Upstream patch
     fixes handling of DELETE obj reqs with old timestamp (Closes: #719008).
