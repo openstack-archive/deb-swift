@@ -10,11 +10,11 @@ Author: Chmouel Boudjnah <chmouel@enovance.com>
 Origin: upstream, https://review.openstack.org/#/c/24978/
 Date: 2013-04-16
 
-diff --git a/doc/source/cors.rst b/doc/source/cors.rst
-index 8ddf7d8..ca218ae 100644
---- a/doc/source/cors.rst
-+++ b/doc/source/cors.rst
-@@ -22,10 +22,6 @@ The supported headers are,
+Index: swift/doc/source/cors.rst
+===================================================================
+--- swift.orig/doc/source/cors.rst	2013-08-08 13:54:13.000000000 +0200
++++ swift/doc/source/cors.rst	2013-08-08 13:54:23.000000000 +0200
+@@ -22,10 +22,6 @@
  |X-Container-Meta-Access-Control-Max-Age       | Max age for the Origin to    |
  |                                              | hold the preflight results.  |
  +----------------------------------------------+------------------------------+
@@ -25,11 +25,11 @@ index 8ddf7d8..ca218ae 100644
  |X-Container-Meta-Access-Control-Expose-Headers| Headers exposed to the user  |
  |                                              | agent (e.g. browser) in the  |
  |                                              | the actual request response. |
-diff --git a/swift/proxy/controllers/base.py b/swift/proxy/controllers/base.py
-index 4a4d13f..3886db8 100644
---- a/swift/proxy/controllers/base.py
-+++ b/swift/proxy/controllers/base.py
-@@ -34,7 +34,7 @@ from eventlet.timeout import Timeout
+Index: swift/swift/proxy/controllers/base.py
+===================================================================
+--- swift.orig/swift/proxy/controllers/base.py	2013-08-08 13:54:13.000000000 +0200
++++ swift/swift/proxy/controllers/base.py	2013-08-08 13:54:23.000000000 +0200
+@@ -34,7 +34,7 @@
  
  from swift.common.wsgi import make_pre_authed_request
  from swift.common.utils import normalize_timestamp, config_true_value, \
@@ -38,7 +38,7 @@ index 4a4d13f..3886db8 100644
  from swift.common.bufferedhttp import http_connect
  from swift.common.constraints import MAX_ACCOUNT_NAME_LENGTH
  from swift.common.exceptions import ChunkReadTimeout, ConnectionTimeout
-@@ -129,8 +129,6 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
+@@ -129,8 +129,6 @@
          'cors': {
              'allow_origin': headers.get(
                  'x-container-meta-access-control-allow-origin'),
@@ -47,7 +47,7 @@ index 4a4d13f..3886db8 100644
              'expose_headers': headers.get(
                  'x-container-meta-access-control-expose-headers'),
              'max_age': headers.get(
-@@ -905,15 +903,15 @@ class Controller(object):
+@@ -905,15 +903,15 @@
              resp.status = HTTP_UNAUTHORIZED
              return resp
  
@@ -70,7 +70,7 @@ index 4a4d13f..3886db8 100644
  
          # Populate the response with the CORS preflight headers
          headers['access-control-allow-origin'] = req_origin_value
-@@ -921,7 +919,8 @@ class Controller(object):
+@@ -921,7 +919,8 @@
              headers['access-control-max-age'] = cors.get('max_age')
          headers['access-control-allow-methods'] = \
              ', '.join(self.allowed_methods)
@@ -80,11 +80,11 @@ index 4a4d13f..3886db8 100644
          resp.headers = headers
  
          return resp
-diff --git a/test/unit/proxy/test_server.py b/test/unit/proxy/test_server.py
-index d510d30..5ae3c57 100644
---- a/test/unit/proxy/test_server.py
-+++ b/test/unit/proxy/test_server.py
-@@ -3999,7 +3999,6 @@ class TestObjectController(unittest.TestCase):
+Index: swift/test/unit/proxy/test_server.py
+===================================================================
+--- swift.orig/test/unit/proxy/test_server.py	2013-08-08 13:54:13.000000000 +0200
++++ swift/test/unit/proxy/test_server.py	2013-08-08 13:54:23.000000000 +0200
+@@ -3911,7 +3911,6 @@
                  return {
                      'cors': {
                          'allow_origin': 'http://foo.bar:8080 https://foo.bar',
@@ -92,7 +92,7 @@ index d510d30..5ae3c57 100644
                          'max_age': '999',
                      }
                  }
-@@ -4022,9 +4021,6 @@ class TestObjectController(unittest.TestCase):
+@@ -3934,9 +3933,6 @@
                  len(resp.headers['access-control-allow-methods'].split(', ')),
                  7)
              self.assertEquals('999', resp.headers['access-control-max-age'])
@@ -102,7 +102,7 @@ index d510d30..5ae3c57 100644
              req = Request.blank(
                  '/a/c/o.jpg',
                  {'REQUEST_METHOD': 'OPTIONS'},
-@@ -4059,7 +4055,6 @@ class TestObjectController(unittest.TestCase):
+@@ -3971,7 +3967,6 @@
                  return {
                      'cors': {
                          'allow_origin': '*',
@@ -110,7 +110,7 @@ index d510d30..5ae3c57 100644
                          'max_age': '999',
                      }
                  }
-@@ -4082,9 +4077,6 @@ class TestObjectController(unittest.TestCase):
+@@ -3994,9 +3989,6 @@
                  len(resp.headers['access-control-allow-methods'].split(', ')),
                  7)
              self.assertEquals('999', resp.headers['access-control-max-age'])
@@ -120,7 +120,7 @@ index d510d30..5ae3c57 100644
  
      def test_CORS_valid(self):
          with save_globals():
-@@ -4827,7 +4819,6 @@ class TestContainerController(unittest.TestCase):
+@@ -4739,7 +4731,6 @@
                  return {
                      'cors': {
                          'allow_origin': 'http://foo.bar:8080 https://foo.bar',
@@ -128,7 +128,7 @@ index d510d30..5ae3c57 100644
                          'max_age': '999',
                      }
                  }
-@@ -4850,9 +4841,6 @@ class TestContainerController(unittest.TestCase):
+@@ -4762,9 +4753,6 @@
                  len(resp.headers['access-control-allow-methods'].split(', ')),
                  6)
              self.assertEquals('999', resp.headers['access-control-max-age'])
@@ -138,7 +138,7 @@ index d510d30..5ae3c57 100644
              req = Request.blank(
                  '/a/c',
                  {'REQUEST_METHOD': 'OPTIONS'},
-@@ -4888,7 +4876,6 @@ class TestContainerController(unittest.TestCase):
+@@ -4800,7 +4788,6 @@
                  return {
                      'cors': {
                          'allow_origin': '*',
@@ -146,7 +146,7 @@ index d510d30..5ae3c57 100644
                          'max_age': '999',
                      }
                  }
-@@ -4911,8 +4898,20 @@ class TestContainerController(unittest.TestCase):
+@@ -4823,8 +4810,20 @@
                  len(resp.headers['access-control-allow-methods'].split(', ')),
                  6)
              self.assertEquals('999', resp.headers['access-control-max-age'])
@@ -168,6 +168,3 @@ index d510d30..5ae3c57 100644
                  sortHeaderNames(resp.headers['access-control-allow-headers']))
  
      def test_CORS_valid(self):
--- 
-1.7.9.5
-
