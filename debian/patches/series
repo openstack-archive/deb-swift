@@ -3,3 +3,4 @@ Allow-all-headers-requested-for-CORS.patch
 Fix-formpost-with-queries-without-user_agent.patch
 CVE-2013-2161.patch
 CVE-2013-4155_DoS_using_superfluous_object_tombstones.patch
+manpage_errors.patch
