@@ -5,7 +5,7 @@
 include /usr/share/openstack-pkg-tools/pkgos.make
 
 %:
-	dh $@ --with python2
+	dh $@ --with python2,sphinxdoc
 
 # clean sphinx build output
 override_dh_clean:
