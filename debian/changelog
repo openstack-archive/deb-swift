@@ -1,3 +1,10 @@
+swift (1.10.0~rc1-1) experimental; urgency=low
+
+  * New upstream release.
+  * Removed applied upstream patches.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 10 Oct 2013 11:59:08 +0800
+
 swift (1.8.0-7) unstable; urgency=low
 
   * Added "Account Quota Correction" patch.
