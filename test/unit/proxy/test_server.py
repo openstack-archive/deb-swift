@@ -2889,27 +2889,6 @@ class TestObjectController(unittest.TestCase):
             resp = controller.PUT(req)
             self.assertEquals(resp.status_int, 413)
 
-            # copy-from object is too large to fit in target object
-            req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
-                                headers={'Content-Length': '0',
-                                         'X-Copy-From': '/c/o'})
-            self.app.update_request(req)
-
-            class LargeResponseBody(object):
-
-                def __len__(self):
-                    return MAX_FILE_SIZE + 1
-
-                def __getitem__(self, key):
-                    return ''
-
-            copy_from_obj_body = LargeResponseBody()
-            set_http_connect(200, 200, 200, 200, 200, 201, 201, 201,
-                body=copy_from_obj_body)
-            self.app.memcache.store = {}
-            resp = controller.PUT(req)
-            self.assertEquals(resp.status_int, 413)
-
     def test_COPY(self):
         with save_globals():
             controller = proxy_server.ObjectController(self.app, 'a', 'c', 'o')
@@ -3036,25 +3015,6 @@ class TestObjectController(unittest.TestCase):
             copy_from_obj_body = LargeResponseBody()
             set_http_connect(200, 200, 200, 200, 200, 201, 201, 201,
                              body=copy_from_obj_body)
-            self.app.memcache.store = {}
-            resp = controller.COPY(req)
-            self.assertEquals(resp.status_int, 413)
-
-            req = Request.blank('/a/c/o', environ={'REQUEST_METHOD': 'COPY'},
-                                headers={'Destination': '/c/o'})
-            self.app.update_request(req)
-
-            class LargeResponseBody(object):
-
-                def __len__(self):
-                    return MAX_FILE_SIZE + 1
-
-                def __getitem__(self, key):
-                    return ''
-
-            copy_from_obj_body = LargeResponseBody()
-            set_http_connect(200, 200, 200, 200, 200, 201, 201, 201,
-                body=copy_from_obj_body)
             self.app.memcache.store = {}
             resp = controller.COPY(req)
             self.assertEquals(resp.status_int, 413)

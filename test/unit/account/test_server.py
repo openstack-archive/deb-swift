@@ -129,28 +129,6 @@ class TestAccountController(unittest.TestCase):
         resp = req.get_response(self.controller)
         self.assertEqual(resp.status_int, 507)
 
-    def test_DELETE_invalid_partition(self):
-        req = Request.blank('/sda1/./a', environ={'REQUEST_METHOD': 'DELETE',
-                                                  'HTTP_X_TIMESTAMP': '1'})
-        resp = self.controller.DELETE(req)
-        self.assertEquals(resp.status_int, 400)
-
-    def test_DELETE_timestamp_not_float(self):
-        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
-                                                  'HTTP_X_TIMESTAMP': '0'})
-        self.controller.PUT(req)
-        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'DELETE'},
-                            headers={'X-Timestamp': 'not-float'})
-        resp = self.controller.DELETE(req)
-        self.assertEquals(resp.status_int, 400)
-
-    def test_DELETE_insufficient_storage(self):
-        self.controller = AccountController({'devices': self.testdir})
-        req = Request.blank('/sda-null/p/a', environ={'REQUEST_METHOD': 'DELETE',
-                                                  'HTTP_X_TIMESTAMP': '1'})
-        resp = self.controller.DELETE(req)
-        self.assertEquals(resp.status_int, 507)
-
     def test_HEAD_not_found(self):
         # Test the case in which account does not exist (can be recreated)
         req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'HEAD'})
@@ -258,28 +236,6 @@ class TestAccountController(unittest.TestCase):
                             environ={'REQUEST_METHOD': 'HEAD'})
         resp = req.get_response(self.controller)
         self.assertEqual(resp.status_int, 400)
-
-    def test_HEAD_invalid_partition(self):
-        req = Request.blank('/sda1/./a', environ={'REQUEST_METHOD': 'HEAD',
-                                                  'HTTP_X_TIMESTAMP': '1'})
-        resp = self.controller.HEAD(req)
-        self.assertEquals(resp.status_int, 400)
-
-    def test_HEAD_invalid_content_type(self):
-        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'PUT',
-                                                  'HTTP_X_TIMESTAMP': '0'})
-        self.controller.PUT(req)
-        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'HEAD'},
-                            headers={'Accept': 'application/plain'})
-        resp = self.controller.HEAD(req)
-        self.assertEquals(resp.status_int, 406)
-
-    def test_HEAD_insufficient_storage(self):
-        self.controller = AccountController({'devices': self.testdir})
-        req = Request.blank('/sda-null/p/a', environ={'REQUEST_METHOD': 'HEAD',
-                                                      'HTTP_X_TIMESTAMP': '1'})
-        resp = self.controller.HEAD(req)
-        self.assertEquals(resp.status_int, 507)
 
     def test_PUT_not_found(self):
         req = Request.blank(
@@ -1219,13 +1175,6 @@ class TestAccountController(unittest.TestCase):
                                                       'HTTP_X_TIMESTAMP': '1'})
         resp = req.get_response(self.controller)
         self.assertEqual(resp.status_int, 507)
-
-    def test_GET_insufficient_storage(self):
-        self.controller = AccountController({'devices': self.testdir})
-        req = Request.blank('/sda-null/p/a', environ={'REQUEST_METHOD': 'GET',
-                                                      'HTTP_X_TIMESTAMP': '1'})
-        resp = self.controller.GET(req)
-        self.assertEquals(resp.status_int, 507)
 
     def test_through_call(self):
         inbuf = StringIO()

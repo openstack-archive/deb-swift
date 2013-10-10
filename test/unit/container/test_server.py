@@ -395,16 +395,6 @@ class TestContainerController(unittest.TestCase):
         resp = req.get_response(self.controller)
         self.assertEquals(resp.status_int, 404)
 
-    def test_DELETE_container_not_found(self):
-        req = Request.blank('/sda1/p/a/c', environ={'REQUEST_METHOD': 'PUT',
-                                                    'HTTP_X_TIMESTAMP': '0'})
-        resp = self.controller.PUT(req)
-        self.assertEquals(resp.status_int, 201)
-        req = Request.blank('/sda1/p/a/c', environ={'REQUEST_METHOD': 'DELETE',
-                                                    'HTTP_X_TIMESTAMP': '1'})
-        resp = self.controller.DELETE(req)
-        self.assertEquals(resp.status_int, 404)
-
     def test_PUT_utf8(self):
         snowman = u'\u2603'
         container_name = snowman.encode('utf-8')
@@ -1296,14 +1286,6 @@ class TestContainerController(unittest.TestCase):
             '/sda-null/p/a/c', environ={'REQUEST_METHOD': 'GET',
                                         'HTTP_X_TIMESTAMP': '1'})
         resp = req.get_response(self.controller)
-        self.assertEquals(resp.status_int, 507)
-
-    def test_GET_insufficient_storage(self):
-        self.controller = container_server.ContainerController(
-            {'devices': self.testdir})
-        req = Request.blank('/sda-null/p/a/c', environ={'REQUEST_METHOD': 'GET',
-                                                        'HTTP_X_TIMESTAMP': '1'})
-        resp = self.controller.GET(req)
         self.assertEquals(resp.status_int, 507)
 
     def test_through_call(self):
