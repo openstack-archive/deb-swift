@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@ from time import time
 from swift.common import exceptions
 from swift.common.ring import RingData
 from swift.common.ring.utils import tiers_for_dev, build_tier_tree
+
+MAX_BALANCE = 999.99
 
 
 class RingBuilder(object):
@@ -255,6 +257,8 @@ class RingBuilder(object):
             make multiple changes for a single rebalance.
 
         :param dev: device dict
+
+        :returns: id of device
         """
         if 'id' not in dev:
             dev['id'] = 0
@@ -272,6 +276,7 @@ class RingBuilder(object):
         self._set_parts_wanted()
         self.devs_changed = True
         self.version += 1
+        return dev['id']
 
     def set_dev_weight(self, dev_id, weight):
         """
@@ -327,7 +332,7 @@ class RingBuilder(object):
         :returns: (number_of_partitions_altered, resulting_balance)
         """
 
-        if seed:
+        if seed is not None:
             random.seed(seed)
 
         self._ring = None
@@ -379,6 +384,11 @@ class RingBuilder(object):
         dev_len = len(self.devs)
 
         parts_on_devs = sum(d['parts'] for d in self._iter_devs())
+
+        if not self._replica2part2dev:
+            raise exceptions.RingValidationError(
+                '_replica2part2dev empty; did you forget to rebalance?')
+
         parts_in_map = sum(len(p2d) for p2d in self._replica2part2dev)
         if parts_on_devs != parts_in_map:
             raise exceptions.RingValidationError(
@@ -414,9 +424,9 @@ class RingBuilder(object):
                     if dev_usage[dev['id']]:
                         # If a device has no weight, but has partitions, then
                         # its overage is considered "infinity" and therefore
-                        # always the worst possible. We show 999.99 for
+                        # always the worst possible. We show MAX_BALANCE for
                         # convenience.
-                        worst = 999.99
+                        worst = MAX_BALANCE
                         break
                     continue
                 skew = abs(100.0 * dev_usage[dev['id']] /
@@ -444,8 +454,8 @@ class RingBuilder(object):
                 if dev['parts']:
                     # If a device has no weight, but has partitions, then its
                     # overage is considered "infinity" and therefore always the
-                    # worst possible. We show 999.99 for convenience.
-                    balance = 999.99
+                    # worst possible. We show MAX_BALANCE for convenience.
+                    balance = MAX_BALANCE
                     break
                 continue
             dev_balance = abs(100.0 * dev['parts'] /
@@ -811,26 +821,35 @@ class RingBuilder(object):
                     #
                     # This used to be a cute, recursive function, but it's been
                     # unrolled for performance.
-                    candidate_tiers = tier2children[tier]
+
+                    # We sort the tiers here so that, when we look for a tier
+                    # with the lowest number of replicas, the first one we
+                    # find is the one with the hungriest drive (i.e. drive
+                    # with the largest sort_key value). This lets us
+                    # short-circuit the search while still ensuring we get the
+                    # right tier.
+                    candidate_tiers = sorted(
+                        tier2children[tier],
+                        key=lambda tier: tier2devs[tier][-1]['sort_key'],
+                        reverse=True)
                     candidates_with_replicas = \
                         unique_tiers_by_tier_len[len(tier) + 1]
                     if len(candidate_tiers) > len(candidates_with_replicas):
-                        # There exists at least one tier with 0 other replicas,
-                        # so work backward among the candidates, accepting the
-                        # first which isn't in other_replicas.
-                        #
-                        # This optimization is to avoid calling the min()
-                        # below, which is expensive if you've got thousands of
-                        # drives.
-                        for t in reversed(candidate_tiers):
-                            if other_replicas[t] == 0:
-                                tier = t
-                                break
+                        # There exists at least one tier with 0 other
+                        # replicas, so avoid calling the min() below, which is
+                        # expensive if you've got thousands of drives.
+                        min_replica_count = 0
                     else:
-                        min_count = min(other_replicas[t]
-                                        for t in candidate_tiers)
-                        tier = (t for t in reversed(candidate_tiers)
-                                if other_replicas[t] == min_count).next()
+                        min_replica_count = min(other_replicas[t]
+                                                for t in candidate_tiers)
+                    # Find the first tier with the minimal replica count.
+                    # Since they're sorted, this will also have the hungriest
+                    # drive among all the tiers with the minimal replica
+                    # count.
+                    for t in candidate_tiers:
+                        if other_replicas[t] == min_replica_count:
+                            tier = t
+                            break
                     depth += 1
                 dev = tier2devs[tier][-1]
                 dev['parts_wanted'] -= 1
@@ -989,104 +1008,48 @@ class RingBuilder(object):
             #really old rings didn't have meta keys
             if dev and 'meta' not in dev:
                 dev['meta'] = ''
+            # NOTE(akscram): An old ring builder file don't contain
+            #                replication parameters.
+            if dev:
+                if 'ip' in dev:
+                    dev.setdefault('replication_ip', dev['ip'])
+                if 'port' in dev:
+                    dev.setdefault('replication_port', dev['port'])
         return builder
 
-    def search_devs(self, search_value):
+    def save(self, builder_file):
+        """Serialize this RingBuilder instance to disk.
+
+        :param builder_file: path to builder file to save
         """
-    The <search-value> can be of the form::
+        with open(builder_file, 'wb') as f:
+            pickle.dump(self.to_dict(), f, protocol=2)
 
-        d<device_id>r<region>z<zone>-<ip>:<port>/<device_name>_<meta>
+    def search_devs(self, search_values):
+        """Search devices by parameters.
 
-    Any part is optional, but you must include at least one part.
+        :param search_values: a dictionary with search values to filter
+                              devices, supported parameters are id,
+                              region, zone, ip, port, replication_ip,
+                              replication_port, device, weight, meta
 
-    Examples::
-
-        d74              Matches the device id 74
-        r4               Matches devices in region 4
-        z1               Matches devices in zone 1
-        z1-1.2.3.4       Matches devices in zone 1 with the ip 1.2.3.4
-        1.2.3.4          Matches devices in any zone with the ip 1.2.3.4
-        z1:5678          Matches devices in zone 1 using port 5678
-        :5678            Matches devices that use port 5678
-        /sdb1            Matches devices with the device name sdb1
-        _shiny           Matches devices with shiny in the meta data
-        _"snet: 5.6.7.8" Matches devices with snet: 5.6.7.8 in the meta data
-        [::1]            Matches devices in any zone with the ip ::1
-        z1-[::1]:5678    Matches devices in zone 1 with ip ::1 and port 5678
-
-    Most specific example::
-
-        d74r4z1-1.2.3.4:5678/sdb1_"snet: 5.6.7.8"
-
-    Nerd explanation:
-
-        All items require their single character prefix except the ip, in which
-        case the - is optional unless the device id or zone is also included.
+        :returns: list of device dicts
         """
-        orig_search_value = search_value
-        match = []
-        if search_value.startswith('d'):
-            i = 1
-            while i < len(search_value) and search_value[i].isdigit():
-                i += 1
-            match.append(('id', int(search_value[1:i])))
-            search_value = search_value[i:]
-        if search_value.startswith('r'):
-            i = 1
-            while i < len(search_value) and search_value[i].isdigit():
-                i += 1
-            match.append(('region', int(search_value[1:i])))
-            search_value = search_value[i:]
-        if search_value.startswith('z'):
-            i = 1
-            while i < len(search_value) and search_value[i].isdigit():
-                i += 1
-            match.append(('zone', int(search_value[1:i])))
-            search_value = search_value[i:]
-        if search_value.startswith('-'):
-            search_value = search_value[1:]
-        if len(search_value) and search_value[0].isdigit():
-            i = 1
-            while i < len(search_value) and search_value[i] in '0123456789.':
-                i += 1
-            match.append(('ip', search_value[:i]))
-            search_value = search_value[i:]
-        elif len(search_value) and search_value[0] == '[':
-            i = 1
-            while i < len(search_value) and search_value[i] != ']':
-                i += 1
-            i += 1
-            match.append(('ip', search_value[:i].lstrip('[').rstrip(']')))
-            search_value = search_value[i:]
-        if search_value.startswith(':'):
-            i = 1
-            while i < len(search_value) and search_value[i].isdigit():
-                i += 1
-            match.append(('port', int(search_value[1:i])))
-            search_value = search_value[i:]
-        if search_value.startswith('/'):
-            i = 1
-            while i < len(search_value) and search_value[i] != '_':
-                i += 1
-            match.append(('device', search_value[1:i]))
-            search_value = search_value[i:]
-        if search_value.startswith('_'):
-            match.append(('meta', search_value[1:]))
-            search_value = ''
-        if search_value:
-            raise ValueError('Invalid <search-value>: %s' %
-                             repr(orig_search_value))
         matched_devs = []
         for dev in self.devs:
             if not dev:
                 continue
             matched = True
-            for key, value in match:
-                if key == 'meta':
-                    if value not in dev.get(key):
-                        matched = False
-                elif dev.get(key) != value:
-                    matched = False
+            for key in ('id', 'region', 'zone', 'ip', 'port', 'replication_ip',
+                        'replication_port', 'device', 'weight', 'meta'):
+                if key in search_values:
+                    value = search_values.get(key)
+                    if value is not None:
+                        if key == 'meta':
+                            if value not in dev.get(key):
+                                matched = False
+                        elif dev.get(key) != value:
+                            matched = False
             if matched:
                 matched_devs.append(dev)
         return matched_devs

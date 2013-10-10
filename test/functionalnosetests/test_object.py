@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,12 +19,8 @@ import unittest
 from nose import SkipTest
 from uuid import uuid4
 
-from swift.common.constraints import MAX_META_COUNT, MAX_META_NAME_LENGTH, \
-    MAX_META_OVERALL_SIZE, MAX_META_VALUE_LENGTH
-
 from swift_testing import check_response, retry, skip, skip3, \
     swift_test_perm, web_front_end
-from test import get_config
 
 
 class TestObject(unittest.TestCase):
@@ -44,8 +40,9 @@ class TestObject(unittest.TestCase):
         self.obj = uuid4().hex
 
         def put(url, token, parsed, conn):
-            conn.request('PUT', '%s/%s/%s' % (parsed.path, self.container,
-                self.obj), 'test', {'X-Auth-Token': token})
+            conn.request('PUT', '%s/%s/%s' % (
+                parsed.path, self.container, self.obj), 'test',
+                {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(put)
         resp.read()
@@ -112,7 +109,7 @@ class TestObject(unittest.TestCase):
                           'X-Copy-From': source})
             return check_response(conn)
         resp = retry(put)
-        contents = resp.read()
+        resp.read()
         self.assertEquals(resp.status, 201)
 
         # contents of dest should be the same as source
@@ -146,7 +143,7 @@ class TestObject(unittest.TestCase):
                           'Destination': dest})
             return check_response(conn)
         resp = retry(copy)
-        contents = resp.read()
+        resp.read()
         self.assertEquals(resp.status, 201)
 
         # contents of dest should be the same as source
@@ -171,7 +168,7 @@ class TestObject(unittest.TestCase):
         try:
             resp = retry(get)
             raise Exception('Should not have been able to GET')
-        except Exception, err:
+        except Exception as err:
             self.assert_(str(err).startswith('No result after '))
 
         def post(url, token, parsed, conn):
@@ -196,7 +193,7 @@ class TestObject(unittest.TestCase):
         try:
             resp = retry(get)
             raise Exception('Should not have been able to GET')
-        except Exception, err:
+        except Exception as err:
             self.assert_(str(err).startswith('No result after '))
 
     def test_private_object(self):
@@ -205,9 +202,9 @@ class TestObject(unittest.TestCase):
 
         # Ensure we can't access the object with the third account
         def get(url, token, parsed, conn):
-            conn.request('GET', '%s/%s/%s' % (parsed.path, self.container,
-                                              self.obj), '',
-                         {'X-Auth-Token': token})
+            conn.request('GET', '%s/%s/%s' % (
+                parsed.path, self.container, self.obj), '',
+                {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(get, use_account=3)
         resp.read()
@@ -217,11 +214,11 @@ class TestObject(unittest.TestCase):
         shared_container = uuid4().hex
 
         def put(url, token, parsed, conn):
-            conn.request('PUT', '%s/%s' % (parsed.path,
-                                           shared_container), '',
-                         {'X-Auth-Token': token,
-                          'X-Container-Read': swift_test_perm[2],
-                          'X-Container-Write': swift_test_perm[2]})
+            conn.request('PUT', '%s/%s' % (
+                parsed.path, shared_container), '',
+                {'X-Auth-Token': token,
+                 'X-Container-Read': swift_test_perm[2],
+                 'X-Container-Write': swift_test_perm[2]})
             return check_response(conn)
         resp = retry(put)
         resp.read()
@@ -229,13 +226,11 @@ class TestObject(unittest.TestCase):
 
         # verify third account can not copy from private container
         def copy(url, token, parsed, conn):
-            conn.request('PUT', '%s/%s/%s' % (parsed.path,
-                                              shared_container,
-                                              'private_object'),
-                         '', {'X-Auth-Token': token,
-                              'Content-Length': '0',
-                              'X-Copy-From': '%s/%s' % (self.container,
-                                                        self.obj)})
+            conn.request('PUT', '%s/%s/%s' % (
+                parsed.path, shared_container, 'private_object'), '',
+                {'X-Auth-Token': token,
+                 'Content-Length': '0',
+                 'X-Copy-From': '%s/%s' % (self.container, self.obj)})
             return check_response(conn)
         resp = retry(copy, use_account=3)
         resp.read()
@@ -243,8 +238,9 @@ class TestObject(unittest.TestCase):
 
         # verify third account can write "obj1" to shared container
         def put(url, token, parsed, conn):
-            conn.request('PUT', '%s/%s/%s' % (parsed.path, shared_container,
-                'obj1'), 'test', {'X-Auth-Token': token})
+            conn.request('PUT', '%s/%s/%s' % (
+                parsed.path, shared_container, 'obj1'), 'test',
+                {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(put, use_account=3)
         resp.read()
@@ -252,12 +248,10 @@ class TestObject(unittest.TestCase):
 
         # verify third account can copy "obj1" to shared container
         def copy2(url, token, parsed, conn):
-            conn.request('COPY', '%s/%s/%s' % (parsed.path,
-                                               shared_container,
-                                               'obj1'),
-                         '', {'X-Auth-Token': token,
-                              'Destination': '%s/%s' % (shared_container,
-                                              'obj1')})
+            conn.request('COPY', '%s/%s/%s' % (
+                parsed.path, shared_container, 'obj1'), '',
+                {'X-Auth-Token': token,
+                 'Destination': '%s/%s' % (shared_container, 'obj1')})
             return check_response(conn)
         resp = retry(copy2, use_account=3)
         resp.read()
@@ -265,12 +259,11 @@ class TestObject(unittest.TestCase):
 
         # verify third account STILL can not copy from private container
         def copy3(url, token, parsed, conn):
-            conn.request('COPY', '%s/%s/%s' % (parsed.path,
-                                               self.container,
-                                               self.obj),
-                         '', {'X-Auth-Token': token,
-                              'Destination': '%s/%s' % (shared_container,
-                                              'private_object')})
+            conn.request('COPY', '%s/%s/%s' % (
+                parsed.path, self.container, self.obj), '',
+                {'X-Auth-Token': token,
+                 'Destination': '%s/%s' % (shared_container,
+                                           'private_object')})
             return check_response(conn)
         resp = retry(copy3, use_account=3)
         resp.read()
@@ -278,8 +271,9 @@ class TestObject(unittest.TestCase):
 
         # clean up "obj1"
         def delete(url, token, parsed, conn):
-            conn.request('DELETE', '%s/%s/%s' % (parsed.path, shared_container,
-                                         'obj1'), '', {'X-Auth-Token': token})
+            conn.request('DELETE', '%s/%s/%s' % (
+                parsed.path, shared_container, 'obj1'), '',
+                {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(delete)
         resp.read()
@@ -305,8 +299,8 @@ class TestObject(unittest.TestCase):
 
         # Upload the first set of segments
         def put(url, token, parsed, conn, objnum):
-            conn.request('PUT', '%s/%s/segments1/%s' % (parsed.path,
-                self.container, str(objnum)), segments1[objnum],
+            conn.request('PUT', '%s/%s/segments1/%s' % (
+                parsed.path, self.container, str(objnum)), segments1[objnum],
                 {'X-Auth-Token': token})
             return check_response(conn)
         for objnum in xrange(len(segments1)):
@@ -316,10 +310,11 @@ class TestObject(unittest.TestCase):
 
         # Upload the manifest
         def put(url, token, parsed, conn):
-            conn.request('PUT', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token,
-                'X-Object-Manifest': '%s/segments1/' % self.container,
-                'Content-Type': 'text/jibberish', 'Content-Length': '0'})
+            conn.request('PUT', '%s/%s/manifest' % (
+                parsed.path, self.container), '', {
+                    'X-Auth-Token': token,
+                    'X-Object-Manifest': '%s/segments1/' % self.container,
+                    'Content-Type': 'text/jibberish', 'Content-Length': '0'})
             return check_response(conn)
         resp = retry(put)
         resp.read()
@@ -327,8 +322,8 @@ class TestObject(unittest.TestCase):
 
         # Get the manifest (should get all the segments as the body)
         def get(url, token, parsed, conn):
-            conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token})
+            conn.request('GET', '%s/%s/manifest' % (
+                parsed.path, self.container), '', {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(get)
         self.assertEquals(resp.read(), ''.join(segments1))
@@ -337,9 +332,9 @@ class TestObject(unittest.TestCase):
 
         # Get with a range at the start of the second segment
         def get(url, token, parsed, conn):
-            conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token, 'Range':
-                'bytes=3-'})
+            conn.request('GET', '%s/%s/manifest' % (
+                parsed.path, self.container), '', {
+                    'X-Auth-Token': token, 'Range': 'bytes=3-'})
             return check_response(conn)
         resp = retry(get)
         self.assertEquals(resp.read(), ''.join(segments1[1:]))
@@ -347,9 +342,9 @@ class TestObject(unittest.TestCase):
 
         # Get with a range in the middle of the second segment
         def get(url, token, parsed, conn):
-            conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token, 'Range':
-                'bytes=5-'})
+            conn.request('GET', '%s/%s/manifest' % (
+                parsed.path, self.container), '', {
+                    'X-Auth-Token': token, 'Range': 'bytes=5-'})
             return check_response(conn)
         resp = retry(get)
         self.assertEquals(resp.read(), ''.join(segments1)[5:])
@@ -357,9 +352,9 @@ class TestObject(unittest.TestCase):
 
         # Get with a full start and stop range
         def get(url, token, parsed, conn):
-            conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token, 'Range':
-                'bytes=5-10'})
+            conn.request('GET', '%s/%s/manifest' % (
+                parsed.path, self.container), '', {
+                    'X-Auth-Token': token, 'Range': 'bytes=5-10'})
             return check_response(conn)
         resp = retry(get)
         self.assertEquals(resp.read(), ''.join(segments1)[5:11])
@@ -367,8 +362,8 @@ class TestObject(unittest.TestCase):
 
         # Upload the second set of segments
         def put(url, token, parsed, conn, objnum):
-            conn.request('PUT', '%s/%s/segments2/%s' % (parsed.path,
-                self.container, str(objnum)), segments2[objnum],
+            conn.request('PUT', '%s/%s/segments2/%s' % (
+                parsed.path, self.container, str(objnum)), segments2[objnum],
                 {'X-Auth-Token': token})
             return check_response(conn)
         for objnum in xrange(len(segments2)):
@@ -378,8 +373,8 @@ class TestObject(unittest.TestCase):
 
         # Get the manifest (should still be the first segments of course)
         def get(url, token, parsed, conn):
-            conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token})
+            conn.request('GET', '%s/%s/manifest' % (
+                parsed.path, self.container), '', {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(get)
         self.assertEquals(resp.read(), ''.join(segments1))
@@ -387,10 +382,11 @@ class TestObject(unittest.TestCase):
 
         # Update the manifest
         def put(url, token, parsed, conn):
-            conn.request('PUT', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token,
-                'X-Object-Manifest': '%s/segments2/' % self.container,
-                'Content-Length': '0'})
+            conn.request('PUT', '%s/%s/manifest' % (
+                parsed.path, self.container), '', {
+                    'X-Auth-Token': token,
+                    'X-Object-Manifest': '%s/segments2/' % self.container,
+                    'Content-Length': '0'})
             return check_response(conn)
         resp = retry(put)
         resp.read()
@@ -398,8 +394,8 @@ class TestObject(unittest.TestCase):
 
         # Get the manifest (should be the second set of segments now)
         def get(url, token, parsed, conn):
-            conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token})
+            conn.request('GET', '%s/%s/manifest' % (
+                parsed.path, self.container), '', {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(get)
         self.assertEquals(resp.read(), ''.join(segments2))
@@ -409,8 +405,8 @@ class TestObject(unittest.TestCase):
 
             # Ensure we can't access the manifest with the third account
             def get(url, token, parsed, conn):
-                conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                    self.container), '', {'X-Auth-Token': token})
+                conn.request('GET', '%s/%s/manifest' % (
+                    parsed.path, self.container), '', {'X-Auth-Token': token})
                 return check_response(conn)
             resp = retry(get, use_account=3)
             resp.read()
@@ -419,8 +415,8 @@ class TestObject(unittest.TestCase):
             # Grant access to the third account
             def post(url, token, parsed, conn):
                 conn.request('POST', '%s/%s' % (parsed.path, self.container),
-                    '', {'X-Auth-Token': token,
-                         'X-Container-Read': swift_test_perm[2]})
+                             '', {'X-Auth-Token': token,
+                                  'X-Container-Read': swift_test_perm[2]})
                 return check_response(conn)
             resp = retry(post)
             resp.read()
@@ -428,8 +424,8 @@ class TestObject(unittest.TestCase):
 
             # The third account should be able to get the manifest now
             def get(url, token, parsed, conn):
-                conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                    self.container), '', {'X-Auth-Token': token})
+                conn.request('GET', '%s/%s/manifest' % (
+                    parsed.path, self.container), '', {'X-Auth-Token': token})
                 return check_response(conn)
             resp = retry(get, use_account=3)
             self.assertEquals(resp.read(), ''.join(segments2))
@@ -448,8 +444,8 @@ class TestObject(unittest.TestCase):
 
         # Upload the third set of segments in the other container
         def put(url, token, parsed, conn, objnum):
-            conn.request('PUT', '%s/%s/segments3/%s' % (parsed.path,
-                acontainer, str(objnum)), segments3[objnum],
+            conn.request('PUT', '%s/%s/segments3/%s' % (
+                parsed.path, acontainer, str(objnum)), segments3[objnum],
                 {'X-Auth-Token': token})
             return check_response(conn)
         for objnum in xrange(len(segments3)):
@@ -459,10 +455,11 @@ class TestObject(unittest.TestCase):
 
         # Update the manifest
         def put(url, token, parsed, conn):
-            conn.request('PUT', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token,
-                'X-Object-Manifest': '%s/segments3/' % acontainer,
-                'Content-Length': '0'})
+            conn.request('PUT', '%s/%s/manifest' % (
+                parsed.path, self.container), '',
+                {'X-Auth-Token': token,
+                 'X-Object-Manifest': '%s/segments3/' % acontainer,
+                 'Content-Length': '0'})
             return check_response(conn)
         resp = retry(put)
         resp.read()
@@ -470,8 +467,8 @@ class TestObject(unittest.TestCase):
 
         # Get the manifest to ensure it's the third set of segments
         def get(url, token, parsed, conn):
-            conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                self.container), '', {'X-Auth-Token': token})
+            conn.request('GET', '%s/%s/manifest' % (
+                parsed.path, self.container), '', {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(get)
         self.assertEquals(resp.read(), ''.join(segments3))
@@ -484,8 +481,8 @@ class TestObject(unittest.TestCase):
             # manifest itself is not).
 
             def get(url, token, parsed, conn):
-                conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                    self.container), '', {'X-Auth-Token': token})
+                conn.request('GET', '%s/%s/manifest' % (
+                    parsed.path, self.container), '', {'X-Auth-Token': token})
                 return check_response(conn)
             resp = retry(get, use_account=3)
             resp.read()
@@ -494,8 +491,8 @@ class TestObject(unittest.TestCase):
             # Grant access to the third account
             def post(url, token, parsed, conn):
                 conn.request('POST', '%s/%s' % (parsed.path, acontainer),
-                    '', {'X-Auth-Token': token,
-                         'X-Container-Read': swift_test_perm[2]})
+                             '', {'X-Auth-Token': token,
+                                  'X-Container-Read': swift_test_perm[2]})
                 return check_response(conn)
             resp = retry(post)
             resp.read()
@@ -503,8 +500,8 @@ class TestObject(unittest.TestCase):
 
             # The third account should be able to get the manifest now
             def get(url, token, parsed, conn):
-                conn.request('GET', '%s/%s/manifest' % (parsed.path,
-                    self.container), '', {'X-Auth-Token': token})
+                conn.request('GET', '%s/%s/manifest' % (
+                    parsed.path, self.container), '', {'X-Auth-Token': token})
                 return check_response(conn)
             resp = retry(get, use_account=3)
             self.assertEquals(resp.read(), ''.join(segments3))
@@ -512,7 +509,8 @@ class TestObject(unittest.TestCase):
 
         # Delete the manifest
         def delete(url, token, parsed, conn, objnum):
-            conn.request('DELETE', '%s/%s/manifest' % (parsed.path,
+            conn.request('DELETE', '%s/%s/manifest' % (
+                parsed.path,
                 self.container), '', {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(delete, objnum)
@@ -521,8 +519,9 @@ class TestObject(unittest.TestCase):
 
         # Delete the third set of segments
         def delete(url, token, parsed, conn, objnum):
-            conn.request('DELETE', '%s/%s/segments3/%s' % (parsed.path,
-                acontainer, str(objnum)), '', {'X-Auth-Token': token})
+            conn.request('DELETE', '%s/%s/segments3/%s' % (
+                parsed.path, acontainer, str(objnum)), '',
+                {'X-Auth-Token': token})
             return check_response(conn)
         for objnum in xrange(len(segments3)):
             resp = retry(delete, objnum)
@@ -531,8 +530,9 @@ class TestObject(unittest.TestCase):
 
         # Delete the second set of segments
         def delete(url, token, parsed, conn, objnum):
-            conn.request('DELETE', '%s/%s/segments2/%s' % (parsed.path,
-                self.container, str(objnum)), '', {'X-Auth-Token': token})
+            conn.request('DELETE', '%s/%s/segments2/%s' % (
+                parsed.path, self.container, str(objnum)), '',
+                {'X-Auth-Token': token})
             return check_response(conn)
         for objnum in xrange(len(segments2)):
             resp = retry(delete, objnum)
@@ -541,8 +541,9 @@ class TestObject(unittest.TestCase):
 
         # Delete the first set of segments
         def delete(url, token, parsed, conn, objnum):
-            conn.request('DELETE', '%s/%s/segments1/%s' % (parsed.path,
-                self.container, str(objnum)), '', {'X-Auth-Token': token})
+            conn.request('DELETE', '%s/%s/segments1/%s' % (
+                parsed.path, self.container, str(objnum)), '',
+                {'X-Auth-Token': token})
             return check_response(conn)
         for objnum in xrange(len(segments1)):
             resp = retry(delete, objnum)
@@ -552,7 +553,7 @@ class TestObject(unittest.TestCase):
         # Delete the extra container
         def delete(url, token, parsed, conn):
             conn.request('DELETE', '%s/%s' % (parsed.path, acontainer), '',
-                {'X-Auth-Token': token})
+                         {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(delete)
         resp.read()
@@ -563,8 +564,8 @@ class TestObject(unittest.TestCase):
             raise SkipTest
 
         def put(url, token, parsed, conn):
-            conn.request('PUT', '%s/%s/hi' % (parsed.path,
-                self.container), 'there', {'X-Auth-Token': token})
+            conn.request('PUT', '%s/%s/hi' % (parsed.path, self.container),
+                         'there', {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(put)
         resp.read()
@@ -572,7 +573,7 @@ class TestObject(unittest.TestCase):
 
         def delete(url, token, parsed, conn):
             conn.request('DELETE', '%s/%s/hi' % (parsed.path, self.container),
-                '', {'X-Auth-Token': token})
+                         '', {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(delete)
         resp.read()
@@ -585,7 +586,8 @@ class TestObject(unittest.TestCase):
             raise SkipTest
 
         def put(url, token, parsed, conn):
-            conn.request('PUT', '%s/%s/abc%%00def' % (parsed.path,
+            conn.request('PUT', '%s/%s/abc%%00def' % (
+                parsed.path,
                 self.container), 'test', {'X-Auth-Token': token})
             return check_response(conn)
         resp = retry(put)

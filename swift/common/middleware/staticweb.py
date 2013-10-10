@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,8 +16,11 @@
 """
 This StaticWeb WSGI middleware will serve container data as a static web site
 with index file and error file resolution and optional file listings. This mode
-is normally only active for anonymous requests. If you want to use it with
-authenticated requests, set the ``X-Web-Mode: true`` header on the request.
+is normally only active for anonymous requests. When using keystone for
+authentication set ``delay_auth_decision = true`` in the authtoken middleware
+configuration in your ``/etc/swift/proxy-server.conf`` file.  If you want to
+use it with authenticated requests, set the ``X-Web-Mode: true`` header on the
+request.
 
 The ``staticweb`` filter should be added to the pipeline in your
 ``/etc/swift/proxy-server.conf`` file just after any auth middleware. Also, the
@@ -35,8 +38,6 @@ added. For example::
 
     [filter:staticweb]
     use = egg:swift#staticweb
-    # Seconds to cache container x-container-meta-web-* header values.
-    # cache_timeout = 300
 
 Any publicly readable containers (for example, ``X-Container-Read: .r:*``, see
 `acls`_ for more information on this) will be checked for
@@ -66,6 +67,12 @@ the X-Container-Meta-Web-Listings-CSS header. For instance, setting
 the .../listing.css style sheet. If you "view source" in your browser on a
 listing page, you will see the well defined document structure that can be
 styled.
+
+The content-type of directory marker objects can be modified by setting
+the ``X-Container-Meta-Web-Directory-Type`` header.  If the header is not set,
+application/directory is used by default.  Directory marker objects are
+0-byte objects that represent directories to create a simulated hierarchical
+structure.
 
 Example usage of this middleware via ``swift``:
 
@@ -99,29 +106,25 @@ Example usage of this middleware via ``swift``:
         swift post -m 'web-error:error.html' container
 
     Now 401's should load 401error.html, 404's should load 404error.html, etc.
+
+    Set Content-Type of directory marker object::
+
+        swift post -m 'web-directory-type:text/directory' container
+
+    Now 0-byte objects with a content-type of text/directory will be treated
+    as directories rather than objects.
 """
 
 
 import cgi
 import time
-from urllib import unquote, quote as urllib_quote
 
-
-from swift.common.utils import cache_from_env, human_readable, split_path, \
-    config_true_value, json
-from swift.common.wsgi import make_pre_authed_env, make_pre_authed_request, \
-    WSGIContext
+from swift.common.utils import human_readable, split_path, config_true_value, \
+    json, quote, get_valid_utf8_str
+from swift.common.wsgi import make_pre_authed_env, WSGIContext
 from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND
 from swift.common.swob import Response, HTTPMovedPermanently, HTTPNotFound
-
-
-def quote(value, safe='/'):
-    """
-    Patched version of urllib.quote that encodes utf-8 strings before quoting
-    """
-    if isinstance(value, unicode):
-        value = value.encode('utf-8')
-    return urllib_quote(value, safe)
+from swift.proxy.controllers.base import get_container_info
 
 
 class _StaticWebContext(WSGIContext):
@@ -142,10 +145,10 @@ class _StaticWebContext(WSGIContext):
         self.container = container
         self.obj = obj
         self.app = staticweb.app
-        self.cache_timeout = staticweb.cache_timeout
         self.agent = '%(orig)s StaticWeb'
         # Results from the last call to self._get_container_info.
-        self._index = self._error = self._listings = self._listings_css = None
+        self._index = self._error = self._listings = self._listings_css = \
+            self._dir_type = None
 
     def _error_response(self, response, env, start_response):
         """
@@ -179,41 +182,23 @@ class _StaticWebContext(WSGIContext):
     def _get_container_info(self, env):
         """
         Retrieves x-container-meta-web-index, x-container-meta-web-error,
-        x-container-meta-web-listings, and x-container-meta-web-listings-css
-        from memcache or from the cluster and stores the result in memcache and
-        in self._index, self._error, self._listings, and self._listings_css.
+        x-container-meta-web-listings, x-container-meta-web-listings-css,
+        and x-container-meta-web-directory-type from memcache or from the
+        cluster and stores the result in memcache and in self._index,
+        self._error, self._listings, self._listings_css and self._dir_type.
 
         :param env: The WSGI environment dict.
         """
-        self._index = self._error = self._listings = self._listings_css = None
-        memcache_client = cache_from_env(env)
-        if memcache_client:
-            memcache_key = '/staticweb/%s/%s/%s' % (self.version, self.account,
-                                                    self.container)
-            cached_data = memcache_client.get(memcache_key)
-            if cached_data:
-                (self._index, self._error, self._listings,
-                 self._listings_css) = cached_data
-                return
-        resp = make_pre_authed_request(
-            env, 'HEAD', '/%s/%s/%s' % (
-                self.version, self.account, self.container),
-            agent=self.agent, swift_source='SW').get_response(self.app)
-        if is_success(resp.status_int):
-            self._index = \
-                resp.headers.get('x-container-meta-web-index', '').strip()
-            self._error = \
-                resp.headers.get('x-container-meta-web-error', '').strip()
-            self._listings = \
-                resp.headers.get('x-container-meta-web-listings', '').strip()
-            self._listings_css = \
-                resp.headers.get('x-container-meta-web-listings-css',
-                                 '').strip()
-            if memcache_client:
-                memcache_client.set(memcache_key,
-                                    (self._index, self._error, self._listings,
-                                     self._listings_css),
-                                    time=self.cache_timeout)
+        self._index = self._error = self._listings = self._listings_css = \
+            self._dir_type = None
+        container_info = get_container_info(env, self.app, swift_source='SW')
+        if is_success(container_info['status']):
+            meta = container_info.get('meta', {})
+            self._index = meta.get('web-index', '').strip()
+            self._error = meta.get('web-error', '').strip()
+            self._listings = meta.get('web-listings', '').strip()
+            self._listings_css = meta.get('web-listings-css', '').strip()
+            self._dir_type = meta.get('web-directory-type', '').strip()
 
     def _listing(self, env, start_response, prefix=None):
         """
@@ -280,10 +265,7 @@ class _StaticWebContext(WSGIContext):
                     '   </tr>\n'
         for item in listing:
             if 'subdir' in item:
-                if isinstance(item['subdir'], unicode):
-                    subdir = item['subdir'].encode('utf-8')
-                else:
-                    subdir = item['subdir']
+                subdir = get_valid_utf8_str(item['subdir'])
                 if prefix:
                     subdir = subdir[len(prefix):]
                 body += '   <tr class="item subdir">\n' \
@@ -294,23 +276,22 @@ class _StaticWebContext(WSGIContext):
                         (quote(subdir), cgi.escape(subdir))
         for item in listing:
             if 'name' in item:
-                if isinstance(item['name'], unicode):
-                    name = item['name'].encode('utf-8')
-                else:
-                    name = item['name']
+                name = get_valid_utf8_str(item['name'])
                 if prefix:
                     name = name[len(prefix):]
+                content_type = get_valid_utf8_str(item['content_type'])
+                bytes = get_valid_utf8_str(human_readable(item['bytes']))
+                last_modified = (cgi.escape(item['last_modified']).
+                                 split('.')[0].replace('T', ' '))
                 body += '   <tr class="item %s">\n' \
                         '    <td class="colname"><a href="%s">%s</a></td>\n' \
                         '    <td class="colsize">%s</td>\n' \
                         '    <td class="coldate">%s</td>\n' \
                         '   </tr>\n' % \
                         (' '.join('type-' + cgi.escape(t.lower(), quote=True)
-                                  for t in item['content_type'].split('/')),
+                                  for t in content_type.split('/')),
                          quote(name), cgi.escape(name),
-                         human_readable(item['bytes']),
-                         cgi.escape(item['last_modified']).split('.')[0].
-                            replace('T', ' '))
+                         bytes, get_valid_utf8_str(last_modified))
         body += '  </table>\n' \
                 ' </body>\n' \
                 '</html>\n'
@@ -357,7 +338,7 @@ class _StaticWebContext(WSGIContext):
         status_int = self._get_status_int()
         if status_int == HTTP_NOT_FOUND:
             return self._listing(env, start_response)
-        elif not is_success(self._get_status_int()) or \
+        elif not is_success(self._get_status_int()) and \
                 not is_redirection(self._get_status_int()):
             return self._error_response(resp, env, start_response)
         start_response(self._response_status, self._response_headers,
@@ -378,15 +359,29 @@ class _StaticWebContext(WSGIContext):
         tmp_env['swift.source'] = 'SW'
         resp = self._app_call(tmp_env)
         status_int = self._get_status_int()
+        self._get_container_info(env)
         if is_success(status_int) or is_redirection(status_int):
+            # Treat directory marker objects as not found
+            if not self._dir_type:
+                self._dir_type = 'application/directory'
+            content_length = self._response_header_value('content-length')
+            content_length = int(content_length) if content_length else 0
+            if self._response_header_value('content-type') == self._dir_type \
+                    and content_length <= 1:
+                status_int = HTTP_NOT_FOUND
+            else:
+                start_response(self._response_status, self._response_headers,
+                               self._response_exc_info)
+                return resp
+        if status_int != HTTP_NOT_FOUND:
+            # Retaining the previous code's behavior of not using custom error
+            # pages for non-404 errors.
+            self._error = None
+            return self._error_response(resp, env, start_response)
+        if not self._listings and not self._index:
             start_response(self._response_status, self._response_headers,
                            self._response_exc_info)
             return resp
-        if status_int != HTTP_NOT_FOUND:
-            return self._error_response(resp, env, start_response)
-        self._get_container_info(env)
-        if not self._listings and not self._index:
-            return self.app(env, start_response)
         status_int = HTTP_NOT_FOUND
         if self._index:
             tmp_env = dict(env)
@@ -442,8 +437,6 @@ class StaticWeb(object):
         self.app = app
         #: The filter configuration dict.
         self.conf = conf
-        #: The seconds to cache the x-container-meta-web-* headers.,
-        self.cache_timeout = int(conf.get('cache_timeout', 300))
 
     def __call__(self, env, start_response):
         """
@@ -457,13 +450,6 @@ class StaticWeb(object):
             (version, account, container, obj) = \
                 split_path(env['PATH_INFO'], 2, 4, True)
         except ValueError:
-            return self.app(env, start_response)
-        if env['REQUEST_METHOD'] in ('PUT', 'POST') and container and not obj:
-            memcache_client = cache_from_env(env)
-            if memcache_client:
-                memcache_key = \
-                    '/staticweb/%s/%s/%s' % (version, account, container)
-                memcache_client.delete(memcache_key)
             return self.app(env, start_response)
         if env['REQUEST_METHOD'] not in ('HEAD', 'GET'):
             return self.app(env, start_response)
@@ -479,7 +465,7 @@ class StaticWeb(object):
 
 
 def filter_factory(global_conf, **local_conf):
-    """ Returns a Static Web WSGI filter for use with paste.deploy. """
+    """Returns a Static Web WSGI filter for use with paste.deploy."""
     conf = global_conf.copy()
     conf.update(local_conf)
 

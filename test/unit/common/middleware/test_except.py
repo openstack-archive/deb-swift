@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,11 +15,13 @@
 
 import unittest
 
-from swift.common.swob import Request, Response
+from swift.common.swob import Request
 from swift.common.middleware import catch_errors
 from swift.common.utils import get_logger
 
+
 class FakeApp(object):
+
     def __init__(self, error=False, body_iter=None):
         self.error = error
         self.body_iter = body_iter
@@ -34,8 +36,10 @@ class FakeApp(object):
         else:
             return self.body_iter
 
+
 def start_response(*args):
     pass
+
 
 class TestCatchErrors(unittest.TestCase):
 
@@ -59,17 +63,17 @@ class TestCatchErrors(unittest.TestCase):
         self.assertEquals(self.logger.txn_id, None)
 
         def start_response(status, headers, exc_info=None):
-            self.assert_('x-trans-id' in (x[0] for x in headers))
+            self.assert_('X-Trans-Id' in (x[0] for x in headers))
         app = catch_errors.CatchErrorMiddleware(FakeApp(), {})
         req = Request.blank('/v1/a/c/o')
         app(req.environ, start_response)
-        self.assertEquals(len(self.logger.txn_id), 34) # 32 hex + 'tx'
+        self.assertEquals(len(self.logger.txn_id), 34)  # 32 hex + 'tx'
 
     def test_trans_id_header_fail(self):
         self.assertEquals(self.logger.txn_id, None)
 
         def start_response(status, headers, exc_info=None):
-            self.assert_('x-trans-id' in (x[0] for x in headers))
+            self.assert_('X-Trans-Id' in (x[0] for x in headers))
         app = catch_errors.CatchErrorMiddleware(FakeApp(True), {})
         req = Request.blank('/v1/a/c/o')
         app(req.environ, start_response)
@@ -81,6 +85,18 @@ class TestCatchErrors(unittest.TestCase):
         req = Request.blank('/', environ={'REQUEST_METHOD': 'GET'})
         resp = app(req.environ, start_response)
         self.assertEquals(list(resp), ['An error occurred'])
+
+    def test_trans_id_header_suffix(self):
+        self.assertEquals(self.logger.txn_id, None)
+
+        def start_response(status, headers, exc_info=None):
+            self.assert_('X-Trans-Id' in (x[0] for x in headers))
+        app = catch_errors.CatchErrorMiddleware(
+            FakeApp(), {'trans_id_suffix': '-stuff'})
+        req = Request.blank('/v1/a/c/o')
+        app(req.environ, start_response)
+        self.assertTrue(self.logger.txn_id.endswith('-stuff'))
+
 
 if __name__ == '__main__':
     unittest.main()

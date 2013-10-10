@@ -1,5 +1,5 @@
 #!/usr/bin/python -u
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ class TestObjectHandoff(TestCase):
     def setUp(self):
         (self.pids, self.port2server, self.account_ring, self.container_ring,
          self.object_ring, self.url, self.token,
-         self.account) = reset_environment()
+         self.account, self.configs) = reset_environment()
 
     def tearDown(self):
         kill_servers(self.port2server, self.pids)
@@ -110,20 +110,29 @@ class TestObjectHandoff(TestCase):
         try:
             direct_client.direct_get_object(onode, opart, self.account,
                                             container, obj)
-        except direct_client.ClientException, err:
+        except direct_client.ClientException as err:
             exc = err
         self.assertEquals(exc.http_status, 404)
         # Run the extra server last so it'll remove its extra partition
         processes = []
         for node in onodes:
+            try:
+                port_num = node['replication_port']
+            except KeyError:
+                port_num = node['port']
             processes.append(Popen(['swift-object-replicator',
-                                    '/etc/swift/object-server/%d.conf' %
-                                    ((node['port'] - 6000) / 10), 'once']))
+                                    self.configs['object-replicator'] %
+                                    ((port_num - 6000) / 10),
+                                    'once']))
         for process in processes:
             process.wait()
+        try:
+            another_port_num = another_onode['replication_port']
+        except KeyError:
+            another_port_num = another_onode['port']
         call(['swift-object-replicator',
-              '/etc/swift/object-server/%d.conf' %
-              ((another_onode['port'] - 6000) / 10), 'once'])
+              self.configs['object-replicator'] %
+              ((another_port_num - 6000) / 10), 'once'])
         odata = direct_client.direct_get_object(onode, opart, self.account,
                                                 container, obj)[-1]
         if odata != 'VERIFY':
@@ -133,7 +142,7 @@ class TestObjectHandoff(TestCase):
         try:
             direct_client.direct_get_object(another_onode, opart, self.account,
                                             container, obj)
-        except direct_client.ClientException, err:
+        except direct_client.ClientException as err:
             exc = err
         self.assertEquals(exc.http_status, 404)
 
@@ -142,7 +151,7 @@ class TestObjectHandoff(TestCase):
         exc = None
         try:
             client.head_object(self.url, self.token, container, obj)
-        except direct_client.ClientException, err:
+        except direct_client.ClientException as err:
             exc = err
         self.assertEquals(exc.http_status, 404)
         objs = [o['name'] for o in
@@ -163,19 +172,24 @@ class TestObjectHandoff(TestCase):
         # Run the extra server last so it'll remove its extra partition
         processes = []
         for node in onodes:
+            try:
+                port_num = node['replication_port']
+            except KeyError:
+                port_num = node['port']
             processes.append(Popen(['swift-object-replicator',
-                                    '/etc/swift/object-server/%d.conf' %
-                                    ((node['port'] - 6000) / 10), 'once']))
+                                    self.configs['object-replicator'] %
+                                    ((port_num - 6000) / 10),
+                                    'once']))
         for process in processes:
             process.wait()
         call(['swift-object-replicator',
-              '/etc/swift/object-server/%d.conf' %
-              ((another_onode['port'] - 6000) / 10), 'once'])
+              self.configs['object-replicator'] %
+              ((another_port_num - 6000) / 10), 'once'])
         exc = None
         try:
             direct_client.direct_get_object(another_onode, opart, self.account,
                                             container, obj)
-        except direct_client.ClientException, err:
+        except direct_client.ClientException as err:
             exc = err
         self.assertEquals(exc.http_status, 404)
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,13 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# TODO: Test kill_children signal handlers
+# TODO(clayg): Test kill_children signal handlers
 
+import os
 import unittest
 from getpass import getuser
 import logging
 from StringIO import StringIO
 from test.unit import tmpfile
+from mock import patch
 
 from swift.common import daemon, utils
 
@@ -81,12 +83,12 @@ class TestRunDaemon(unittest.TestCase):
         self.assertEquals(d.once_called, True)
 
     def test_run_daemon(self):
-        sample_conf = """[my-daemon]
-user = %s
-""" % getuser()
+        sample_conf = "[my-daemon]\nuser = %s\n" % getuser()
         with tmpfile(sample_conf) as conf_file:
-            daemon.run_daemon(MyDaemon, conf_file)
-            self.assertEquals(MyDaemon.forever_called, True)
+            with patch.dict('os.environ', {'TZ': ''}):
+                daemon.run_daemon(MyDaemon, conf_file)
+                self.assertEquals(MyDaemon.forever_called, True)
+                self.assert_(os.environ['TZ'] is not '')
             daemon.run_daemon(MyDaemon, conf_file, once=True)
             self.assertEquals(MyDaemon.once_called, True)
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,11 +15,12 @@
 
 import os
 import time
+from swift import gettext_ as _
 from random import random
 
 import swift.common.db
 from swift.account import server as account_server
-from swift.common.db import AccountBroker
+from swift.account.backend import AccountBroker
 from swift.common.utils import get_logger, audit_location_generator, \
     config_true_value, dump_recon_cache, ratelimit_sleep
 from swift.common.daemon import Daemon
@@ -49,7 +50,7 @@ class AccountAuditor(Daemon):
 
     def _one_audit_pass(self, reported):
         all_locs = audit_location_generator(self.devices,
-                                            account_server.DATADIR,
+                                            account_server.DATADIR, '.db',
                                             mount_check=self.mount_check,
                                             logger=self.logger)
         for path, device, partition in all_locs:
@@ -59,9 +60,8 @@ class AccountAuditor(Daemon):
                                    '%(passed)s passed audit,'
                                    '%(failed)s failed audit'),
                                  {'time': time.ctime(reported),
-                                 'passed': self.account_passes,
-                                 'failed': self.account_failures})
-                self.account_audit(path)
+                                  'passed': self.account_passes,
+                                  'failed': self.account_failures})
                 dump_recon_cache({'account_audits_since': reported,
                                   'account_audits_passed': self.account_passes,
                                   'account_audits_failed':
@@ -113,8 +113,6 @@ class AccountAuditor(Daemon):
         """
         start_time = time.time()
         try:
-            if not path.endswith('.db'):
-                return
             broker = AccountBroker(path)
             if not broker.is_deleted():
                 broker.get_info()

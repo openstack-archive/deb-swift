@@ -1,5 +1,5 @@
 #!/usr/bin/python -u
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ from swiftclient import client
 
 from swift.common import direct_client
 from swift.common.utils import hash_path, readconf
-from swift.obj.server import write_metadata, read_metadata
+from swift.obj.diskfile import write_metadata, read_metadata
 from test.probe.common import kill_servers, reset_environment
 
 
@@ -38,7 +38,7 @@ class TestObjectFailures(TestCase):
     def setUp(self):
         (self.pids, self.port2server, self.account_ring, self.container_ring,
          self.object_ring, self.url, self.token,
-         self.account) = reset_environment()
+         self.account, self.configs) = reset_environment()
 
     def tearDown(self):
         kill_servers(self.port2server, self.pids)
@@ -54,8 +54,7 @@ class TestObjectFailures(TestCase):
         node_id = (onode['port'] - 6000) / 10
         device = onode['device']
         hash_str = hash_path(self.account, container, obj)
-        obj_server_conf = readconf('/etc/swift/object-server/%s.conf' %
-                                   node_id)
+        obj_server_conf = readconf(self.configs['object'] % node_id)
         devices = obj_server_conf['app:object-server']['devices']
         obj_dir = '%s/%s/objects/%s/%s/%s/' % (devices,
                                                device, opart,
@@ -81,7 +80,7 @@ class TestObjectFailures(TestCase):
             direct_client.direct_get_object(onode, opart, self.account,
                                             container, obj)
             raise Exception("Did not quarantine object")
-        except client.ClientException, err:
+        except client.ClientException as err:
             self.assertEquals(err.http_status, 404)
 
     def run_quarantine_range_etag(self):
@@ -105,7 +104,7 @@ class TestObjectFailures(TestCase):
             direct_client.direct_get_object(onode, opart, self.account,
                                             container, obj)
             raise Exception("Did not quarantine object")
-        except client.ClientException, err:
+        except client.ClientException as err:
             self.assertEquals(err.http_status, 404)
 
     def run_quarantine_zero_byte_get(self):
@@ -123,7 +122,7 @@ class TestObjectFailures(TestCase):
                                             container, obj, conn_timeout=1,
                                             response_timeout=1)
             raise Exception("Did not quarantine object")
-        except client.ClientException, err:
+        except client.ClientException as err:
             self.assertEquals(err.http_status, 404)
 
     def run_quarantine_zero_byte_head(self):
@@ -141,7 +140,7 @@ class TestObjectFailures(TestCase):
                                              container, obj, conn_timeout=1,
                                              response_timeout=1)
             raise Exception("Did not quarantine object")
-        except client.ClientException, err:
+        except client.ClientException as err:
             self.assertEquals(err.http_status, 404)
 
     def run_quarantine_zero_byte_post(self):
@@ -162,7 +161,7 @@ class TestObjectFailures(TestCase):
                 conn_timeout=1,
                 response_timeout=1)
             raise Exception("Did not quarantine object")
-        except client.ClientException, err:
+        except client.ClientException as err:
             self.assertEquals(err.http_status, 404)
 
     def test_runner(self):

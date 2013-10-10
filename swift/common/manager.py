@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import signal
 import time
 import subprocess
 import re
+from swift import gettext_ as _
 
 from swift.common.utils import search_tree, remove_file, write_file
 
@@ -62,7 +63,8 @@ def setup_env():
         print _("WARNING: Unable to increase file descriptor limit.  "
                 "Running as non-root?")
 
-    os.environ['PYTHON_EGG_CACHE'] = '/tmp'
+    # Set PYTHON_EGG_CACHE if it isn't already set
+    os.environ.setdefault('PYTHON_EGG_CACHE', '/tmp')
 
 
 def command(func):
@@ -98,7 +100,7 @@ def watch_server_pids(server_pids, interval=1, **kwargs):
                 try:
                     # let pid stop if it wants to
                     os.waitpid(pid, os.WNOHANG)
-                except OSError, e:
+                except OSError as e:
                     if e.errno not in (errno.ECHILD, errno.ESRCH):
                         raise  # else no such child/process
             # check running pids for server
@@ -350,8 +352,8 @@ class Server():
         """
         return conf_file.replace(
             os.path.normpath(SWIFT_DIR), self.run_dir, 1).replace(
-                '%s-server' % self.type, self.server, 1).rsplit(
-                    '.conf', 1)[0] + '.pid'
+                '%s-server' % self.type, self.server, 1).replace(
+                    '.conf', '.pid', 1)
 
     def get_conf_file_name(self, pid_file):
         """Translate pid_file to a corresponding conf_file
@@ -363,13 +365,13 @@ class Server():
         """
         if self.server in STANDALONE_SERVERS:
             return pid_file.replace(
-                os.path.normpath(self.run_dir), SWIFT_DIR, 1)\
-                .rsplit('.pid', 1)[0] + '.conf'
+                os.path.normpath(self.run_dir), SWIFT_DIR, 1).replace(
+                    '.pid', '.conf', 1)
         else:
             return pid_file.replace(
                 os.path.normpath(self.run_dir), SWIFT_DIR, 1).replace(
-                    self.server, '%s-server' % self.type, 1).rsplit(
-                        '.pid', 1)[0] + '.conf'
+                    self.server, '%s-server' % self.type, 1).replace(
+                        '.pid', '.conf', 1)
 
     def conf_files(self, **kwargs):
         """Get conf files for this server
@@ -380,10 +382,10 @@ class Server():
         """
         if self.server in STANDALONE_SERVERS:
             found_conf_files = search_tree(SWIFT_DIR, self.server + '*',
-                                           '.conf')
+                                           '.conf', dir_ext='.conf.d')
         else:
             found_conf_files = search_tree(SWIFT_DIR, '%s-server*' % self.type,
-                                           '.conf')
+                                           '.conf', dir_ext='.conf.d')
         number = kwargs.get('number')
         if number:
             try:
@@ -412,7 +414,7 @@ class Server():
 
         :returns: list of pid files
         """
-        pid_files = search_tree(self.run_dir, '%s*' % self.server, '.pid')
+        pid_files = search_tree(self.run_dir, '%s*' % self.server)
         if kwargs.get('number', 0):
             conf_files = self.conf_files(**kwargs)
             # filter pid_files to match the index of numbered conf_file
@@ -441,7 +443,7 @@ class Server():
                     print _('Signal %s  pid: %s  signal: %s') % (self.server,
                                                                  pid, sig)
                 os.kill(pid, sig)
-            except OSError, e:
+            except OSError as e:
                 if e.errno == errno.ESRCH:
                     # pid does not exist
                     if kwargs.get('verbose'):
@@ -609,11 +611,13 @@ class Server():
             print '%s...(%s)' % (msg, conf_file)
             try:
                 pid = self.spawn(conf_file, **kwargs)
-            except OSError, e:
+            except OSError as e:
                 if e.errno == errno.ENOENT:
-                    # TODO: should I check if self.cmd exists earlier?
+                    #TODO(clayg): should I check if self.cmd exists earlier?
                     print _("%s does not exist") % self.cmd
                     break
+                else:
+                    raise
             pids[pid] = conf_file
 
         return pids

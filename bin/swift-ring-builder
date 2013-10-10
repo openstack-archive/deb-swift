@@ -1,5 +1,5 @@
 #! /usr/bin/env python
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import cPickle as pickle
 from array import array
 from errno import EEXIST
 from itertools import islice, izip
@@ -27,7 +26,10 @@ from time import time
 
 from swift.common import exceptions
 from swift.common.ring import RingBuilder
+from swift.common.ring.builder import MAX_BALANCE
 from swift.common.utils import lock_parent_directory
+from swift.common.ring.utils import parse_search_value, parse_args, \
+    build_dev_from_opts
 
 MAJOR_VERSION = 1
 MINOR_VERSION = 3
@@ -40,174 +42,43 @@ def format_device(dev):
     """
     Format a device for display.
     """
-    if ':' in dev['ip']:
-        return ('d%(id)sr%(region)sz%(zone)s-'
-                '[%(ip)s]:%(port)s/%(device)s_"%(meta)s"') % dev
-    else:
-        return ('d%(id)sr%(region)sz%(zone)s-'
-                '%(ip)s:%(port)s/%(device)s_"%(meta)s"') % dev
+    copy_dev = dev.copy()
+    for key in ('ip', 'replication_ip'):
+        if ':' in copy_dev[key]:
+            copy_dev[key] = '[' + copy_dev[key] + ']'
+    return ('d%(id)sr%(region)sz%(zone)s-%(ip)s:%(port)sR'
+            '%(replication_ip)s:%(replication_port)s/%(device)s_'
+            '"%(meta)s"' % copy_dev)
 
 
-class Commands:
+def _parse_add_values(argvish):
+    """
+    Parse devices to add as specified on the command line.
 
-    def unknown():
-        print 'Unknown command: %s' % argv[2]
+    Will exit on error and spew warnings.
+
+    :returns: array of device dicts
+    """
+
+    opts, args = parse_args(argvish)
+
+    # We'll either parse the all-in-one-string format or the --options format,
+    # but not both. If both are specified, raise an error.
+    opts_used = opts.region or opts.zone or opts.ip or opts.port or \
+        opts.device or opts.weight or opts.meta
+
+    if len(args) > 0 and opts_used:
+        print Commands.add.__doc__.strip()
         exit(EXIT_ERROR)
-
-    def create():
-        """
-swift-ring-builder <builder_file> create <part_power> <replicas>
-                                         <min_part_hours>
-    Creates <builder_file> with 2^<part_power> partitions and <replicas>.
-    <min_part_hours> is number of hours to restrict moving a partition more
-    than once.
-        """
-        if len(argv) < 6:
-            print Commands.create.__doc__.strip()
-            exit(EXIT_ERROR)
-        builder = RingBuilder(int(argv[3]), float(argv[4]), int(argv[5]))
-        backup_dir = pathjoin(dirname(argv[1]), 'backups')
-        try:
-            mkdir(backup_dir)
-        except OSError, err:
-            if err.errno != EEXIST:
-                raise
-        pickle.dump(builder.to_dict(), open(pathjoin(backup_dir,
-                    '%d.' % time() + basename(argv[1])), 'wb'), protocol=2)
-        pickle.dump(builder.to_dict(), open(argv[1], 'wb'), protocol=2)
-        exit(EXIT_SUCCESS)
-
-    def default():
-        """
-swift-ring-builder <builder_file>
-    Shows information about the ring and the devices within.
-        """
-        print '%s, build version %d' % (argv[1], builder.version)
-        regions = 0
-        zones = 0
-        balance = 0
-        dev_count = 0
-        if builder.devs:
-            regions = len(set(d['region'] for d in builder.devs
-                              if d is not None))
-            zones = len(set((d['region'], d['zone']) for d in builder.devs
-                            if d is not None))
-            dev_count = len([d for d in builder.devs
-                             if d is not None])
-            balance = builder.get_balance()
-        print '%d partitions, %.6f replicas, %d regions, %d zones, ' \
-              '%d devices, %.02f balance' % (builder.parts, builder.replicas,
-                                             regions, zones, dev_count,
-                                             balance)
-        print 'The minimum number of hours before a partition can be ' \
-              'reassigned is %s' % builder.min_part_hours
-        if builder.devs:
-            print 'Devices:    id  region  zone      ip address  port' \
-                  '      name weight partitions balance meta'
-            weighted_parts = builder.parts * builder.replicas / \
-                sum(d['weight'] for d in builder.devs if d is not None)
-            for dev in builder.devs:
-                if dev is None:
-                    continue
-                if not dev['weight']:
-                    if dev['parts']:
-                        balance = 999.99
-                    else:
-                        balance = 0
-                else:
-                    balance = 100.0 * dev['parts'] / \
-                        (dev['weight'] * weighted_parts) - 100.0
-                print('         %5d %5d %5d %15s %5d %9s %6.02f %10s'
-                      '%7.02f %s' %
-                      (dev['id'], dev['region'], dev['zone'], dev['ip'],
-                       dev['port'], dev['device'], dev['weight'], dev['parts'],
-                       balance, dev['meta']))
-        exit(EXIT_SUCCESS)
-
-    def search():
-        """
-swift-ring-builder <builder_file> search <search-value>
-    Shows information about matching devices.
-        """
-        if len(argv) < 4:
-            print Commands.search.__doc__.strip()
-            print
-            print builder.search_devs.__doc__.strip()
-            exit(EXIT_ERROR)
-        devs = builder.search_devs(argv[3])
-        if not devs:
-            print 'No matching devices found'
-            exit(EXIT_ERROR)
-        print 'Devices:    id  region  zone      ip address  port      name ' \
-              'weight partitions balance meta'
-        weighted_parts = builder.parts * builder.replicas / \
-            sum(d['weight'] for d in builder.devs if d is not None)
-        for dev in devs:
-            if not dev['weight']:
-                if dev['parts']:
-                    balance = 999.99
-                else:
-                    balance = 0
-            else:
-                balance = 100.0 * dev['parts'] / \
-                    (dev['weight'] * weighted_parts) - 100.0
-            print('         %5d %5d %5d %15s %5d %9s %6.02f %10s %7.02f %s' %
-                  (dev['id'], dev['region'], dev['zone'], dev['ip'],
-                   dev['port'], dev['device'], dev['weight'], dev['parts'],
-                   balance, dev['meta']))
-        exit(EXIT_SUCCESS)
-
-    def list_parts():
-        """
-swift-ring-builder <builder_file> list_parts <search-value> [<search-value>] ..
-    Returns a 2 column list of all the partitions that are assigned to any of
-    the devices matching the search values given. The first column is the
-    assigned partition number and the second column is the number of device
-    matches for that partition. The list is ordered from most number of matches
-    to least. If there are a lot of devices to match against, this command
-    could take a while to run.
-        """
-        if len(argv) < 4:
-            print Commands.list_parts.__doc__.strip()
-            print
-            print builder.search_devs.__doc__.strip()
-            exit(EXIT_ERROR)
-        devs = []
-        for arg in argv[3:]:
-            devs.extend(builder.search_devs(arg) or [])
-        if not devs:
-            print 'No matching devices found'
-            exit(EXIT_ERROR)
-        devs = [d['id'] for d in devs]
-        max_replicas = int(ceil(builder.replicas))
-        matches = [array('i') for x in xrange(max_replicas)]
-        for part in xrange(builder.parts):
-            count = len([d for d in builder.get_part_devices(part)
-                         if d['id'] in devs])
-            if count:
-                matches[max_replicas - count].append(part)
-        print 'Partition   Matches'
-        for index, parts in enumerate(matches):
-            for part in parts:
-                print '%9d   %7d' % (part, max_replicas - index)
-        exit(EXIT_SUCCESS)
-
-    def add():
-        """
-swift-ring-builder <builder_file> add
-    [r<region>]z<zone>-<ip>:<port>/<device_name>_<meta> <weight>
-    [[r<region>]z<zone>-<ip>:<port>/<device_name>_<meta> <weight>] ...
-
-    Adds devices to the ring with the given information. No partitions will be
-    assigned to the new device until after running 'rebalance'. This is so you
-    can make multiple device changes and rebalance them all just once.
-        """
-        if len(argv) < 5 or len(argv) % 2 != 1:
+    elif len(args) > 0:
+        if len(args) % 2 != 0:
             print Commands.add.__doc__.strip()
             exit(EXIT_ERROR)
 
-        devs_and_weights = izip(islice(argv, 3, len(argv), 2),
-                                islice(argv, 4, len(argv), 2))
+        parsed_devs = []
+        devs_and_weights = izip(islice(args, 0, len(args), 2),
+                                islice(args, 1, len(args), 2))
+
         for devstr, weightstr in devs_and_weights:
             region = 1
             rest = devstr
@@ -258,6 +129,33 @@ swift-ring-builder <builder_file> add
             port = int(rest[1:i])
             rest = rest[i:]
 
+            replication_ip = ip
+            replication_port = port
+            if rest.startswith('R'):
+                i = 1
+                if rest[i] == '[':
+                    i += 1
+                    while i < len(rest) and rest[i] != ']':
+                        i += 1
+                    i += 1
+                    replication_ip = rest[1:i].lstrip('[').rstrip(']')
+                    rest = rest[i:]
+                else:
+                    while i < len(rest) and rest[i] in '0123456789.':
+                        i += 1
+                    replication_ip = rest[1:i]
+                    rest = rest[i:]
+
+                if not rest.startswith(':'):
+                    print 'Invalid add value: %s' % devstr
+                    print "The on-disk ring builder is unchanged.\n"
+                    exit(EXIT_ERROR)
+                i = 1
+                while i < len(rest) and rest[i].isdigit():
+                    i += 1
+                replication_port = int(rest[1:i])
+                rest = rest[i:]
+
             if not rest.startswith('/'):
                 print 'Invalid add value: %s' % devstr
                 print "The on-disk ring builder is unchanged.\n"
@@ -284,32 +182,211 @@ swift-ring-builder <builder_file> add
                 print "The on-disk ring builder is unchanged.\n"
                 exit(EXIT_ERROR)
 
+            parsed_devs.append({'region': region, 'zone': zone, 'ip': ip,
+                                'port': port, 'device': device_name,
+                                'replication_ip': replication_ip,
+                                'replication_port': replication_port,
+                                'weight': weight, 'meta': meta})
+        return parsed_devs
+    else:
+        try:
+            dev = build_dev_from_opts(opts)
+        except ValueError as e:
+            print e
+            print "The on-disk ring builder is unchanged.\n"
+            exit(EXIT_ERROR)
+        return [dev]
+
+
+class Commands:
+
+    def unknown():
+        print 'Unknown command: %s' % argv[2]
+        exit(EXIT_ERROR)
+
+    def create():
+        """
+swift-ring-builder <builder_file> create <part_power> <replicas>
+                                         <min_part_hours>
+    Creates <builder_file> with 2^<part_power> partitions and <replicas>.
+    <min_part_hours> is number of hours to restrict moving a partition more
+    than once.
+        """
+        if len(argv) < 6:
+            print Commands.create.__doc__.strip()
+            exit(EXIT_ERROR)
+        builder = RingBuilder(int(argv[3]), float(argv[4]), int(argv[5]))
+        backup_dir = pathjoin(dirname(argv[1]), 'backups')
+        try:
+            mkdir(backup_dir)
+        except OSError as err:
+            if err.errno != EEXIST:
+                raise
+        builder.save(pathjoin(backup_dir, '%d.' % time() + basename(argv[1])))
+        builder.save(argv[1])
+        exit(EXIT_SUCCESS)
+
+    def default():
+        """
+swift-ring-builder <builder_file>
+    Shows information about the ring and the devices within.
+        """
+        print '%s, build version %d' % (argv[1], builder.version)
+        regions = 0
+        zones = 0
+        balance = 0
+        dev_count = 0
+        if builder.devs:
+            regions = len(set(d['region'] for d in builder.devs
+                              if d is not None))
+            zones = len(set((d['region'], d['zone']) for d in builder.devs
+                            if d is not None))
+            dev_count = len([dev for dev in builder.devs
+                             if dev is not None])
+            balance = builder.get_balance()
+        print '%d partitions, %.6f replicas, %d regions, %d zones, ' \
+              '%d devices, %.02f balance' % (builder.parts, builder.replicas,
+                                             regions, zones, dev_count,
+                                             balance)
+        print 'The minimum number of hours before a partition can be ' \
+              'reassigned is %s' % builder.min_part_hours
+        if builder.devs:
+            print 'Devices:    id  region  zone      ip address  port  ' \
+                  'replication ip  replication port      name ' \
+                  'weight partitions balance meta'
+            weighted_parts = builder.parts * builder.replicas / \
+                sum(d['weight'] for d in builder.devs if d is not None)
             for dev in builder.devs:
                 if dev is None:
                     continue
-                if dev['ip'] == ip and dev['port'] == port and \
-                        dev['device'] == device_name:
+                if not dev['weight']:
+                    if dev['parts']:
+                        balance = MAX_BALANCE
+                    else:
+                        balance = 0
+                else:
+                    balance = 100.0 * dev['parts'] / \
+                        (dev['weight'] * weighted_parts) - 100.0
+                print('         %5d %7d %5d %15s %5d %15s %17d %9s %6.02f '
+                      '%10s %7.02f %s' %
+                      (dev['id'], dev['region'], dev['zone'], dev['ip'],
+                       dev['port'], dev['replication_ip'],
+                       dev['replication_port'], dev['device'], dev['weight'],
+                       dev['parts'], balance, dev['meta']))
+        exit(EXIT_SUCCESS)
+
+    def search():
+        """
+swift-ring-builder <builder_file> search <search-value>
+    Shows information about matching devices.
+        """
+        if len(argv) < 4:
+            print Commands.search.__doc__.strip()
+            print
+            print parse_search_value.__doc__.strip()
+            exit(EXIT_ERROR)
+        devs = builder.search_devs(parse_search_value(argv[3]))
+        if not devs:
+            print 'No matching devices found'
+            exit(EXIT_ERROR)
+        print 'Devices:    id  region  zone      ip address  port  ' \
+              'replication ip  replication port      name weight partitions ' \
+              'balance meta'
+        weighted_parts = builder.parts * builder.replicas / \
+            sum(d['weight'] for d in builder.devs if d is not None)
+        for dev in devs:
+            if not dev['weight']:
+                if dev['parts']:
+                    balance = MAX_BALANCE
+                else:
+                    balance = 0
+            else:
+                balance = 100.0 * dev['parts'] / \
+                    (dev['weight'] * weighted_parts) - 100.0
+            print('         %5d %7d %5d %15s %5d %15s %17d %9s %6.02f %10s '
+                  '%7.02f %s' %
+                  (dev['id'], dev['region'], dev['zone'], dev['ip'],
+                   dev['port'], dev['replication_ip'], dev['replication_port'],
+                   dev['device'], dev['weight'], dev['parts'], balance,
+                   dev['meta']))
+        exit(EXIT_SUCCESS)
+
+    def list_parts():
+        """
+swift-ring-builder <builder_file> list_parts <search-value> [<search-value>] ..
+    Returns a 2 column list of all the partitions that are assigned to any of
+    the devices matching the search values given. The first column is the
+    assigned partition number and the second column is the number of device
+    matches for that partition. The list is ordered from most number of matches
+    to least. If there are a lot of devices to match against, this command
+    could take a while to run.
+        """
+        if len(argv) < 4:
+            print Commands.list_parts.__doc__.strip()
+            print
+            print parse_search_value.__doc__.strip()
+            exit(EXIT_ERROR)
+        devs = []
+        for arg in argv[3:]:
+            devs.extend(builder.search_devs(parse_search_value(arg)) or [])
+        if not devs:
+            print 'No matching devices found'
+            exit(EXIT_ERROR)
+        devs = [d['id'] for d in devs]
+        max_replicas = int(ceil(builder.replicas))
+        matches = [array('i') for x in xrange(max_replicas)]
+        for part in xrange(builder.parts):
+            count = len([d for d in builder.get_part_devices(part)
+                         if d['id'] in devs])
+            if count:
+                matches[max_replicas - count].append(part)
+        print 'Partition   Matches'
+        for index, parts in enumerate(matches):
+            for part in parts:
+                print '%9d   %7d' % (part, max_replicas - index)
+        exit(EXIT_SUCCESS)
+
+    def add():
+        """
+swift-ring-builder <builder_file> add
+    [r<region>]z<zone>-<ip>:<port>[R<r_ip>:<r_port>]/<device_name>_<meta>
+     <weight>
+    [[r<region>]z<zone>-<ip>:<port>[R<r_ip>:<r_port>]/<device_name>_<meta>
+     <weight>] ...
+
+    Where <r_ip> and <r_port> are replication ip and port.
+
+or
+
+swift-ring-builder <builder_file> add
+    [--region <region>] --zone <zone> --ip <ip> --port <port>
+    --replication-ip <r_ip> --replication-port <r_port>
+    --device <device_name> --meta <meta> --weight <weight>
+
+    Adds devices to the ring with the given information. No partitions will be
+    assigned to the new device until after running 'rebalance'. This is so you
+    can make multiple device changes and rebalance them all just once.
+        """
+        if len(argv) < 5 or len(argv) % 2 != 1:
+            print Commands.add.__doc__.strip()
+            exit(EXIT_ERROR)
+
+        for new_dev in _parse_add_values(argv[3:]):
+            for dev in builder.devs:
+                if dev is None:
+                    continue
+                if dev['ip'] == new_dev['ip'] and \
+                        dev['port'] == new_dev['port'] and \
+                        dev['device'] == new_dev['device']:
                     print 'Device %d already uses %s:%d/%s.' % \
                           (dev['id'], dev['ip'], dev['port'], dev['device'])
                     print "The on-disk ring builder is unchanged.\n"
                     exit(EXIT_ERROR)
+            dev_id = builder.add_dev(new_dev)
+            print('Device %s with %s weight got id %s' %
+                  (format_device(new_dev), new_dev['weight'], dev_id))
 
-            builder.add_dev({'region': region, 'zone': zone, 'ip': ip,
-                             'port': port, 'device': device_name,
-                             'weight': weight, 'meta': meta})
-            new_dev = builder.search_devs(
-                'r%dz%d-%s:%s/%s' %
-                (region, zone, ip, port, device_name))[0]['id']
-            if ':' in ip:
-                print(
-                    'Device r%dz%d-[%s]:%s/%s_"%s" with %s weight got id %s' %
-                    (region, zone, ip, port,
-                     device_name, meta, weight, new_dev))
-            else:
-                print('Device r%dz%d-%s:%s/%s_"%s" with %s weight got id %s' %
-                      (region, zone, ip, port,
-                       device_name, meta, weight, new_dev))
-        pickle.dump(builder.to_dict(), open(argv[1], 'wb'), protocol=2)
+        builder.save(argv[1])
         exit(EXIT_SUCCESS)
 
     def set_weight():
@@ -324,13 +401,13 @@ swift-ring-builder <builder_file> set_weight <search-value> <weight>
         if len(argv) < 5 or len(argv) % 2 != 1:
             print Commands.set_weight.__doc__.strip()
             print
-            print builder.search_devs.__doc__.strip()
+            print parse_search_value.__doc__.strip()
             exit(EXIT_ERROR)
 
         devs_and_weights = izip(islice(argv, 3, len(argv), 2),
                                 islice(argv, 4, len(argv), 2))
         for devstr, weightstr in devs_and_weights:
-            devs = builder.search_devs(devstr)
+            devs = builder.search_devs(parse_search_value(devstr))
             weight = float(weightstr)
             if not devs:
                 print("Search value \"%s\" matched 0 devices.\n"
@@ -340,24 +417,25 @@ swift-ring-builder <builder_file> set_weight <search-value> <weight>
             if len(devs) > 1:
                 print 'Matched more than one device:'
                 for dev in devs:
-                    print '    d%(id)sz%(zone)s-%(ip)s:%(port)s/%(device)s_' \
-                          '"%(meta)s"' % dev
+                    print '    %s' % format_device(dev)
                 if raw_input('Are you sure you want to update the weight for '
                              'these %s devices? (y/N) ' % len(devs)) != 'y':
                     print 'Aborting device modifications'
                     exit(EXIT_ERROR)
             for dev in devs:
                 builder.set_dev_weight(dev['id'], weight)
-                print 'd%(id)sz%(zone)s-%(ip)s:%(port)s/%(device)s_' \
-                      '"%(meta)s" weight set to %(weight)s' % dev
-        pickle.dump(builder.to_dict(), open(argv[1], 'wb'), protocol=2)
+                print '%s weight set to %s' % (format_device(dev),
+                                               dev['weight'])
+        builder.save(argv[1])
         exit(EXIT_SUCCESS)
 
     def set_info():
         """
 swift-ring-builder <builder_file> set_info
-    <search-value> <ip>:<port>/<device_name>_<meta>
-    [<search-value> <ip>:<port>/<device_name>_<meta>] ...
+    <search-value> <ip>:<port>[R<r_ip>:<r_port>]/<device_name>_<meta>
+    [<search-value> <ip>:<port>[R<r_ip>:<r_port>]/<device_name>_<meta>] ...
+
+    Where <r_ip> and <r_port> are replication ip and port.
 
     For each search-value, resets the matched device's information.
     This information isn't used to assign partitions, so you can use
@@ -370,14 +448,14 @@ swift-ring-builder <builder_file> set_info
         if len(argv) < 5 or len(argv) % 2 != 1:
             print Commands.set_info.__doc__.strip()
             print
-            print builder.search_devs.__doc__.strip()
+            print parse_search_value.__doc__.strip()
             exit(EXIT_ERROR)
 
         searches_and_changes = izip(islice(argv, 3, len(argv), 2),
                                     islice(argv, 4, len(argv), 2))
 
         for search_value, change_value in searches_and_changes:
-            devs = builder.search_devs(search_value)
+            devs = builder.search_devs(parse_search_value(search_value))
             change = []
             if len(change_value) and change_value[0].isdigit():
                 i = 1
@@ -399,6 +477,29 @@ swift-ring-builder <builder_file> set_info
                     i += 1
                 change.append(('port', int(change_value[1:i])))
                 change_value = change_value[i:]
+            if change_value.startswith('R'):
+                change_value = change_value[1:]
+                if len(change_value) and change_value[0].isdigit():
+                    i = 1
+                    while (i < len(change_value) and
+                           change_value[i] in '0123456789.'):
+                        i += 1
+                    change.append(('replication_ip', change_value[:i]))
+                    change_value = change_value[i:]
+                elif len(change_value) and change_value[0] == '[':
+                    i = 1
+                    while i < len(change_value) and change_value[i] != ']':
+                        i += 1
+                    i += 1
+                    change.append(('replication_ip',
+                                   change_value[:i].lstrip('[').rstrip(']')))
+                    change_value = change_value[i:]
+                if change_value.startswith(':'):
+                    i = 1
+                    while i < len(change_value) and change_value[i].isdigit():
+                        i += 1
+                    change.append(('replication_port', int(change_value[1:i])))
+                    change_value = change_value[i:]
             if change_value.startswith('/'):
                 i = 1
                 while i < len(change_value) and change_value[i] != '_':
@@ -443,7 +544,7 @@ swift-ring-builder <builder_file> set_info
                     dev[key] = value
                 print 'Device %s is now %s' % (orig_dev_string,
                                                format_device(dev))
-        pickle.dump(builder.to_dict(), open(argv[1], 'wb'), protocol=2)
+        builder.save(argv[1])
         exit(EXIT_SUCCESS)
 
     def remove():
@@ -459,11 +560,11 @@ swift-ring-builder <builder_file> remove <search-value> [search-value ...]
         if len(argv) < 4:
             print Commands.remove.__doc__.strip()
             print
-            print builder.search_devs.__doc__.strip()
+            print parse_search_value.__doc__.strip()
             exit(EXIT_ERROR)
 
         for search_value in argv[3:]:
-            devs = builder.search_devs(search_value)
+            devs = builder.search_devs(parse_search_value(search_value))
             if not devs:
                 print("Search value \"%s\" matched 0 devices.\n"
                       "The on-disk ring builder is unchanged." % search_value)
@@ -471,8 +572,7 @@ swift-ring-builder <builder_file> remove <search-value> [search-value ...]
             if len(devs) > 1:
                 print 'Matched more than one device:'
                 for dev in devs:
-                    print '    d%(id)sr%(region)sz%(zone)s-%(ip)s:%(port)s/' \
-                          '%(device)s_"%(meta)s"' % dev
+                    print '    %s' % format_device(dev)
                 if raw_input('Are you sure you want to remove these %s '
                              'devices? (y/N) ' % len(devs)) != 'y':
                     print 'Aborting device removals'
@@ -480,7 +580,7 @@ swift-ring-builder <builder_file> remove <search-value> [search-value ...]
             for dev in devs:
                 try:
                     builder.remove_dev(dev['id'])
-                except exceptions.RingBuilderError, e:
+                except exceptions.RingBuilderError as e:
                     print '-' * 79
                     print(
                         "An error occurred while removing device with id %d\n"
@@ -494,10 +594,9 @@ swift-ring-builder <builder_file> remove <search-value> [search-value ...]
                     print '-' * 79
                     exit(EXIT_ERROR)
 
-                print 'd%(id)sr%(region)sz%(zone)s-%(ip)s:%(port)s/' \
-                      '%(device)s_"%(meta)s" marked for removal and will ' \
-                      'be removed next rebalance.' % dev
-        pickle.dump(builder.to_dict(), open(argv[1], 'wb'), protocol=2)
+                print '%s marked for removal and will ' \
+                      'be removed next rebalance.' % format_device(dev)
+        builder.save(argv[1])
         exit(EXIT_SUCCESS)
 
     def rebalance():
@@ -516,7 +615,7 @@ swift-ring-builder <builder_file> rebalance <seed>
         try:
             last_balance = builder.get_balance()
             parts, balance = builder.rebalance(seed=get_seed(3))
-        except exceptions.RingBuilderError, e:
+        except exceptions.RingBuilderError as e:
             print '-' * 79
             print ("An error has occurred during ring validation. Common\n"
                    "causes of failure are rings that are empty or do not\n"
@@ -530,13 +629,18 @@ swift-ring-builder <builder_file> rebalance <seed>
             print 'Either none need to be or none can be due to ' \
                   'min_part_hours [%s].' % builder.min_part_hours
             exit(EXIT_WARNING)
-        if not devs_changed and abs(last_balance - balance) < 1:
+        # If we set device's weight to zero, currently balance will be set
+        # special value(MAX_BALANCE) until zero weighted device return all
+        # its partitions. So we cannot check balance has changed.
+        # Thus we need to check balance or last_balance is special value.
+        if not devs_changed and abs(last_balance - balance) < 1 and \
+                not (last_balance == MAX_BALANCE and balance == MAX_BALANCE):
             print 'Cowardly refusing to save rebalance as it did not change ' \
                   'at least 1%.'
             exit(EXIT_WARNING)
         try:
             builder.validate()
-        except exceptions.RingValidationError, e:
+        except exceptions.RingValidationError as e:
             print '-' * 79
             print ("An error has occurred during ring validation. Common\n"
                    "causes of failure are rings that are empty or do not\n"
@@ -559,10 +663,9 @@ swift-ring-builder <builder_file> rebalance <seed>
         ts = time()
         builder.get_ring().save(
             pathjoin(backup_dir, '%d.' % ts + basename(ring_file)))
-        pickle.dump(builder.to_dict(), open(pathjoin(backup_dir,
-                    '%d.' % ts + basename(argv[1])), 'wb'), protocol=2)
+        builder.save(pathjoin(backup_dir, '%d.' % ts + basename(argv[1])))
         builder.get_ring().save(ring_file)
-        pickle.dump(builder.to_dict(), open(argv[1], 'wb'), protocol=2)
+        builder.save(argv[1])
         exit(status)
 
     def validate():
@@ -596,7 +699,7 @@ swift-ring-builder <builder_file> write_ring
 
     def pretend_min_part_hours_passed():
         builder.pretend_min_part_hours_passed()
-        pickle.dump(builder.to_dict(), open(argv[1], 'wb'), protocol=2)
+        builder.save(argv[1])
         exit(EXIT_SUCCESS)
 
     def set_min_part_hours():
@@ -612,7 +715,7 @@ swift-ring-builder <builder_file> set_min_part_hours <hours>
         builder.change_min_part_hours(int(argv[3]))
         print 'The minimum number of hours before a partition can be ' \
               'reassigned is now set to %s' % argv[3]
-        pickle.dump(builder.to_dict(), open(argv[1], 'wb'), protocol=2)
+        builder.save(argv[1])
         exit(EXIT_SUCCESS)
 
     def set_replicas():
@@ -644,7 +747,7 @@ swift-ring-builder <builder_file> set_replicas <replicas>
         builder.set_replicas(new_replicas)
         print 'The replica count is now %.6f.' % builder.replicas
         print 'The change will take effect after the next rebalance.'
-        pickle.dump(builder.to_dict(), open(argv[1], 'wb'), protocol=2)
+        builder.save(argv[1])
         exit(EXIT_SUCCESS)
 
 if __name__ == '__main__':
@@ -659,7 +762,7 @@ if __name__ == '__main__':
         for cmd in cmds:
             print Commands.__dict__[cmd].__doc__.strip()
             print
-        print RingBuilder.search_devs.__doc__.strip()
+        print parse_search_value.__doc__.strip()
         print
         for line in wrap(' '.join(cmds), 79, initial_indent='Quick list: ',
                          subsequent_indent='            '):
@@ -678,7 +781,7 @@ if __name__ == '__main__':
     backup_dir = pathjoin(dirname(argv[1]), 'backups')
     try:
         mkdir(backup_dir)
-    except OSError, err:
+    except OSError as err:
         if err.errno != EEXIST:
             raise
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -110,7 +110,7 @@ def clean_acl(name, value):
                         raise ValueError('No host/domain value after referrer '
                                          'designation in ACL: %s' %
                                          repr(raw_value))
-                    values.append('.r:%s%s' % (negate and '-' or '', second))
+                    values.append('.r:%s%s' % ('-' if negate else '', second))
                 else:
                     raise ValueError('Unknown designator %s in ACL: %s' %
                                      (repr(first), repr(raw_value)))

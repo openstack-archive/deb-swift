@@ -1,3 +1,4 @@
+# Copyright (c) 2010-2013 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +13,59 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import time
+from swift import gettext_ as _
+
 import eventlet
 
 from swift.common.utils import cache_from_env, get_logger
 from swift.proxy.controllers.base import get_container_memcache_key
 from swift.common.memcached import MemcacheConnectionError
 from swift.common.swob import Request, Response
+
+
+def interpret_conf_limits(conf, name_prefix):
+    conf_limits = []
+    for conf_key in conf:
+        if conf_key.startswith(name_prefix):
+            cont_size = int(conf_key[len(name_prefix):])
+            rate = float(conf[conf_key])
+            conf_limits.append((cont_size, rate))
+
+    conf_limits.sort()
+    ratelimits = []
+    while conf_limits:
+        cur_size, cur_rate = conf_limits.pop(0)
+        if conf_limits:
+            next_size, next_rate = conf_limits[0]
+            slope = (float(next_rate) - float(cur_rate)) \
+                / (next_size - cur_size)
+
+            def new_scope(cur_size, slope, cur_rate):
+                # making new scope for variables
+                return lambda x: (x - cur_size) * slope + cur_rate
+            line_func = new_scope(cur_size, slope, cur_rate)
+        else:
+            line_func = lambda x: cur_rate
+
+        ratelimits.append((cur_size, cur_rate, line_func))
+
+    return ratelimits
+
+
+def get_maxrate(ratelimits, size):
+    """
+    Returns number of requests allowed per second for given size.
+    """
+    last_func = None
+    if size:
+        size = int(size)
+        for ratesize, rate, func in ratelimits:
+            if size < ratesize:
+                break
+            last_func = func
+        if last_func:
+            return last_func(size)
+    return None
 
 
 class MaxSleepTimeHitError(Exception):
@@ -54,45 +102,20 @@ class RateLimitMiddleware(object):
             [acc.strip() for acc in
                 conf.get('account_blacklist', '').split(',') if acc.strip()]
         self.memcache_client = None
-        conf_limits = []
-        for conf_key in conf.keys():
-            if conf_key.startswith('container_ratelimit_'):
-                cont_size = int(conf_key[len('container_ratelimit_'):])
-                rate = float(conf[conf_key])
-                conf_limits.append((cont_size, rate))
+        self.container_ratelimits = interpret_conf_limits(
+            conf, 'container_ratelimit_')
+        self.container_listing_ratelimits = interpret_conf_limits(
+            conf, 'container_listing_ratelimit_')
 
-        conf_limits.sort()
-        self.container_ratelimits = []
-        while conf_limits:
-            cur_size, cur_rate = conf_limits.pop(0)
-            if conf_limits:
-                next_size, next_rate = conf_limits[0]
-                slope = (float(next_rate) - float(cur_rate)) \
-                    / (next_size - cur_size)
-
-                def new_scope(cur_size, slope, cur_rate):
-                    # making new scope for variables
-                    return lambda x: (x - cur_size) * slope + cur_rate
-                line_func = new_scope(cur_size, slope, cur_rate)
-            else:
-                line_func = lambda x: cur_rate
-
-            self.container_ratelimits.append((cur_size, cur_rate, line_func))
-
-    def get_container_maxrate(self, container_size):
-        """
-        Returns number of requests allowed per second for given container size.
-        """
-        last_func = None
-        if container_size:
-            container_size = int(container_size)
-            for size, rate, func in self.container_ratelimits:
-                if container_size < size:
-                    break
-                last_func = func
-            if last_func:
-                return last_func(container_size)
-        return None
+    def get_container_size(self, account_name, container_name):
+        rv = 0
+        memcache_key = get_container_memcache_key(account_name,
+                                                  container_name)
+        container_info = self.memcache_client.get(memcache_key)
+        if isinstance(container_info, dict):
+            rv = container_info.get(
+                'object_count', container_info.get('container_size', 0))
+        return rv
 
     def get_ratelimitable_key_tuples(self, req_method, account_name,
                                      container_name=None, obj_name=None):
@@ -115,18 +138,26 @@ class RateLimitMiddleware(object):
 
         if account_name and container_name and obj_name and \
                 req_method in ('PUT', 'DELETE', 'POST'):
-            container_size = None
-            memcache_key = get_container_memcache_key(account_name,
-                                                      container_name)
-            container_info = self.memcache_client.get(memcache_key)
-            if isinstance(container_info, dict):
-                container_size = container_info.get(
-                    'count', container_info.get('container_size', 0))
-                container_rate = self.get_container_maxrate(container_size)
-                if container_rate:
-                    keys.append(("ratelimit/%s/%s" % (account_name,
-                                                      container_name),
-                                 container_rate))
+            container_size = self.get_container_size(
+                account_name, container_name)
+            container_rate = get_maxrate(
+                self.container_ratelimits, container_size)
+            if container_rate:
+                keys.append((
+                    "ratelimit/%s/%s" % (account_name, container_name),
+                    container_rate))
+
+        if account_name and container_name and not obj_name and \
+                req_method == 'GET':
+            container_size = self.get_container_size(
+                account_name, container_name)
+            container_rate = get_maxrate(
+                self.container_listing_ratelimits, container_size)
+            if container_rate:
+                keys.append((
+                    "ratelimit_listing/%s/%s" % (account_name, container_name),
+                    container_rate))
+
         return keys
 
     def _get_sleep_time(self, key, max_rate):
@@ -200,7 +231,7 @@ class RateLimitMiddleware(object):
                          'container': container_name, 'object': obj_name})
                 if need_to_sleep > 0:
                     eventlet.sleep(need_to_sleep)
-            except MaxSleepTimeHitError, e:
+            except MaxSleepTimeHitError as e:
                 self.logger.error(
                     _('Returning 498 for %(meth)s to %(acc)s/%(cont)s/%(obj)s '
                       '. Ratelimit (Max Sleep) %(e)s'),

@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,24 +18,71 @@ Internal client library for making calls directly to the servers rather than
 through the proxy.
 """
 
+import os
 import socket
 from httplib import HTTPException
 from time import time
-from urllib import quote as _quote
 
 from eventlet import sleep, Timeout
 
 from swift.common.bufferedhttp import http_connect
 from swiftclient import ClientException, json_loads
-from swift.common.utils import normalize_timestamp
+from swift.common.utils import normalize_timestamp, FileLikeIter
 from swift.common.http import HTTP_NO_CONTENT, HTTP_INSUFFICIENT_STORAGE, \
     is_success, is_server_error
+from swift.common.swob import HeaderKeyDict
+from swift.common.utils import quote
 
 
-def quote(value, safe='/'):
-    if isinstance(value, unicode):
-        value = value.encode('utf8')
-    return _quote(value, safe)
+def _get_direct_account_container(path, stype, node, part,
+                                  account, marker=None, limit=None,
+                                  prefix=None, delimiter=None, conn_timeout=5,
+                                  response_timeout=15):
+    """Base class for get direct account and container.
+
+    Do not use directly use the get_direct_account or
+    get_direct_container instead.
+    """
+    qs = 'format=json'
+    if marker:
+        qs += '&marker=%s' % quote(marker)
+    if limit:
+        qs += '&limit=%d' % limit
+    if prefix:
+        qs += '&prefix=%s' % quote(prefix)
+    if delimiter:
+        qs += '&delimiter=%s' % quote(delimiter)
+    with Timeout(conn_timeout):
+        conn = http_connect(node['ip'], node['port'], node['device'], part,
+                            'GET', path, query_string=qs,
+                            headers=gen_headers())
+    with Timeout(response_timeout):
+        resp = conn.getresponse()
+    if not is_success(resp.status):
+        resp.read()
+        raise ClientException(
+            '%s server %s:%s direct GET %s gave stats %s' %
+            (stype, node['ip'], node['port'],
+             repr('/%s/%s%s' % (node['device'], part, path)),
+             resp.status),
+            http_host=node['ip'], http_port=node['port'],
+            http_device=node['device'], http_status=resp.status,
+            http_reason=resp.reason)
+    resp_headers = {}
+    for header, value in resp.getheaders():
+        resp_headers[header.lower()] = value
+    if resp.status == HTTP_NO_CONTENT:
+        resp.read()
+        return resp_headers, []
+    return resp_headers, json_loads(resp.read())
+
+
+def gen_headers(hdrs_in=None, add_ts=False):
+    hdrs_out = HeaderKeyDict(hdrs_in) if hdrs_in else HeaderKeyDict()
+    if add_ts:
+        hdrs_out['X-Timestamp'] = normalize_timestamp(time())
+    hdrs_out['User-Agent'] = 'direct-client %s' % os.getpid()
+    return hdrs_out
 
 
 def direct_get_account(node, part, account, marker=None, limit=None,
@@ -57,37 +104,12 @@ def direct_get_account(node, part, account, marker=None, limit=None,
               headers will be a dict and all header names will be lowercase.
     """
     path = '/' + account
-    qs = 'format=json'
-    if marker:
-        qs += '&marker=%s' % quote(marker)
-    if limit:
-        qs += '&limit=%d' % limit
-    if prefix:
-        qs += '&prefix=%s' % quote(prefix)
-    if delimiter:
-        qs += '&delimiter=%s' % quote(delimiter)
-    with Timeout(conn_timeout):
-        conn = http_connect(node['ip'], node['port'], node['device'], part,
-                            'GET', path, query_string=qs)
-    with Timeout(response_timeout):
-        resp = conn.getresponse()
-    if not is_success(resp.status):
-        resp.read()
-        raise ClientException(
-            'Account server %s:%s direct GET %s gave status %s' %
-            (node['ip'], node['port'],
-             repr('/%s/%s%s' % (node['device'], part, path)),
-             resp.status),
-            http_host=node['ip'], http_port=node['port'],
-            http_device=node['device'], http_status=resp.status,
-            http_reason=resp.reason)
-    resp_headers = {}
-    for header, value in resp.getheaders():
-        resp_headers[header.lower()] = value
-    if resp.status == HTTP_NO_CONTENT:
-        resp.read()
-        return resp_headers, []
-    return resp_headers, json_loads(resp.read())
+    return _get_direct_account_container(path, "Account", node, part,
+                                         account, marker=None,
+                                         limit=None, prefix=None,
+                                         delimiter=None,
+                                         conn_timeout=5,
+                                         response_timeout=15)
 
 
 def direct_head_container(node, part, account, container, conn_timeout=5,
@@ -107,7 +129,7 @@ def direct_head_container(node, part, account, container, conn_timeout=5,
     path = '/%s/%s' % (account, container)
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                            'HEAD', path)
+                            'HEAD', path, headers=gen_headers())
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
@@ -146,46 +168,24 @@ def direct_get_container(node, part, account, container, marker=None,
               headers will be a dict and all header names will be lowercase.
     """
     path = '/%s/%s' % (account, container)
-    qs = 'format=json'
-    if marker:
-        qs += '&marker=%s' % quote(marker)
-    if limit:
-        qs += '&limit=%d' % limit
-    if prefix:
-        qs += '&prefix=%s' % quote(prefix)
-    if delimiter:
-        qs += '&delimiter=%s' % quote(delimiter)
-    with Timeout(conn_timeout):
-        conn = http_connect(node['ip'], node['port'], node['device'], part,
-                            'GET', path, query_string=qs)
-    with Timeout(response_timeout):
-        resp = conn.getresponse()
-    if not is_success(resp.status):
-        resp.read()
-        raise ClientException(
-            'Container server %s:%s direct GET %s gave stats %s' %
-            (node['ip'], node['port'],
-             repr('/%s/%s%s' % (node['device'], part, path)),
-             resp.status),
-            http_host=node['ip'], http_port=node['port'],
-            http_device=node['device'], http_status=resp.status,
-            http_reason=resp.reason)
-    resp_headers = {}
-    for header, value in resp.getheaders():
-        resp_headers[header.lower()] = value
-    if resp.status == HTTP_NO_CONTENT:
-        resp.read()
-        return resp_headers, []
-    return resp_headers, json_loads(resp.read())
+    return _get_direct_account_container(path, "Container", node,
+                                         part, account, marker=None,
+                                         limit=None, prefix=None,
+                                         delimiter=None,
+                                         conn_timeout=5,
+                                         response_timeout=15)
 
 
 def direct_delete_container(node, part, account, container, conn_timeout=5,
-                            response_timeout=15, headers={}):
+                            response_timeout=15, headers=None):
+    if headers is None:
+        headers = {}
+
     path = '/%s/%s' % (account, container)
-    headers['X-Timestamp'] = normalize_timestamp(time())
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                            'DELETE', path, headers)
+                            'DELETE', path,
+                            headers=gen_headers(headers, True))
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
@@ -217,7 +217,7 @@ def direct_head_object(node, part, account, container, obj, conn_timeout=5,
     path = '/%s/%s/%s' % (account, container, obj)
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                            'HEAD', path)
+                            'HEAD', path, headers=gen_headers())
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
@@ -237,7 +237,7 @@ def direct_head_object(node, part, account, container, obj, conn_timeout=5,
 
 
 def direct_get_object(node, part, account, container, obj, conn_timeout=5,
-                      response_timeout=15, resp_chunk_size=None, headers={}):
+                      response_timeout=15, resp_chunk_size=None, headers=None):
     """
     Get object directly from the object server.
 
@@ -253,10 +253,13 @@ def direct_get_object(node, part, account, container, obj, conn_timeout=5,
     :returns: a tuple of (response headers, the object's contents) The response
               headers will be a dict and all header names will be lowercase.
     """
+    if headers is None:
+        headers = {}
+
     path = '/%s/%s/%s' % (account, container, obj)
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                            'GET', path, headers=headers)
+                            'GET', path, headers=gen_headers(headers))
     with Timeout(response_timeout):
         resp = conn.getresponse()
     if not is_success(resp.status):
@@ -287,7 +290,7 @@ def direct_get_object(node, part, account, container, obj, conn_timeout=5,
 def direct_put_object(node, part, account, container, name, contents,
                       content_length=None, etag=None, content_type=None,
                       headers=None, conn_timeout=5, response_timeout=15,
-                      resp_chunk_size=None):
+                      chunk_size=65535):
     """
     Put object directly from the object server.
 
@@ -306,7 +309,7 @@ def direct_put_object(node, part, account, container, name, contents,
     :param chunk_size: if defined, chunk size of data to send.
     :returns: etag from the server response
     """
-    # TODO: Add chunked puts
+
     path = '/%s/%s/%s' % (account, container, name)
     if headers is None:
         headers = {}
@@ -314,6 +317,10 @@ def direct_put_object(node, part, account, container, name, contents,
         headers['ETag'] = etag.strip('"')
     if content_length is not None:
         headers['Content-Length'] = str(content_length)
+    else:
+        for n, v in headers.iteritems():
+            if n.lower() == 'content-length':
+                content_length = int(v)
     if content_type is not None:
         headers['Content-Type'] = content_type
     else:
@@ -322,12 +329,36 @@ def direct_put_object(node, part, account, container, name, contents,
         headers['Content-Length'] = '0'
     if isinstance(contents, basestring):
         contents = [contents]
-    headers['X-Timestamp'] = normalize_timestamp(time())
+    #Incase the caller want to insert an object with specific age
+    add_ts = 'X-Timestamp' not in headers
+
+    if content_length is None:
+        headers['Transfer-Encoding'] = 'chunked'
+
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                            'PUT', path, headers=headers)
-    for chunk in contents:
-        conn.send(chunk)
+                            'PUT', path, headers=gen_headers(headers, add_ts))
+
+    contents_f = FileLikeIter(contents)
+
+    if content_length is None:
+        chunk = contents_f.read(chunk_size)
+        while chunk:
+            conn.send('%x\r\n%s\r\n' % (len(chunk), chunk))
+            chunk = contents_f.read(chunk_size)
+        conn.send('0\r\n\r\n')
+    else:
+        left = content_length
+        while left > 0:
+            size = chunk_size
+            if size > left:
+                size = left
+            chunk = contents_f.read(size)
+            if not chunk:
+                break
+            conn.send(chunk)
+            left -= len(chunk)
+
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
@@ -359,10 +390,9 @@ def direct_post_object(node, part, account, container, name, headers,
     :raises ClientException: HTTP POST request failed
     """
     path = '/%s/%s/%s' % (account, container, name)
-    headers['X-Timestamp'] = normalize_timestamp(time())
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                            'POST', path, headers=headers)
+                            'POST', path, headers=gen_headers(headers, True))
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
@@ -378,7 +408,7 @@ def direct_post_object(node, part, account, container, name, headers,
 
 
 def direct_delete_object(node, part, account, container, obj,
-                         conn_timeout=5, response_timeout=15, headers={}):
+                         conn_timeout=5, response_timeout=15, headers=None):
     """
     Delete object directly from the object server.
 
@@ -391,11 +421,13 @@ def direct_delete_object(node, part, account, container, obj,
     :param response_timeout: timeout in seconds for getting the response
     :returns: response from server
     """
+    if headers is None:
+        headers = {}
+
     path = '/%s/%s/%s' % (account, container, obj)
-    headers['X-Timestamp'] = normalize_timestamp(time())
     with Timeout(conn_timeout):
         conn = http_connect(node['ip'], node['port'], node['device'], part,
-                            'DELETE', path, headers)
+                            'DELETE', path, headers=gen_headers(headers, True))
     with Timeout(response_timeout):
         resp = conn.getresponse()
         resp.read()
@@ -437,12 +469,12 @@ def retry(func, *args, **kwargs):
         attempts += 1
         try:
             return attempts, func(*args, **kwargs)
-        except (socket.error, HTTPException, Timeout), err:
+        except (socket.error, HTTPException, Timeout) as err:
             if error_log:
                 error_log(err)
             if attempts > retries:
                 raise
-        except ClientException, err:
+        except ClientException as err:
             if error_log:
                 error_log(err)
             if attempts > retries or not is_server_error(err.http_status) or \

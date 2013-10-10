@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ BufferedHTTPResponse.
     make all calls through httplib.
 """
 
+from swift import gettext_ as _
 from urllib import quote
 import logging
 import time
@@ -40,6 +41,10 @@ class BufferedHTTPResponse(HTTPResponse):
     def __init__(self, sock, debuglevel=0, strict=0,
                  method=None):          # pragma: no cover
         self.sock = sock
+        # sock is an eventlet.greenio.GreenSocket
+        # sock.fd is a socket._socketobject
+        # sock.fd._sock is a socket._socket object, which is what we want.
+        self._real_socket = sock.fd._sock
         self.fp = sock.makefile('rb')
         self.debuglevel = debuglevel
         self.strict = strict
@@ -73,9 +78,25 @@ class BufferedHTTPResponse(HTTPResponse):
             self.msg = HTTPMessage(self.fp, 0)
             self.msg.fp = None
 
+    def nuke_from_orbit(self):
+        """
+        Terminate the socket with extreme prejudice.
+
+        Closes the underlying socket regardless of whether or not anyone else
+        has references to it. Use this when you are certain that nobody else
+        you care about has a reference to this socket.
+        """
+        if self._real_socket:
+            # this is idempotent; see sock_close in Modules/socketmodule.c in
+            # the Python source for details.
+            self._real_socket.close()
+        self._real_socket = None
+        self.close()
+
     def close(self):
         HTTPResponse.close(self)
         self.sock = None
+        self._real_socket = None
 
 
 class BufferedHTTPConnection(HTTPConnection):
@@ -129,8 +150,8 @@ def http_connect(ipaddr, port, device, partition, method, path,
     if isinstance(path, unicode):
         try:
             path = path.encode("utf-8")
-        except UnicodeError, e:
-            logging.exception(_('Error encoding to UTF-8: %s'), e.message)
+        except UnicodeError as e:
+            logging.exception(_('Error encoding to UTF-8: %s'), str(e))
     path = quote('/' + device + '/' + str(partition) + path)
     return http_connect_raw(
         ipaddr, port, method, path, headers, query_string, ssl)

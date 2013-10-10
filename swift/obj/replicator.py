@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,16 +14,13 @@
 # limitations under the License.
 
 import os
-from os.path import basename, dirname, isdir, isfile, join
+from os.path import isdir, isfile, join
 import random
 import shutil
 import time
-import logging
-import hashlib
 import itertools
 import cPickle as pickle
-import errno
-import uuid
+from swift import gettext_ as _
 
 import eventlet
 from eventlet import GreenPool, tpool, Timeout, sleep, hubs
@@ -31,204 +28,17 @@ from eventlet.green import subprocess
 from eventlet.support.greenlets import GreenletExit
 
 from swift.common.ring import Ring
-from swift.common.utils import whataremyips, unlink_older_than, lock_path, \
-    compute_eta, get_logger, write_pickle, renamer, dump_recon_cache, \
-    rsync_ip, mkdirs, config_true_value, list_from_csv, get_hub
+from swift.common.utils import whataremyips, unlink_older_than, \
+    compute_eta, get_logger, dump_recon_cache, \
+    rsync_ip, mkdirs, config_true_value, list_from_csv, get_hub, \
+    tpool_reraise, config_auto_int_value
 from swift.common.bufferedhttp import http_connect
 from swift.common.daemon import Daemon
 from swift.common.http import HTTP_OK, HTTP_INSUFFICIENT_STORAGE
-from swift.common.exceptions import PathNotDir
+from swift.obj.diskfile import get_hashes
+
 
 hubs.use_hub(get_hub())
-
-PICKLE_PROTOCOL = 2
-ONE_WEEK = 604800
-HASH_FILE = 'hashes.pkl'
-
-
-def quarantine_renamer(device_path, corrupted_file_path):
-    """
-    In the case that a file is corrupted, move it to a quarantined
-    area to allow replication to fix it.
-
-    :params device_path: The path to the device the corrupted file is on.
-    :params corrupted_file_path: The path to the file you want quarantined.
-
-    :returns: path (str) of directory the file was moved to
-    :raises OSError: re-raises non errno.EEXIST / errno.ENOTEMPTY
-                     exceptions from rename
-    """
-    from_dir = dirname(corrupted_file_path)
-    to_dir = join(device_path, 'quarantined', 'objects', basename(from_dir))
-    invalidate_hash(dirname(from_dir))
-    try:
-        renamer(from_dir, to_dir)
-    except OSError, e:
-        if e.errno not in (errno.EEXIST, errno.ENOTEMPTY):
-            raise
-        to_dir = "%s-%s" % (to_dir, uuid.uuid4().hex)
-        renamer(from_dir, to_dir)
-    return to_dir
-
-
-def hash_suffix(path, reclaim_age):
-    """
-    Performs reclamation and returns an md5 of all (remaining) files.
-
-    :param reclaim_age: age in seconds at which to remove tombstones
-    :raises PathNotDir: if given path is not a valid directory
-    :raises OSError: for non-ENOTDIR errors
-    """
-    md5 = hashlib.md5()
-    try:
-        path_contents = sorted(os.listdir(path))
-    except OSError, err:
-        if err.errno in (errno.ENOTDIR, errno.ENOENT):
-            raise PathNotDir()
-        raise
-    for hsh in path_contents:
-        hsh_path = join(path, hsh)
-        try:
-            files = os.listdir(hsh_path)
-        except OSError, err:
-            if err.errno == errno.ENOTDIR:
-                partition_path = dirname(path)
-                objects_path = dirname(partition_path)
-                device_path = dirname(objects_path)
-                quar_path = quarantine_renamer(device_path, hsh_path)
-                logging.exception(
-                    _('Quarantined %s to %s because it is not a directory') %
-                    (hsh_path, quar_path))
-                continue
-            raise
-        if len(files) == 1:
-            if files[0].endswith('.ts'):
-                # remove tombstones older than reclaim_age
-                ts = files[0].rsplit('.', 1)[0]
-                if (time.time() - float(ts)) > reclaim_age:
-                    os.unlink(join(hsh_path, files[0]))
-                    files.remove(files[0])
-        elif files:
-            files.sort(reverse=True)
-            meta = data = tomb = None
-            for filename in list(files):
-                if not meta and filename.endswith('.meta'):
-                    meta = filename
-                if not data and filename.endswith('.data'):
-                    data = filename
-                if not tomb and filename.endswith('.ts'):
-                    tomb = filename
-                if (filename < tomb or       # any file older than tomb
-                    filename < data or       # any file older than data
-                    (filename.endswith('.meta') and
-                     filename < meta)):      # old meta
-                    os.unlink(join(hsh_path, filename))
-                    files.remove(filename)
-        if not files:
-            os.rmdir(hsh_path)
-        for filename in files:
-            md5.update(filename)
-    try:
-        os.rmdir(path)
-    except OSError:
-        pass
-    return md5.hexdigest()
-
-
-def invalidate_hash(suffix_dir):
-    """
-    Invalidates the hash for a suffix_dir in the partition's hashes file.
-
-    :param suffix_dir: absolute path to suffix dir whose hash needs
-                       invalidating
-    """
-
-    suffix = os.path.basename(suffix_dir)
-    partition_dir = os.path.dirname(suffix_dir)
-    hashes_file = join(partition_dir, HASH_FILE)
-    with lock_path(partition_dir):
-        try:
-            with open(hashes_file, 'rb') as fp:
-                hashes = pickle.load(fp)
-            if suffix in hashes and not hashes[suffix]:
-                return
-        except Exception:
-            return
-        hashes[suffix] = None
-        write_pickle(hashes, hashes_file, partition_dir, PICKLE_PROTOCOL)
-
-
-def get_hashes(partition_dir, recalculate=[], do_listdir=False,
-               reclaim_age=ONE_WEEK):
-    """
-    Get a list of hashes for the suffix dir.  do_listdir causes it to mistrust
-    the hash cache for suffix existence at the (unexpectedly high) cost of a
-    listdir.  reclaim_age is just passed on to hash_suffix.
-
-    :param partition_dir: absolute path of partition to get hashes for
-    :param recalculate: list of suffixes which should be recalculated when got
-    :param do_listdir: force existence check for all hashes in the partition
-    :param reclaim_age: age at which to remove tombstones
-
-    :returns: tuple of (number of suffix dirs hashed, dictionary of hashes)
-    """
-
-    hashed = 0
-    hashes_file = join(partition_dir, HASH_FILE)
-    modified = False
-    force_rewrite = False
-    hashes = {}
-    mtime = -1
-    try:
-        with open(hashes_file, 'rb') as fp:
-            hashes = pickle.load(fp)
-        mtime = os.path.getmtime(hashes_file)
-    except Exception:
-        do_listdir = True
-        force_rewrite = True
-    if do_listdir:
-        for suff in os.listdir(partition_dir):
-            if len(suff) == 3:
-                hashes.setdefault(suff, None)
-        modified = True
-    hashes.update((hash_, None) for hash_ in recalculate)
-    for suffix, hash_ in hashes.items():
-        if not hash_:
-            suffix_dir = join(partition_dir, suffix)
-            try:
-                hashes[suffix] = hash_suffix(suffix_dir, reclaim_age)
-                hashed += 1
-            except PathNotDir:
-                del hashes[suffix]
-            except OSError:
-                logging.exception(_('Error hashing suffix'))
-            modified = True
-    if modified:
-        with lock_path(partition_dir):
-            if force_rewrite or not os.path.exists(hashes_file) or \
-                    os.path.getmtime(hashes_file) == mtime:
-                write_pickle(
-                    hashes, hashes_file, partition_dir, PICKLE_PROTOCOL)
-                return hashed, hashes
-        return get_hashes(partition_dir, recalculate, do_listdir,
-                          reclaim_age)
-    else:
-        return hashed, hashes
-
-
-def tpool_reraise(func, *args, **kwargs):
-    """
-    Hack to work around Eventlet's tpool not catching and reraising Timeouts.
-    """
-    def inner():
-        try:
-            return func(*args, **kwargs)
-        except BaseException, err:
-            return err
-    resp = tpool.execute(inner)
-    if isinstance(resp, BaseException):
-        raise resp
-    return resp
 
 
 class ObjectReplicator(Daemon):
@@ -262,11 +72,21 @@ class ObjectReplicator(Daemon):
         self.run_pause = int(conf.get('run_pause', 30))
         self.rsync_timeout = int(conf.get('rsync_timeout', 900))
         self.rsync_io_timeout = conf.get('rsync_io_timeout', '30')
+        self.rsync_bwlimit = conf.get('rsync_bwlimit', '0')
         self.http_timeout = int(conf.get('http_timeout', 60))
         self.lockup_timeout = int(conf.get('lockup_timeout', 1800))
         self.recon_cache_path = conf.get('recon_cache_path',
                                          '/var/cache/swift')
         self.rcache = os.path.join(self.recon_cache_path, "object.recon")
+        self.headers = {
+            'Content-Length': '0',
+            'user-agent': 'obj-replicator %s' % os.getpid()}
+        self.rsync_error_log_line_length = \
+            int(conf.get('rsync_error_log_line_length', 0))
+        self.handoffs_first = config_true_value(conf.get('handoffs_first',
+                                                         False))
+        self.handoff_delete = config_auto_int_value(
+            conf.get('handoff_delete', 'auto'), 0)
 
     def _rsync(self, args):
         """
@@ -298,8 +118,11 @@ class ObjectReplicator(Daemon):
             else:
                 self.logger.error(result)
         if ret_val:
-            self.logger.error(_('Bad rsync return code: %(args)s -> %(ret)d'),
-                              {'args': str(args), 'ret': ret_val})
+            error_line = _('Bad rsync return code: %(ret)d <- %(args)s') % \
+                {'args': str(args), 'ret': ret_val}
+            if self.rsync_error_log_line_length:
+                error_line = error_line[:self.rsync_error_log_line_length]
+            self.logger.error(error_line)
         elif results:
             self.logger.info(
                 _("Successful rsync of %(src)s at %(dst)s (%(time).03f)"),
@@ -333,10 +156,11 @@ class ObjectReplicator(Daemon):
             '--ignore-existing',
             '--timeout=%s' % self.rsync_io_timeout,
             '--contimeout=%s' % self.rsync_io_timeout,
+            '--bwlimit=%s' % self.rsync_bwlimit,
         ]
-        node_ip = rsync_ip(node['ip'])
+        node_ip = rsync_ip(node['replication_ip'])
         if self.vm_test_mode:
-            rsync_module = '%s::object%s' % (node_ip, node['port'])
+            rsync_module = '%s::object%s' % (node_ip, node['replication_port'])
         else:
             rsync_module = '%s::object' % node_ip
         had_any = False
@@ -385,15 +209,22 @@ class ObjectReplicator(Daemon):
                     success = self.rsync(node, job, suffixes)
                     if success:
                         with Timeout(self.http_timeout):
-                            http_connect(
-                                node['ip'], node['port'],
+                            conn = http_connect(
+                                node['replication_ip'],
+                                node['replication_port'],
                                 node['device'], job['partition'], 'REPLICATE',
-                                '/' + '-'.join(suffixes),
-                                headers={'Content-Length': '0'}).\
-                                getresponse().read()
+                                '/' + '-'.join(suffixes), headers=self.headers)
+                            conn.getresponse().read()
                     responses.append(success)
-            if not suffixes or (len(responses) ==
-                                len(job['nodes']) and all(responses)):
+            if self.handoff_delete:
+                # delete handoff if we have had handoff_delete successes
+                delete_handoff = len([resp for resp in responses if resp]) >= \
+                    self.handoff_delete
+            else:
+                # delete handoff if all syncs were successful
+                delete_handoff = len(responses) == len(job['nodes']) and \
+                    all(responses)
+            if not suffixes or delete_handoff:
                 self.logger.info(_("Removing partition: %s"), job['path'])
                 tpool.execute(shutil.rmtree, job['path'], ignore_errors=True)
         except (Exception, Timeout):
@@ -429,9 +260,9 @@ class ObjectReplicator(Daemon):
                 try:
                     with Timeout(self.http_timeout):
                         resp = http_connect(
-                            node['ip'], node['port'],
+                            node['replication_ip'], node['replication_port'],
                             node['device'], job['partition'], 'REPLICATE',
-                            '', headers={'Content-Length': '0'}).getresponse()
+                            '', headers=self.headers).getresponse()
                         if resp.status == HTTP_INSUFFICIENT_STORAGE:
                             self.logger.error(_('%(ip)s/%(device)s responded'
                                                 ' as unmounted'), node)
@@ -441,7 +272,7 @@ class ObjectReplicator(Daemon):
                             self.logger.error(_("Invalid response %(resp)s "
                                                 "from %(ip)s"),
                                               {'resp': resp.status,
-                                               'ip': node['ip']})
+                                               'ip': node['replication_ip']})
                             continue
                         remote_hash = pickle.loads(resp.read())
                         del resp
@@ -462,10 +293,10 @@ class ObjectReplicator(Daemon):
                     self.rsync(node, job, suffixes)
                     with Timeout(self.http_timeout):
                         conn = http_connect(
-                            node['ip'], node['port'],
+                            node['replication_ip'], node['replication_port'],
                             node['device'], job['partition'], 'REPLICATE',
                             '/' + '-'.join(suffixes),
-                            headers={'Content-Length': '0'})
+                            headers=self.headers)
                         conn.getresponse().read()
                     self.suffix_sync += len(suffixes)
                     self.logger.update_stats('suffix.syncs', len(suffixes))
@@ -554,8 +385,8 @@ class ObjectReplicator(Daemon):
         jobs = []
         ips = whataremyips()
         for local_dev in [dev for dev in self.object_ring.devs
-                          if dev and dev['ip'] in ips and
-                          dev['port'] == self.port]:
+                          if dev and dev['replication_ip'] in ips and
+                          dev['replication_port'] == self.port]:
             dev_path = join(self.devices_dir, local_dev['device'])
             obj_path = join(dev_path, 'objects')
             tmp_path = join(dev_path, 'tmp')
@@ -592,10 +423,13 @@ class ObjectReplicator(Daemon):
                 except (ValueError, OSError):
                     continue
         random.shuffle(jobs)
+        if self.handoffs_first:
+            # Move the handoff parts to the front of the list
+            jobs.sort(key=lambda job: not job['delete'])
         self.job_count = len(jobs)
         return jobs
 
-    def replicate(self, override_devices=[], override_partitions=[]):
+    def replicate(self, override_devices=None, override_partitions=None):
         """Run a replication pass"""
         self.start = time.time()
         self.suffix_count = 0
@@ -604,9 +438,16 @@ class ObjectReplicator(Daemon):
         self.replication_count = 0
         self.last_replication_count = -1
         self.partition_times = []
+
+        if override_devices is None:
+            override_devices = []
+        if override_partitions is None:
+            override_partitions = []
+
         stats = eventlet.spawn(self.heartbeat)
         lockup_detector = eventlet.spawn(self.detect_lockups)
         eventlet.sleep()  # Give spawns a cycle
+
         try:
             self.run_pool = GreenPool(size=self.concurrency)
             jobs = self.collect_jobs()

@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,12 +22,14 @@ import shutil
 import uuid
 import errno
 import re
+from swift import gettext_ as _
 
 from eventlet import GreenPool, sleep, Timeout
 from eventlet.green import subprocess
 import simplejson
 
 import swift.common.db
+from swift.common.direct_client import quote
 from swift.common.utils import get_logger, whataremyips, storage_directory, \
     renamer, mkdirs, lock_parent_directory, config_true_value, \
     unlink_older_than, dump_recon_cache, rsync_ip
@@ -58,7 +60,7 @@ def quarantine_db(object_file, server_type):
                      server_type + 's', os.path.basename(object_dir)))
     try:
         renamer(object_dir, quarantine_dir)
-    except OSError, e:
+    except OSError as e:
         if e.errno not in (errno.EEXIST, errno.ENOTEMPTY):
             raise
         quarantine_dir = "%s-%s" % (quarantine_dir, uuid.uuid4().hex)
@@ -115,7 +117,8 @@ class ReplConnection(BufferedHTTPConnection):
         ""
         self.logger = logger
         self.node = node
-        BufferedHTTPConnection.__init__(self, '%(ip)s:%(port)s' % node)
+        host = "%s:%s" % (node['replication_ip'], node['replication_port'])
+        BufferedHTTPConnection.__init__(self, host)
         self.path = '/%s/%s/%s' % (node['device'], partition, hash_)
 
     def replicate(self, *args):
@@ -237,11 +240,11 @@ class Replicator(Daemon):
         :param replicate_method: remote operation to perform after rsync
         :param replicate_timeout: timeout to wait in seconds
         """
-        device_ip = rsync_ip(device['ip'])
+        device_ip = rsync_ip(device['replication_ip'])
         if self.vm_test_mode:
             remote_file = '%s::%s%s/%s/tmp/%s' % (
-                device_ip, self.server_type, device['port'], device['device'],
-                local_id)
+                device_ip, self.server_type, device['replication_port'],
+                device['device'], local_id)
         else:
             remote_file = '%s::%s/%s/tmp/%s' % (
                 device_ip, self.server_type, device['device'], local_id)
@@ -407,13 +410,27 @@ class Replicator(Daemon):
         self.logger.debug(_('Replicating db %s'), object_file)
         self.stats['attempted'] += 1
         self.logger.increment('attempts')
+        shouldbehere = True
         try:
             broker = self.brokerclass(object_file, pending_timeout=30)
             broker.reclaim(time.time() - self.reclaim_age,
                            time.time() - (self.reclaim_age * 2))
             info = broker.get_replication_info()
             full_info = broker.get_info()
-        except (Exception, Timeout), e:
+            bpart = self.ring.get_part(
+                full_info['account'], full_info.get('container'))
+            if bpart != int(partition):
+                partition = bpart
+                # Important to set this false here since the later check only
+                # checks if it's on the proper device, not partition.
+                shouldbehere = False
+                name = '/' + quote(full_info['account'])
+                if 'container' in full_info:
+                    name += '/' + quote(full_info['container'])
+                self.logger.error(
+                    'Found %s for %s when it should be on partition %s; will '
+                    'replicate out and remove.' % (object_file, name, bpart))
+        except (Exception, Timeout) as e:
             if 'no such table' in str(e):
                 self.logger.error(_('Quarantining DB %s'), object_file)
                 quarantine_db(broker.db_file, broker.db_type)
@@ -443,7 +460,8 @@ class Replicator(Daemon):
             return
         responses = []
         nodes = self.ring.get_part_nodes(int(partition))
-        shouldbehere = bool([n for n in nodes if n['id'] == node_id])
+        if shouldbehere:
+            shouldbehere = bool([n for n in nodes if n['id'] == node_id])
         # See Footnote [1] for an explanation of the repl_nodes assignment.
         i = 0
         while i < len(nodes) and nodes[i]['id'] != node_id:
@@ -477,7 +495,7 @@ class Replicator(Daemon):
             shutil.rmtree(hash_dir, True)
         try:
             os.rmdir(suf_dir)
-        except OSError, err:
+        except OSError as err:
             if err.errno not in (errno.ENOENT, errno.ENOTEMPTY):
                 self.logger.exception(
                     _('ERROR while trying to clean up %s') % suf_dir)
@@ -509,7 +527,8 @@ class Replicator(Daemon):
             self.logger.error(_('ERROR Failed to get my own IPs?'))
             return
         for node in self.ring.devs:
-            if node and node['ip'] in ips and node['port'] == self.port:
+            if (node and node['replication_ip'] in ips and
+                    node['replication_port'] == self.port):
                 if self.mount_check and not os.path.ismount(
                         os.path.join(self.root, node['device'])):
                     self.logger.warn(
@@ -585,7 +604,7 @@ class ReplicatorRpc(object):
         timemark = time.time()
         try:
             info = broker.get_replication_info()
-        except (Exception, Timeout), e:
+        except (Exception, Timeout) as e:
             if 'no such table' in str(e):
                 self.logger.error(_("Quarantining DB %s") % broker.db_file)
                 quarantine_db(broker.db_file, broker.db_type)

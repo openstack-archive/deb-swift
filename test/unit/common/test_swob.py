@@ -1,4 +1,4 @@
-# Copyright (c) 2012 OpenStack, LLC.
+# Copyright (c) 2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -81,6 +81,23 @@ class TestHeaderKeyDict(unittest.TestCase):
         self.assertEquals(headers['content-length'], '20')
         self.assertEquals(headers['CONTENT-LENGTH'], '20')
 
+    def test_setdefault(self):
+        headers = swift.common.swob.HeaderKeyDict()
+
+        # it gets set
+        headers.setdefault('x-rubber-ducky', 'the one')
+        self.assertEquals(headers['X-Rubber-Ducky'], 'the one')
+
+        # it has the right return value
+        ret = headers.setdefault('x-boat', 'dinghy')
+        self.assertEquals(ret, 'dinghy')
+
+        ret = headers.setdefault('x-boat', 'yacht')
+        self.assertEquals(ret, 'dinghy')
+
+        # shouldn't crash
+        headers.setdefault('x-sir-not-appearing-in-this-request', None)
+
     def test_del_contains(self):
         headers = swift.common.swob.HeaderKeyDict()
         headers['Content-Length'] = 0
@@ -101,6 +118,15 @@ class TestHeaderKeyDict(unittest.TestCase):
         self.assertEquals(headers.get('CONTENT-LENGTH'), '20')
         self.assertEquals(headers.get('something-else'), None)
         self.assertEquals(headers.get('something-else', True), True)
+
+    def test_keys(self):
+        headers = swift.common.swob.HeaderKeyDict()
+        headers['content-length'] = 20
+        headers['cOnTent-tYpe'] = 'text/plain'
+        headers['SomeThing-eLse'] = 'somevalue'
+        self.assertEquals(
+            set(headers.keys()),
+            set(('Content-Length', 'Content-Type', 'Something-Else')))
 
 
 class TestRange(unittest.TestCase):
@@ -252,7 +278,10 @@ class TestAccept(unittest.TestCase):
 
     def test_accept_xml(self):
         for accept in ('application/xml', 'application/xml;q=1.0,*/*;q=0.9',
-                       '*/*;q=0.9,application/xml;q=1.0'):
+                       '*/*;q=0.9,application/xml;q=1.0',
+                       'application/xml;charset=UTF-8',
+                       'application/xml;charset=UTF-8;qws="quoted with space"',
+                       'application/xml; q=0.99 ; qws="quoted with space"'):
             acc = swift.common.swob.Accept(accept)
             match = acc.best_match(['text/plain', 'application/xml',
                                    'text/xml'])
@@ -261,11 +290,18 @@ class TestAccept(unittest.TestCase):
     def test_accept_invalid(self):
         for accept in ('*', 'text/plain,,', 'some stuff',
                        'application/xml;q=1.0;q=1.1', 'text/plain,*',
-                       'text /plain', 'text\x7f/plain'):
+                       'text /plain', 'text\x7f/plain',
+                       'text/plain;a=b=c',
+                       'text/plain;q=1;q=2',
+                       'text/plain; ubq="unbalanced " quotes"'):
             acc = swift.common.swob.Accept(accept)
             match = acc.best_match(['text/plain', 'application/xml',
                                    'text/xml'])
             self.assertEquals(match, None)
+
+    def test_repr(self):
+        acc = swift.common.swob.Accept("application/json")
+        self.assertEquals(repr(acc), "application/json")
 
 
 class TestRequest(unittest.TestCase):
@@ -278,6 +314,110 @@ class TestRequest(unittest.TestCase):
         self.assertEquals(req.headers['Content-Type'], 'text/plain')
         self.assertEquals(req.method, 'POST')
 
+    def test_blank_req_environ_property_args(self):
+        blank = swift.common.swob.Request.blank
+        req = blank('/', method='PATCH')
+        self.assertEquals(req.method, 'PATCH')
+        self.assertEquals(req.environ['REQUEST_METHOD'], 'PATCH')
+        req = blank('/', referer='http://example.com')
+        self.assertEquals(req.referer, 'http://example.com')
+        self.assertEquals(req.referrer, 'http://example.com')
+        self.assertEquals(req.environ['HTTP_REFERER'], 'http://example.com')
+        self.assertEquals(req.headers['Referer'], 'http://example.com')
+        req = blank('/', script_name='/application')
+        self.assertEquals(req.script_name, '/application')
+        self.assertEquals(req.environ['SCRIPT_NAME'], '/application')
+        req = blank('/', host='www.example.com')
+        self.assertEquals(req.host, 'www.example.com')
+        self.assertEquals(req.environ['HTTP_HOST'], 'www.example.com')
+        self.assertEquals(req.headers['Host'], 'www.example.com')
+        req = blank('/', remote_addr='127.0.0.1')
+        self.assertEquals(req.remote_addr, '127.0.0.1')
+        self.assertEquals(req.environ['REMOTE_ADDR'], '127.0.0.1')
+        req = blank('/', remote_user='username')
+        self.assertEquals(req.remote_user, 'username')
+        self.assertEquals(req.environ['REMOTE_USER'], 'username')
+        req = blank('/', user_agent='curl/7.22.0 (x86_64-pc-linux-gnu)')
+        self.assertEquals(req.user_agent, 'curl/7.22.0 (x86_64-pc-linux-gnu)')
+        self.assertEquals(req.environ['HTTP_USER_AGENT'],
+                          'curl/7.22.0 (x86_64-pc-linux-gnu)')
+        self.assertEquals(req.headers['User-Agent'],
+                          'curl/7.22.0 (x86_64-pc-linux-gnu)')
+        req = blank('/', query_string='a=b&c=d')
+        self.assertEquals(req.query_string, 'a=b&c=d')
+        self.assertEquals(req.environ['QUERY_STRING'], 'a=b&c=d')
+        req = blank('/', if_match='*')
+        self.assertEquals(req.if_match, '*')
+        self.assertEquals(req.environ['HTTP_IF_MATCH'], '*')
+        self.assertEquals(req.headers['If-Match'], '*')
+
+        # multiple environ property kwargs
+        req = blank('/', method='PATCH', referer='http://example.com',
+                    script_name='/application', host='www.example.com',
+                    remote_addr='127.0.0.1', remote_user='username',
+                    user_agent='curl/7.22.0 (x86_64-pc-linux-gnu)',
+                    query_string='a=b&c=d', if_match='*')
+        self.assertEquals(req.method, 'PATCH')
+        self.assertEquals(req.referer, 'http://example.com')
+        self.assertEquals(req.script_name, '/application')
+        self.assertEquals(req.host, 'www.example.com')
+        self.assertEquals(req.remote_addr, '127.0.0.1')
+        self.assertEquals(req.remote_user, 'username')
+        self.assertEquals(req.user_agent, 'curl/7.22.0 (x86_64-pc-linux-gnu)')
+        self.assertEquals(req.query_string, 'a=b&c=d')
+        self.assertEquals(req.environ['QUERY_STRING'], 'a=b&c=d')
+        self.assertEquals(req.if_match, '*')
+
+    def test_invalid_req_environ_property_args(self):
+        # getter only property
+        try:
+            swift.common.swob.Request.blank('/', params={'a': 'b'})
+        except TypeError as e:
+            self.assertEquals("got unexpected keyword argument 'params'",
+                              str(e))
+        else:
+            self.assert_(False, "invalid req_environ_property "
+                         "didn't raise error!")
+        # regular attribute
+        try:
+            swift.common.swob.Request.blank('/', _params_cache={'a': 'b'})
+        except TypeError as e:
+            self.assertEquals("got unexpected keyword "
+                              "argument '_params_cache'", str(e))
+        else:
+            self.assert_(False, "invalid req_environ_property "
+                         "didn't raise error!")
+        # non-existant attribute
+        try:
+            swift.common.swob.Request.blank('/', params_cache={'a': 'b'})
+        except TypeError as e:
+            self.assertEquals("got unexpected keyword "
+                              "argument 'params_cache'", str(e))
+        else:
+            self.assert_(False, "invalid req_environ_property "
+                         "didn't raise error!")
+        # method
+        try:
+            swift.common.swob.Request.blank(
+                '/', as_referer='GET http://example.com')
+        except TypeError as e:
+            self.assertEquals("got unexpected keyword "
+                              "argument 'as_referer'", str(e))
+        else:
+            self.assert_(False, "invalid req_environ_property "
+                         "didn't raise error!")
+
+    def test_blank_path_info_precedence(self):
+        blank = swift.common.swob.Request.blank
+        req = blank('/a')
+        self.assertEquals(req.path_info, '/a')
+        req = blank('/a', environ={'PATH_INFO': '/a/c'})
+        self.assertEquals(req.path_info, '/a/c')
+        req = blank('/a', environ={'PATH_INFO': '/a/c'}, path_info='/a/c/o')
+        self.assertEquals(req.path_info, '/a/c/o')
+        req = blank('/a', path_info='/a/c/o')
+        self.assertEquals(req.path_info, '/a/c/o')
+
     def test_blank_body_precedence(self):
         req = swift.common.swob.Request.blank(
             '/', environ={'REQUEST_METHOD': 'POST',
@@ -287,6 +427,20 @@ class TestRequest(unittest.TestCase):
         self.assertEquals(req.body, 'hi')
         self.assertEquals(req.headers['Content-Type'], 'text/plain')
         self.assertEquals(req.method, 'POST')
+        body_file = StringIO('asdf')
+        req = swift.common.swob.Request.blank(
+            '/', environ={'REQUEST_METHOD': 'POST',
+                          'wsgi.input': StringIO('')},
+            headers={'Content-Type': 'text/plain'}, body='hi',
+            body_file=body_file)
+        self.assert_(req.body_file is body_file)
+        req = swift.common.swob.Request.blank(
+            '/', environ={'REQUEST_METHOD': 'POST',
+                          'wsgi.input': StringIO('')},
+            headers={'Content-Type': 'text/plain'}, body='hi',
+            content_length=3)
+        self.assertEquals(req.content_length, 3)
+        self.assertEquals(len(req.body), 2)
 
     def test_blank_parsing(self):
         req = swift.common.swob.Request.blank('http://test.com/')
@@ -428,6 +582,11 @@ class TestRequest(unittest.TestCase):
                                          'QUERY_STRING': 'hello=equal&acl'})
         self.assertEqual(req.path_qs, '/hi/there?hello=equal&acl')
 
+    def test_url(self):
+        req = swift.common.swob.Request.blank('/hi/there?hello=equal&acl')
+        self.assertEqual(req.url,
+                         'http://localhost/hi/there?hello=equal&acl')
+
     def test_wsgify(self):
         used_req = []
 
@@ -486,11 +645,11 @@ class TestRequest(unittest.TestCase):
         self.assertEquals(_test_split_path('/a/c/', 2, 3), ['a', 'c', ''])
         try:
             _test_split_path('o\nn e', 2)
-        except ValueError, err:
+        except ValueError as err:
             self.assertEquals(str(err), 'Invalid path: o%0An%20e')
         try:
             _test_split_path('o\nn e', 2, 3, True)
-        except ValueError, err:
+        except ValueError as err:
             self.assertEquals(str(err), 'Invalid path: o%0An%20e')
 
     def test_unicode_path(self):
@@ -501,6 +660,115 @@ class TestRequest(unittest.TestCase):
         req = swift.common.swob.Request.blank(u'/')
         req.query_string = u'x=\u2661'
         self.assertEquals(req.params['x'], u'\u2661'.encode('utf-8'))
+
+    def test_url2(self):
+        pi = '/hi/there'
+        path = pi
+        req = swift.common.swob.Request.blank(path)
+        sche = 'http'
+        exp_url = '%s://localhost%s' % (sche, pi)
+        self.assertEqual(req.url, exp_url)
+
+        qs = 'hello=equal&acl'
+        path = '%s?%s' % (pi, qs)
+        s, p = 'unit.test.example.com', '90'
+        req = swift.common.swob.Request({'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'SERVER_NAME': s,
+                                         'SERVER_PORT': p})
+        exp_url = '%s://%s:%s%s?%s' % (sche, s, p, pi, qs)
+        self.assertEqual(req.url, exp_url)
+
+        host = 'unit.test.example.com'
+        req = swift.common.swob.Request({'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'HTTP_HOST': host + ':80'})
+        exp_url = '%s://%s%s?%s' % (sche, host, pi, qs)
+        self.assertEqual(req.url, exp_url)
+
+        host = 'unit.test.example.com'
+        sche = 'https'
+        req = swift.common.swob.Request({'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'HTTP_HOST': host + ':443',
+                                         'wsgi.url_scheme': sche})
+        exp_url = '%s://%s%s?%s' % (sche, host, pi, qs)
+        self.assertEqual(req.url, exp_url)
+
+        host = 'unit.test.example.com:81'
+        req = swift.common.swob.Request({'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'HTTP_HOST': host,
+                                         'wsgi.url_scheme': sche})
+        exp_url = '%s://%s%s?%s' % (sche, host, pi, qs)
+        self.assertEqual(req.url, exp_url)
+
+    def test_as_referer(self):
+        pi = '/hi/there'
+        qs = 'hello=equal&acl'
+        sche = 'https'
+        host = 'unit.test.example.com:81'
+        req = swift.common.swob.Request({'REQUEST_METHOD': 'POST',
+                                         'PATH_INFO': pi,
+                                         'QUERY_STRING': qs,
+                                         'HTTP_HOST': host,
+                                         'wsgi.url_scheme': sche})
+        exp_url = '%s://%s%s?%s' % (sche, host, pi, qs)
+        self.assertEqual(req.as_referer(), 'POST ' + exp_url)
+
+    def test_message_length_just_content_length(self):
+        req = swift.common.swob.Request.blank(
+            u'/',
+            environ={'REQUEST_METHOD': 'PUT', 'PATH_INFO': '/'})
+        self.assertEquals(req.message_length(), None)
+
+        req = swift.common.swob.Request.blank(
+            u'/',
+            environ={'REQUEST_METHOD': 'PUT', 'PATH_INFO': '/'},
+            body='x' * 42)
+        self.assertEquals(req.message_length(), 42)
+
+        req.headers['Content-Length'] = 'abc'
+        try:
+            req.message_length()
+        except ValueError as e:
+            self.assertEquals(str(e), "Invalid Content-Length header value")
+        else:
+            self.fail("Expected a ValueError raised for 'abc'")
+
+    def test_message_length_transfer_encoding(self):
+        req = swift.common.swob.Request.blank(
+            u'/',
+            environ={'REQUEST_METHOD': 'PUT', 'PATH_INFO': '/'},
+            headers={'transfer-encoding': 'chunked'},
+            body='x' * 42)
+        self.assertEquals(req.message_length(), None)
+
+        req.headers['Transfer-Encoding'] = 'gzip,chunked'
+        try:
+            req.message_length()
+        except AttributeError as e:
+            self.assertEquals(str(e), "Unsupported Transfer-Coding header"
+                              " value specified in Transfer-Encoding header")
+        else:
+            self.fail("Expected an AttributeError raised for 'gzip'")
+
+        req.headers['Transfer-Encoding'] = 'gzip'
+        try:
+            req.message_length()
+        except ValueError as e:
+            self.assertEquals(str(e), "Invalid Transfer-Encoding header value")
+        else:
+            self.fail("Expected a ValueError raised for 'gzip'")
+
+        req.headers['Transfer-Encoding'] = 'gzip,identity'
+        try:
+            req.message_length()
+        except AttributeError as e:
+            self.assertEquals(str(e), "Unsupported Transfer-Coding header"
+                              " value specified in Transfer-Encoding header")
+        else:
+            self.fail("Expected an AttributeError raised for 'gzip,identity'")
 
 
 class TestStatusMap(unittest.TestCase):
@@ -518,8 +786,8 @@ class TestStatusMap(unittest.TestCase):
         self.assert_('The resource could not be found.' in body)
         self.assertEquals(response_args[0], '404 Not Found')
         headers = dict(response_args[1])
-        self.assertEquals(headers['content-type'], 'text/html; charset=UTF-8')
-        self.assert_(int(headers['content-length']) > 0)
+        self.assertEquals(headers['Content-Type'], 'text/html; charset=UTF-8')
+        self.assert_(int(headers['Content-Length']) > 0)
 
 
 class TestResponse(unittest.TestCase):
@@ -580,14 +848,16 @@ class TestResponse(unittest.TestCase):
             '/', environ={'HTTP_HOST': 'somehost'})
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://somehost/something')
 
         req = swift.common.swob.Request.blank(
             '/', environ={'HTTP_HOST': 'somehost:80'})
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://somehost/something')
 
         req = swift.common.swob.Request.blank(
@@ -595,7 +865,8 @@ class TestResponse(unittest.TestCase):
                           'wsgi.url_scheme': 'http'})
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://somehost:443/something')
 
         req = swift.common.swob.Request.blank(
@@ -603,7 +874,8 @@ class TestResponse(unittest.TestCase):
                           'wsgi.url_scheme': 'https'})
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'https://somehost/something')
 
     def test_location_rewrite_no_host(self):
@@ -614,7 +886,8 @@ class TestResponse(unittest.TestCase):
         del req.environ['HTTP_HOST']
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://local/something')
 
         req = swift.common.swob.Request.blank(
@@ -622,7 +895,8 @@ class TestResponse(unittest.TestCase):
         del req.environ['HTTP_HOST']
         resp = self._get_response()
         resp.location = '/something'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://local:81/something')
 
     def test_location_no_rewrite(self):
@@ -632,7 +906,8 @@ class TestResponse(unittest.TestCase):
             '/', environ={'HTTP_HOST': 'somehost'})
         resp = self._get_response()
         resp.location = 'http://www.google.com/'
-        body = ''.join(resp(req.environ, start_response))
+        # read response
+        ''.join(resp(req.environ, start_response))
         self.assertEquals(resp.location, 'http://www.google.com/')
 
     def test_app_iter(self):
@@ -655,7 +930,8 @@ class TestResponse(unittest.TestCase):
         resp.conditional_response = True
         resp.content_length = 10
 
-        content = ''.join(resp._response_iter(resp.app_iter, ''))
+        # read response
+        ''.join(resp._response_iter(resp.app_iter, ''))
 
         self.assertEquals(resp.status, '200 OK')
         self.assertEqual(10, resp.content_length)
@@ -672,7 +948,8 @@ class TestResponse(unittest.TestCase):
         resp.conditional_response = True
         resp.content_length = 10
 
-        content = ''.join(resp._response_iter(resp.app_iter, ''))
+        # read response
+        ''.join(resp._response_iter(resp.app_iter, ''))
 
         self.assertEquals(resp.status, '200 OK')
         self.assertEqual(10, resp.content_length)
@@ -809,6 +1086,14 @@ class TestResponse(unittest.TestCase):
         self.assertEquals(resp.charset, 'utf8')
         resp.charset = 'utf16'
         self.assertEquals(resp.charset, 'utf16')
+
+    def test_charset_content_type(self):
+        resp = swift.common.swob.Response(
+            content_type='text/plain', charset='utf-8')
+        self.assertEquals(resp.charset, 'utf-8')
+        resp = swift.common.swob.Response(
+            charset='utf-8', content_type='text/plain')
+        self.assertEquals(resp.charset, 'utf-8')
 
     def test_etag(self):
         resp = self._get_response()

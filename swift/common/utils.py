@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,20 +17,25 @@
 
 import errno
 import fcntl
+import operator
 import os
 import pwd
+import re
 import sys
+import threading as stdlib_threading
 import time
+import uuid
 import functools
 from hashlib import md5
 from random import random, shuffle
-from urllib import quote
+from urllib import quote as _quote
 from contextlib import contextmanager, closing
 import ctypes
 import ctypes.util
 from ConfigParser import ConfigParser, NoSectionError, NoOptionError, \
     RawConfigParser
 from optparse import OptionParser
+from Queue import Queue, Empty
 from tempfile import mkstemp, NamedTemporaryFile
 try:
     import simplejson as json
@@ -40,15 +45,19 @@ import cPickle as pickle
 import glob
 from urlparse import urlparse as stdlib_urlparse, ParseResult
 import itertools
+import stat
 
 import eventlet
-from eventlet import GreenPool, sleep, Timeout
+import eventlet.semaphore
+from eventlet import GreenPool, sleep, Timeout, tpool, greenthread, \
+    greenio, event
 from eventlet.green import socket, threading
 import netifaces
 import codecs
 utf8_decoder = codecs.getdecoder('utf-8')
 utf8_encoder = codecs.getencoder('utf-8')
 
+from swift import gettext_ as _
 from swift.common.exceptions import LockTimeout, MessageTimeout
 from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND
 
@@ -135,6 +144,22 @@ def config_true_value(value):
         (isinstance(value, basestring) and value.lower() in TRUE_VALUES)
 
 
+def config_auto_int_value(value, default):
+    """
+    Returns default if value is None or 'auto'.
+    Returns value as an int or raises ValueError otherwise.
+    """
+    if value is None or \
+       (isinstance(value, basestring) and value.lower() == 'auto'):
+        return default
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        raise ValueError('Config option must be a integer or the '
+                         'string "auto", not "%s".' % value)
+    return value
+
+
 def noop_libc_function(*args):
     return 0
 
@@ -162,20 +187,134 @@ def load_libc_function(func_name, log_error=True):
         return noop_libc_function
 
 
-def get_param(req, name, default=None):
-    """
-    Get parameters from an HTTP request ensuring proper handling UTF-8
-    encoding.
+def generate_trans_id(trans_id_suffix):
+    return 'tx%s-%010x%s' % (
+        uuid.uuid4().hex[:21], time.time(), trans_id_suffix)
 
-    :param req: request object
-    :param name: parameter name
-    :param default: result to return if the parameter is not found
-    :returns: HTTP request parameter value
-    """
-    value = req.params.get(name, default)
-    if value and not isinstance(value, unicode):
-        value.decode('utf8')    # Ensure UTF8ness
-    return value
+
+def get_trans_id_time(trans_id):
+    if len(trans_id) >= 34 and trans_id[:2] == 'tx' and trans_id[23] == '-':
+        try:
+            return int(trans_id[24:34], 16)
+        except ValueError:
+            pass
+    return None
+
+
+class FileLikeIter(object):
+
+    def __init__(self, iterable):
+        """
+        Wraps an iterable to behave as a file-like object.
+        """
+        self.iterator = iter(iterable)
+        self.buf = None
+        self.closed = False
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        """
+        x.next() -> the next value, or raise StopIteration
+        """
+        if self.closed:
+            raise ValueError('I/O operation on closed file')
+        if self.buf:
+            rv = self.buf
+            self.buf = None
+            return rv
+        else:
+            return self.iterator.next()
+
+    def read(self, size=-1):
+        """
+        read([size]) -> read at most size bytes, returned as a string.
+
+        If the size argument is negative or omitted, read until EOF is reached.
+        Notice that when in non-blocking mode, less data than what was
+        requested may be returned, even if no size parameter was given.
+        """
+        if self.closed:
+            raise ValueError('I/O operation on closed file')
+        if size < 0:
+            return ''.join(self)
+        elif not size:
+            chunk = ''
+        elif self.buf:
+            chunk = self.buf
+            self.buf = None
+        else:
+            try:
+                chunk = self.iterator.next()
+            except StopIteration:
+                return ''
+        if len(chunk) > size:
+            self.buf = chunk[size:]
+            chunk = chunk[:size]
+        return chunk
+
+    def readline(self, size=-1):
+        """
+        readline([size]) -> next line from the file, as a string.
+
+        Retain newline.  A non-negative size argument limits the maximum
+        number of bytes to return (an incomplete line may be returned then).
+        Return an empty string at EOF.
+        """
+        if self.closed:
+            raise ValueError('I/O operation on closed file')
+        data = ''
+        while '\n' not in data and (size < 0 or len(data) < size):
+            if size < 0:
+                chunk = self.read(1024)
+            else:
+                chunk = self.read(size - len(data))
+            if not chunk:
+                break
+            data += chunk
+        if '\n' in data:
+            data, sep, rest = data.partition('\n')
+            data += sep
+            if self.buf:
+                self.buf = rest + self.buf
+            else:
+                self.buf = rest
+        return data
+
+    def readlines(self, sizehint=-1):
+        """
+        readlines([size]) -> list of strings, each a line from the file.
+
+        Call readline() repeatedly and return a list of the lines so read.
+        The optional size argument, if given, is an approximate bound on the
+        total number of bytes in the lines returned.
+        """
+        if self.closed:
+            raise ValueError('I/O operation on closed file')
+        lines = []
+        while True:
+            line = self.readline(sizehint)
+            if not line:
+                break
+            lines.append(line)
+            if sizehint >= 0:
+                sizehint -= len(line)
+                if sizehint <= 0:
+                    break
+        return lines
+
+    def close(self):
+        """
+        close() -> None or (perhaps) an integer.  Close the file.
+
+        Sets data attribute .closed to True.  A closed file cannot be used for
+        further I/O operations.  close() may be called more than once without
+        error.  Some kinds of file objects (for example, opened by popen())
+        may return an exit status upon closing.
+        """
+        self.iterator = None
+        self.closed = True
 
 
 class FallocateWrapper(object):
@@ -198,7 +337,7 @@ class FallocateWrapper(object):
                          "libc.  Leaving as a no-op."))
 
     def __call__(self, fd, mode, offset, length):
-        """ The length parameter must be a ctypes.c_uint64 """
+        """The length parameter must be a ctypes.c_uint64."""
         if FALLOCATE_RESERVE > 0:
             st = os.fstatvfs(fd)
             free = st.f_frsize * st.f_bavail - length.value
@@ -286,7 +425,11 @@ def drop_buffer_cache(fd, offset, length):
 def normalize_timestamp(timestamp):
     """
     Format a timestamp (string or numeric) into a standardized
-    xxxxxxxxxx.xxxxx format.
+    xxxxxxxxxx.xxxxx (10.5) format.
+
+    Note that timestamps using values greater than or equal to November 20th,
+    2286 at 17:46 UTC will use 11 digits to represent the number of
+    seconds.
 
     :param timestamp: unix timestamp
     :returns: normalized timestamp as a string
@@ -304,7 +447,7 @@ def mkdirs(path):
     if not os.path.isdir(path):
         try:
             os.makedirs(path)
-        except OSError, err:
+        except OSError as err:
             if err.errno != errno.EEXIST or not os.path.isdir(path):
                 raise
 
@@ -392,6 +535,29 @@ def validate_device_partition(device, partition):
         raise ValueError('Invalid device: %s' % quote(device or ''))
     elif invalid_partition:
         raise ValueError('Invalid partition: %s' % quote(partition or ''))
+
+
+class GreenthreadSafeIterator(object):
+    """
+    Wrap an iterator to ensure that only one greenthread is inside its next()
+    method at a time.
+
+    This is useful if an iterator's next() method may perform network IO, as
+    that may trigger a greenthread context switch (aka trampoline), which can
+    give another greenthread a chance to call next(). At that point, you get
+    an error like "ValueError: generator already executing". By wrapping calls
+    to next() with a mutex, we avoid that error.
+    """
+    def __init__(self, unsafe_iterable):
+        self.unsafe_iter = iter(unsafe_iterable)
+        self.semaphore = eventlet.semaphore.Semaphore(value=1)
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        with self.semaphore:
+            return self.unsafe_iter.next()
 
 
 class NullLogger():
@@ -758,7 +924,7 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
         log_address = conf.get('log_address', '/dev/log')
         try:
             handler = SysLogHandler(address=log_address, facility=facility)
-        except socket.error, e:
+        except socket.error as e:
             # Either /dev/log isn't a UNIX socket or it does not exist at all
             if e.errno not in [errno.ENOTSOCK, errno.ENOENT]:
                 raise e
@@ -859,8 +1025,8 @@ def drop_privileges(user):
         os.setsid()
     except OSError:
         pass
-    os.chdir('/')  # in case you need to rmdir on where you started the daemon
-    os.umask(022)  # ensure files are created with the correct privileges
+    os.chdir('/')   # in case you need to rmdir on where you started the daemon
+    os.umask(0o22)  # ensure files are created with the correct privileges
 
 
 def capture_stdio(logger, **kwargs):
@@ -926,7 +1092,7 @@ def parse_options(parser=None, once=False, test_args=None):
 
     if not args:
         parser.print_usage()
-        print _("Error: missing config file argument")
+        print _("Error: missing config path argument")
         sys.exit(1)
     config = os.path.abspath(args.pop(0))
     if not os.path.exists(config):
@@ -962,27 +1128,33 @@ def whataremyips():
                 if family not in (netifaces.AF_INET, netifaces.AF_INET6):
                     continue
                 for address in iface_data[family]:
-                    addresses.append(address['addr'])
+                    addr = address['addr']
+
+                    # If we have an ipv6 address remove the
+                    # %ether_interface at the end
+                    if family == netifaces.AF_INET6:
+                        addr = addr.split('%')[0]
+                    addresses.append(addr)
         except ValueError:
             pass
     return addresses
 
 
-def storage_directory(datadir, partition, hash):
+def storage_directory(datadir, partition, name_hash):
     """
     Get the storage directory
 
     :param datadir: Base data directory
     :param partition: Partition
-    :param hash: Account, container or object hash
+    :param name_hash: Account, container or object name hash
     :returns: Storage directory
     """
-    return os.path.join(datadir, str(partition), hash[-3:], hash)
+    return os.path.join(datadir, str(partition), name_hash[-3:], name_hash)
 
 
 def hash_path(account, container=None, object=None, raw_digest=False):
     """
-    Get the connonical hash for an account/container/object
+    Get the canonical hash for an account/container/object
 
     :param account: Account
     :param container: Container
@@ -1028,7 +1200,7 @@ def lock_path(directory, timeout=10):
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
-                except IOError, err:
+                except IOError as err:
                     if err.errno != errno.EAGAIN:
                         raise
                 sleep(0.01)
@@ -1063,7 +1235,7 @@ def lock_file(filename, timeout=10, append=False, unlink=True):
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
-                except IOError, err:
+                except IOError as err:
                     if err.errno != errno.EAGAIN:
                         raise
                 sleep(0.01)
@@ -1123,32 +1295,6 @@ def compute_eta(start_time, current_value, final_value):
     return get_time_units(1.0 / completion * elapsed - elapsed)
 
 
-def iter_devices_partitions(devices_dir, item_type):
-    """
-    Iterate over partitions across all devices.
-
-    :param devices_dir: Path to devices
-    :param item_type: One of 'accounts', 'containers', or 'objects'
-    :returns: Each iteration returns a tuple of (device, partition)
-    """
-    devices = listdir(devices_dir)
-    shuffle(devices)
-    devices_partitions = []
-    for device in devices:
-        partitions = listdir(os.path.join(devices_dir, device, item_type))
-        shuffle(partitions)
-        devices_partitions.append((device, iter(partitions)))
-    yielded = True
-    while yielded:
-        yielded = False
-        for device, partitions in devices_partitions:
-            try:
-                yield device, partitions.next()
-                yielded = True
-            except StopIteration:
-                pass
-
-
 def unlink_older_than(path, mtime):
     """
     Remove any file in a given path that that was last modified before mtime.
@@ -1156,14 +1302,13 @@ def unlink_older_than(path, mtime):
     :param path: path to remove file from
     :mtime: timestamp of oldest file to keep
     """
-    if os.path.exists(path):
-        for fname in listdir(path):
-            fpath = os.path.join(path, fname)
-            try:
-                if os.path.getmtime(fpath) < mtime:
-                    os.unlink(fpath)
-            except OSError:
-                pass
+    for fname in listdir(path):
+        fpath = os.path.join(path, fname)
+        try:
+            if os.path.getmtime(fpath) < mtime:
+                os.unlink(fpath)
+        except OSError:
+            pass
 
 
 def item_from_env(env, item_name):
@@ -1193,13 +1338,21 @@ def cache_from_env(env):
     return item_from_env(env, 'swift.cache')
 
 
-def readconf(conffile, section_name=None, log_name=None, defaults=None,
+def read_conf_dir(parser, conf_dir):
+    conf_files = []
+    for f in os.listdir(conf_dir):
+        if f.endswith('.conf') and not f.startswith('.'):
+            conf_files.append(os.path.join(conf_dir, f))
+    return parser.read(sorted(conf_files))
+
+
+def readconf(conf_path, section_name=None, log_name=None, defaults=None,
              raw=False):
     """
-    Read config file and return config items as a dict
+    Read config file(s) and return config items as a dict
 
-    :param conffile: path to config file, or a file-like object (hasattr
-                     readline)
+    :param conf_path: path to config file/directory, or a file-like object
+                     (hasattr readline)
     :param section_name: config section to read (will return all sections if
                      not defined)
     :param log_name: name to be used with logging (will use section_name if
@@ -1213,18 +1366,23 @@ def readconf(conffile, section_name=None, log_name=None, defaults=None,
         c = RawConfigParser(defaults)
     else:
         c = ConfigParser(defaults)
-    if hasattr(conffile, 'readline'):
-        c.readfp(conffile)
+    if hasattr(conf_path, 'readline'):
+        c.readfp(conf_path)
     else:
-        if not c.read(conffile):
-            print _("Unable to read config file %s") % conffile
+        if os.path.isdir(conf_path):
+            # read all configs in directory
+            success = read_conf_dir(c, conf_path)
+        else:
+            success = c.read(conf_path)
+        if not success:
+            print _("Unable to read config from %s") % conf_path
             sys.exit(1)
     if section_name:
         if c.has_section(section_name):
             conf = dict(c.items(section_name))
         else:
             print _("Unable to find %s config section in %s") % \
-                (section_name, conffile)
+                (section_name, conf_path)
             sys.exit(1)
         if "log_name" not in conf:
             if log_name is not None:
@@ -1237,7 +1395,7 @@ def readconf(conffile, section_name=None, log_name=None, defaults=None,
             conf.update({s: dict(c.items(s))})
         if 'log_name' not in conf:
             conf['log_name'] = log_name
-    conf['__file__'] = conffile
+    conf['__file__'] = conf_path
     return conf
 
 
@@ -1262,27 +1420,44 @@ def write_pickle(obj, dest, tmp=None, pickle_protocol=0):
         renamer(tmppath, dest)
 
 
-def search_tree(root, glob_match, ext):
-    """Look in root, for any files/dirs matching glob, recurively traversing
+def search_tree(root, glob_match, ext='', dir_ext=None):
+    """Look in root, for any files/dirs matching glob, recursively traversing
     any found directories looking for files ending with ext
 
     :param root: start of search path
     :param glob_match: glob to match in root, matching dirs are traversed with
                        os.walk
     :param ext: only files that end in ext will be returned
+    :param dir_ext: if present directories that end with dir_ext will not be
+                    traversed and instead will be returned as a matched path
 
     :returns: list of full paths to matching files, sorted
 
     """
     found_files = []
     for path in glob.glob(os.path.join(root, glob_match)):
-        if path.endswith(ext):
-            found_files.append(path)
-        else:
+        if os.path.isdir(path):
             for root, dirs, files in os.walk(path):
-                for file in files:
-                    if file.endswith(ext):
-                        found_files.append(os.path.join(root, file))
+                if dir_ext and root.endswith(dir_ext):
+                    found_files.append(root)
+                    # the root is a config dir, descend no further
+                    break
+                for file_ in files:
+                    if ext and not file_.endswith(ext):
+                        continue
+                    found_files.append(os.path.join(root, file_))
+                found_dir = False
+                for dir_ in dirs:
+                    if dir_ext and dir_.endswith(dir_ext):
+                        found_dir = True
+                        found_files.append(os.path.join(root, dir_))
+                if found_dir:
+                    # do not descend further into matching directories
+                    break
+        else:
+            if ext and not path.endswith(ext):
+                continue
+            found_files.append(path)
     return sorted(found_files)
 
 
@@ -1297,7 +1472,7 @@ def write_file(path, contents):
     if not os.path.exists(dirname):
         try:
             os.makedirs(dirname)
-        except OSError, err:
+        except OSError as err:
             if err.errno == errno.EACCES:
                 sys.exit('Unable to create %s.  Running as '
                          'non-root?' % dirname)
@@ -1316,7 +1491,8 @@ def remove_file(path):
         pass
 
 
-def audit_location_generator(devices, datadir, mount_check=True, logger=None):
+def audit_location_generator(devices, datadir, suffix='',
+                             mount_check=True, logger=None):
     '''
     Given a devices path and a data directory, yield (path, device,
     partition) for all files in that directory
@@ -1325,6 +1501,7 @@ def audit_location_generator(devices, datadir, mount_check=True, logger=None):
     :param datadir: a directory located under self.devices. This should be
                     one of the DATADIR constants defined in the account,
                     container, and object servers.
+    :param suffix: path name suffix required for all names returned
     :param mount_check: Flag to check if a mount check should be performed
                     on devices
     :param logger: a logger object
@@ -1340,25 +1517,34 @@ def audit_location_generator(devices, datadir, mount_check=True, logger=None):
                     _('Skipping %s as it is not mounted'), device)
             continue
         datadir_path = os.path.join(devices, device, datadir)
-        if not os.path.exists(datadir_path):
-            continue
         partitions = listdir(datadir_path)
         for partition in partitions:
             part_path = os.path.join(datadir_path, partition)
-            if not os.path.isdir(part_path):
+            try:
+                suffixes = listdir(part_path)
+            except OSError as e:
+                if e.errno != errno.ENOTDIR:
+                    raise
                 continue
-            suffixes = listdir(part_path)
-            for suffix in suffixes:
-                suff_path = os.path.join(part_path, suffix)
-                if not os.path.isdir(suff_path):
+            for asuffix in suffixes:
+                suff_path = os.path.join(part_path, asuffix)
+                try:
+                    hashes = listdir(suff_path)
+                except OSError as e:
+                    if e.errno != errno.ENOTDIR:
+                        raise
                     continue
-                hashes = listdir(suff_path)
                 for hsh in hashes:
                     hash_path = os.path.join(suff_path, hsh)
-                    if not os.path.isdir(hash_path):
+                    try:
+                        files = sorted(listdir(hash_path), reverse=True)
+                    except OSError as e:
+                        if e.errno != errno.ENOTDIR:
+                            raise
                         continue
-                    for fname in sorted(listdir(hash_path),
-                                        reverse=True):
+                    for fname in files:
+                        if suffix and not fname.endswith(suffix):
+                            continue
                         path = os.path.join(hash_path, fname)
                         yield path, device, partition
 
@@ -1454,6 +1640,113 @@ def validate_sync_to(value, allowed_sync_hosts):
     return None
 
 
+def affinity_key_function(affinity_str):
+    """Turns an affinity config value into a function suitable for passing to
+    sort(). After doing so, the array will be sorted with respect to the given
+    ordering.
+
+    For example, if affinity_str is "r1=1, r2z7=2, r2z8=2", then the array
+    will be sorted with all nodes from region 1 (r1=1) first, then all the
+    nodes from region 2 zones 7 and 8 (r2z7=2 and r2z8=2), then everything
+    else.
+
+    Note that the order of the pieces of affinity_str is irrelevant; the
+    priority values are what comes after the equals sign.
+
+    If affinity_str is empty or all whitespace, then the resulting function
+    will not alter the ordering of the nodes. However, if affinity_str
+    contains an invalid value, then None is returned.
+
+    :param affinity_str: affinity config value, e.g. "r1z2=3"
+                         or "r1=1, r2z1=2, r2z2=2"
+    :returns: single-argument function
+    :raises: ValueError if argument invalid
+    """
+    affinity_str = affinity_str.strip()
+
+    if not affinity_str:
+        return lambda x: 0
+
+    priority_matchers = []
+    pieces = [s.strip() for s in affinity_str.split(',')]
+    for piece in pieces:
+        # matches r<number>=<number> or r<number>z<number>=<number>
+        match = re.match("r(\d+)(?:z(\d+))?=(\d+)$", piece)
+        if match:
+            region, zone, priority = match.groups()
+            region = int(region)
+            priority = int(priority)
+            zone = int(zone) if zone else None
+
+            matcher = {'region': region, 'priority': priority}
+            if zone is not None:
+                matcher['zone'] = zone
+            priority_matchers.append(matcher)
+        else:
+            raise ValueError("Invalid affinity value: %r" % affinity_str)
+
+    priority_matchers.sort(key=operator.itemgetter('priority'))
+
+    def keyfn(ring_node):
+        for matcher in priority_matchers:
+            if (matcher['region'] == ring_node['region']
+                and ('zone' not in matcher
+                     or matcher['zone'] == ring_node['zone'])):
+                return matcher['priority']
+        return 4294967296  # 2^32, i.e. "a big number"
+    return keyfn
+
+
+def affinity_locality_predicate(write_affinity_str):
+    """
+    Turns a write-affinity config value into a predicate function for nodes.
+    The returned value will be a 1-arg function that takes a node dictionary
+    and returns a true value if it is "local" and a false value otherwise. The
+    definition of "local" comes from the affinity_str argument passed in here.
+
+    For example, if affinity_str is "r1, r2z2", then only nodes where region=1
+    or where (region=2 and zone=2) are considered local.
+
+    If affinity_str is empty or all whitespace, then the resulting function
+    will consider everything local
+
+    :param affinity_str: affinity config value, e.g. "r1z2"
+        or "r1, r2z1, r2z2"
+    :returns: single-argument function, or None if affinity_str is empty
+    :raises: ValueError if argument invalid
+    """
+    affinity_str = write_affinity_str.strip()
+
+    if not affinity_str:
+        return None
+
+    matchers = []
+    pieces = [s.strip() for s in affinity_str.split(',')]
+    for piece in pieces:
+        # matches r<number> or r<number>z<number>
+        match = re.match("r(\d+)(?:z(\d+))?$", piece)
+        if match:
+            region, zone = match.groups()
+            region = int(region)
+            zone = int(zone) if zone else None
+
+            matcher = {'region': region}
+            if zone is not None:
+                matcher['zone'] = zone
+            matchers.append(matcher)
+        else:
+            raise ValueError("Invalid write-affinity value: %r" % affinity_str)
+
+    def is_local(ring_node):
+        for matcher in matchers:
+            if (matcher['region'] == ring_node['region']
+                and ('zone' not in matcher
+                     or matcher['zone'] == ring_node['zone'])):
+                return True
+        return False
+    return is_local
+
+
 def get_remote_client(req):
     # remote host for zeus
     client = req.headers.get('x-cluster-client-ip')
@@ -1508,7 +1801,7 @@ def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
             finally:
                 try:
                     os.unlink(tf.name)
-                except OSError, err:
+                except OSError as err:
                     if err.errno != errno.ENOENT:
                         raise
     except (Exception, Timeout):
@@ -1518,7 +1811,7 @@ def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
 def listdir(path):
     try:
         return os.listdir(path)
-    except OSError, err:
+    except OSError as err:
         if err.errno != errno.ENOENT:
             raise
     return []
@@ -1544,6 +1837,25 @@ def streq_const_time(s1, s2):
     return result == 0
 
 
+def replication(func):
+    """
+    Decorator to declare which methods are accessible for different
+    type of servers:
+
+    * If option replication_server is None then this decorator
+      doesn't matter.
+    * If option replication_server is True then ONLY decorated with
+      this decorator methods will be started.
+    * If option replication_server is False then decorated with this
+      decorator methods will NOT be started.
+
+    :param func: function to mark accessible for replication
+    """
+    func.replication = True
+
+    return func
+
+
 def public(func):
     """
     Decorator to declare which methods are publicly accessible as HTTP
@@ -1557,6 +1869,14 @@ def public(func):
     def wrapped(*a, **kw):
         return func(*a, **kw)
     return wrapped
+
+
+def quorum_size(n):
+    """
+    Number of successful backend requests needed for the proxy to consider
+    the client request successful.
+    """
+    return (n // 2) + 1
 
 
 def rsync_ip(ip):
@@ -1671,3 +1991,270 @@ class InputProxy(object):
             raise
         self.bytes_received += len(line)
         return line
+
+
+def tpool_reraise(func, *args, **kwargs):
+    """
+    Hack to work around Eventlet's tpool not catching and reraising Timeouts.
+    """
+    def inner():
+        try:
+            return func(*args, **kwargs)
+        except BaseException as err:
+            return err
+    resp = tpool.execute(inner)
+    if isinstance(resp, BaseException):
+        raise resp
+    return resp
+
+
+class ThreadPool(object):
+    BYTE = 'a'.encode('utf-8')
+
+    """
+    Perform blocking operations in background threads.
+
+    Call its methods from within greenlets to green-wait for results without
+    blocking the eventlet reactor (hopefully).
+    """
+    def __init__(self, nthreads=2):
+        self.nthreads = nthreads
+        self._run_queue = Queue()
+        self._result_queue = Queue()
+        self._threads = []
+
+        if nthreads <= 0:
+            return
+
+        # We spawn a greenthread whose job it is to pull results from the
+        # worker threads via a real Queue and send them to eventlet Events so
+        # that the calling greenthreads can be awoken.
+        #
+        # Since each OS thread has its own collection of greenthreads, it
+        # doesn't work to have the worker thread send stuff to the event, as
+        # it then notifies its own thread-local eventlet hub to wake up, which
+        # doesn't do anything to help out the actual calling greenthread over
+        # in the main thread.
+        #
+        # Thus, each worker sticks its results into a result queue and then
+        # writes a byte to a pipe, signaling the result-consuming greenlet (in
+        # the main thread) to wake up and consume results.
+        #
+        # This is all stuff that eventlet.tpool does, but that code can't have
+        # multiple instances instantiated. Since the object server uses one
+        # pool per disk, we have to reimplement this stuff.
+        _raw_rpipe, self.wpipe = os.pipe()
+        self.rpipe = greenio.GreenPipe(_raw_rpipe, 'rb', bufsize=0)
+
+        for _junk in xrange(nthreads):
+            thr = stdlib_threading.Thread(
+                target=self._worker,
+                args=(self._run_queue, self._result_queue))
+            thr.daemon = True
+            thr.start()
+            self._threads.append(thr)
+
+        # This is the result-consuming greenthread that runs in the main OS
+        # thread, as described above.
+        self._consumer_coro = greenthread.spawn_n(self._consume_results,
+                                                  self._result_queue)
+
+    def _worker(self, work_queue, result_queue):
+        """
+        Pulls an item from the queue and runs it, then puts the result into
+        the result queue. Repeats forever.
+
+        :param work_queue: queue from which to pull work
+        :param result_queue: queue into which to place results
+        """
+        while True:
+            item = work_queue.get()
+            ev, func, args, kwargs = item
+            try:
+                result = func(*args, **kwargs)
+                result_queue.put((ev, True, result))
+            except BaseException as err:
+                result_queue.put((ev, False, err))
+            finally:
+                work_queue.task_done()
+                os.write(self.wpipe, self.BYTE)
+
+    def _consume_results(self, queue):
+        """
+        Runs as a greenthread in the same OS thread as callers of
+        run_in_thread().
+
+        Takes results from the worker OS threads and sends them to the waiting
+        greenthreads.
+        """
+        while True:
+            try:
+                self.rpipe.read(1)
+            except ValueError:
+                # can happen at process shutdown when pipe is closed
+                break
+
+            while True:
+                try:
+                    ev, success, result = queue.get(block=False)
+                except Empty:
+                    break
+
+                try:
+                    if success:
+                        ev.send(result)
+                    else:
+                        ev.send_exception(result)
+                finally:
+                    queue.task_done()
+
+    def run_in_thread(self, func, *args, **kwargs):
+        """
+        Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
+        until results are available.
+
+        Exceptions thrown will be reraised in the calling thread.
+
+        If the threadpool was initialized with nthreads=0, just calls
+        func(*args, **kwargs).
+
+        :returns: result of calling func
+        :raises: whatever func raises
+        """
+        if self.nthreads <= 0:
+            return func(*args, **kwargs)
+
+        ev = event.Event()
+        self._run_queue.put((ev, func, args, kwargs), block=False)
+
+        # blocks this greenlet (and only *this* greenlet) until the real
+        # thread calls ev.send().
+        result = ev.wait()
+        return result
+
+    def _run_in_eventlet_tpool(self, func, *args, **kwargs):
+        """
+        Really run something in an external thread, even if we haven't got any
+        threads of our own.
+        """
+        def inner():
+            try:
+                return (True, func(*args, **kwargs))
+            except (Timeout, BaseException) as err:
+                return (False, err)
+
+        success, result = tpool.execute(inner)
+        if success:
+            return result
+        else:
+            raise result
+
+    def force_run_in_thread(self, func, *args, **kwargs):
+        """
+        Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
+        until results are available.
+
+        Exceptions thrown will be reraised in the calling thread.
+
+        If the threadpool was initialized with nthreads=0, uses eventlet.tpool
+        to run the function. This is in contrast to run_in_thread(), which
+        will (in that case) simply execute func in the calling thread.
+
+        :returns: result of calling func
+        :raises: whatever func raises
+        """
+        if self.nthreads <= 0:
+            return self._run_in_eventlet_tpool(func, *args, **kwargs)
+        else:
+            return self.run_in_thread(func, *args, **kwargs)
+
+
+def ismount(path):
+    """
+    Test whether a path is a mount point.
+
+    This is code hijacked from C Python 2.6.8, adapted to remove the extra
+    lstat() system call.
+    """
+    try:
+        s1 = os.lstat(path)
+    except os.error as err:
+        if err.errno == errno.ENOENT:
+            # It doesn't exist -- so not a mount point :-)
+            return False
+        raise
+
+    if stat.S_ISLNK(s1.st_mode):
+        # A symlink can never be a mount point
+        return False
+
+    s2 = os.lstat(os.path.join(path, '..'))
+    dev1 = s1.st_dev
+    dev2 = s2.st_dev
+    if dev1 != dev2:
+        # path/.. on a different device as path
+        return True
+
+    ino1 = s1.st_ino
+    ino2 = s2.st_ino
+    if ino1 == ino2:
+        # path/.. is the same i-node as path
+        return True
+
+    return False
+
+
+_rfc_token = r'[^()<>@,;:\"/\[\]?={}\x00-\x20\x7f]+'
+_rfc_extension_pattern = re.compile(
+    r'(?:\s*;\s*(' + _rfc_token + r")\s*(?:=\s*(" + _rfc_token +
+    r'|"(?:[^"\\]|\\.)*"))?)')
+
+
+def parse_content_type(content_type):
+    """
+    Parse a content-type and its parameters into values.
+    RFC 2616 sec 14.17 and 3.7 are pertinent.
+
+    **Examples**::
+
+        'text/plain; charset=UTF-8' -> ('text/plain', [('charset, 'UTF-8')])
+        'text/plain; charset=UTF-8; level=1' ->
+            ('text/plain', [('charset, 'UTF-8'), ('level', '1')])
+
+    :param content_type: content_type to parse
+    :returns: a typle containing (content type, list of k, v parameter tuples)
+    """
+    parm_list = []
+    if ';' in content_type:
+        content_type, parms = content_type.split(';', 1)
+        parms = ';' + parms
+        for m in _rfc_extension_pattern.findall(parms):
+            key = m[0].strip()
+            value = m[1].strip()
+            parm_list.append((key, value))
+    return content_type, parm_list
+
+
+def override_bytes_from_content_type(listing_dict, logger=None):
+    """
+    Takes a dict from a container listing and overrides the content_type,
+    bytes fields if swift_bytes is set.
+    """
+    content_type, params = parse_content_type(listing_dict['content_type'])
+    for key, value in params:
+        if key == 'swift_bytes':
+            try:
+                listing_dict['bytes'] = int(value)
+            except ValueError:
+                if logger:
+                    logger.exception("Invalid swift_bytes")
+        else:
+            content_type += ';%s=%s' % (key, value)
+    listing_dict['content_type'] = content_type
+
+
+def quote(value, safe='/'):
+    """
+    Patched version of urllib.quote that encodes utf-8 strings before quoting
+    """
+    return _quote(get_valid_utf8_str(value), safe)

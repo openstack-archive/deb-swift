@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,39 +13,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from swift import gettext_ as _
 from eventlet import Timeout
-import uuid
 
 from swift.common.swob import Request, HTTPServerError
-from swift.common.utils import get_logger
+from swift.common.utils import get_logger, generate_trans_id
 from swift.common.wsgi import WSGIContext
 
 
 class CatchErrorsContext(WSGIContext):
 
-    def __init__(self, app, logger):
+    def __init__(self, app, logger, trans_id_suffix=''):
         super(CatchErrorsContext, self).__init__(app)
         self.logger = logger
+        self.trans_id_suffix = trans_id_suffix
 
     def handle_request(self, env, start_response):
-        trans_id = 'tx' + uuid.uuid4().hex
+        trans_id = generate_trans_id(self.trans_id_suffix)
         env['swift.trans_id'] = trans_id
         self.logger.txn_id = trans_id
         try:
             # catch any errors in the pipeline
             resp = self._app_call(env)
-        except (Exception, Timeout), err:
+        except (Exception, Timeout) as err:
             self.logger.exception(_('Error: %s'), err)
             resp = HTTPServerError(request=Request(env),
                                    body='An error occurred',
                                    content_type='text/plain')
-            resp.headers['x-trans-id'] = trans_id
+            resp.headers['X-Trans-Id'] = trans_id
             return resp(env, start_response)
 
         # make sure the response has the trans_id
         if self._response_headers is None:
             self._response_headers = []
-        self._response_headers.append(('x-trans-id', trans_id))
+        self._response_headers.append(('X-Trans-Id', trans_id))
         start_response(self._response_status, self._response_headers,
                        self._response_exc_info)
         return resp
@@ -60,12 +61,15 @@ class CatchErrorMiddleware(object):
     def __init__(self, app, conf):
         self.app = app
         self.logger = get_logger(conf, log_route='catch-errors')
+        self.trans_id_suffix = conf.get('trans_id_suffix', '')
 
     def __call__(self, env, start_response):
         """
         If used, this should be the first middleware in pipeline.
         """
-        context = CatchErrorsContext(self.app, self.logger)
+        context = CatchErrorsContext(self.app,
+                                     self.logger,
+                                     self.trans_id_suffix)
         return context.handle_request(env, start_response)
 
 

@@ -59,9 +59,18 @@ TCP port the proxy server should bind to. The default is 80.
 .IP \fBbacklog\fR
 TCP backlog.  Maximum number of allowed pending connections. The default value is 4096.
 .IP \fBworkers\fR
-Number of container server workers to fork. The default is 1.
+The number of pre-forked processes that will accept connections.  Zero means
+no fork.  The default is auto which will make the server try to match the
+number of effective cpu cores if python multiprocessing is available (included
+with most python distributions >= 2.6) or fallback to one.  It's worth noting
+that individual workers will use many eventlet co-routines to service multiple
+concurrent requests.
+.IP \fBmax_clients\fR
+Maximum number of clients one worker can process simultaneously (it will
+actually accept(2) N + 1). Setting this to one (1) will only handle one request
+at a time, without accepting another request concurrently.  The default is 1024.
 .IP \fBuser\fR
-The system user that the container server will run as. The default is swift.
+The system user that the proxy server will run as. The default is swift.
 .IP \fBswift_dir\fR
 Swift configuration directory. The default is /etc/swift.
 .IP \fBcert_file\fR
@@ -78,6 +87,10 @@ Syslog log facility. The default is LOG_LOCAL0.
 Logging level. The default is INFO.
 .IP \fBlog_address\fR
 Logging address. The default is /dev/log.
+.IP \fBtrans_id_suffix\fR
+This optional suffix (default is empty) that would be appended to the swift transaction
+id allows one to easily figure out from which cluster that X-Trans-Id belongs to.
+This is very useful when one is managing more than one swift cluster.
 .RE
 .PD
 
@@ -431,7 +444,7 @@ Python regular expressions of substrings that will not be allowed in a name.
 
 
 .RS 0
-.IP "\fB[filter:proxy_logging]\fR"
+.IP "\fB[filter:proxy-logging]\fR"
 .RE
 
 Logging for the proxy server now lives in this middleware.
@@ -462,7 +475,7 @@ Default is localhost.
 Default is 8125.
 .IP \fBaccess_log_statsd_default_sample_rate\fR
 Default is 1.
-.IP \fBaccess_log_statsd_metric_prefix =
+.IP \fBaccess_log_statsd_metric_prefix\fR
 Default is "" (empty-string)
 .IP \fBaccess_log_headers\fR
 Default is False.
@@ -486,13 +499,13 @@ that are acceptable within this section.
 .IP \fBuse\fR
 Entry point for paste.deploy for the proxy server. This is the reference to the installed python egg.
 This is normally \fBegg:swift#proxy\fR.
-.IP \fBset log_name\fR
+.IP "\fBset log_name\fR"
 Label used when logging. The default is proxy-server.
-.IP \fBset log_facility\fR
+.IP "\fBset log_facility\fR"
 Syslog log facility. The default is LOG_LOCAL0.
-.IP \fB set log_level\fR
+.IP "\fBset log_level\fR"
 Logging level. The default is INFO.
-.IP \fB set log_address\fR
+.IP "\fBset log_address\fR"
 Logging address. The default is /dev/log.
 .IP \fBlog_handoffs\fR
 Log when handoff locations are used.  Default is True.

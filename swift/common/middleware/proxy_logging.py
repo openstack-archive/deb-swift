@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2011 OpenStack, LLC.
+# Copyright (c) 2010-2011 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ The logging format implemented below is as follows:
 
 client_ip remote_addr datetime request_method request_path protocol
     status_int referer user_agent auth_token bytes_recvd bytes_sent
-    client_etag transaction_id headers request_time source
+    client_etag transaction_id headers request_time source log_info
 
 These values are space-separated, and each is url-encoded, so that they can
 be separated with a simple .split()
@@ -32,6 +32,18 @@ be separated with a simple .split()
   client_ip is swift's best guess at the end-user IP, extracted variously
   from the X-Forwarded-For header, X-Cluster-Ip header, or the REMOTE_ADDR
   environment variable.
+
+* source (swift.source in the WSGI environment) indicates the code
+  that generated the request, such as most middleware. (See below for
+  more detail.)
+
+* log_info (swift.log_info in the WSGI environment) is for additional
+  information that could prove quite useful, such as any x-delete-at
+  value or other "behind the scenes" activity that might not
+  otherwise be detectable from the plain log information. Code that
+  wishes to add additional log information should use code like
+  ``env.setdefault('swift.log_info', []).append(your_info)`` so as to
+  not disturb others' log information.
 
 * Values that are missing (e.g. due to a header not being present) or zero
   are generally represented by a single hyphen ('-').
@@ -65,6 +77,9 @@ from swift.common.swob import Request
 from swift.common.utils import (get_logger, get_remote_client,
                                 get_valid_utf8_str, config_true_value,
                                 InputProxy)
+from swift.common.constraints import MAX_HEADER_SIZE
+
+QUOTE_SAFE = '/:'
 
 
 class ProxyLoggingMiddleware(object):
@@ -98,6 +113,8 @@ class ProxyLoggingMiddleware(object):
         self.access_logger = get_logger(access_log_conf,
                                         log_route='proxy-access')
         self.access_logger.set_statsd_prefix('proxy-server')
+        self.reveal_sensitive_prefix = int(conf.get('reveal_sensitive_prefix',
+                                                    MAX_HEADER_SIZE))
 
     def method_from_req(self, req):
         return req.environ.get('swift.orig_req_method', req.method)
@@ -107,6 +124,13 @@ class ProxyLoggingMiddleware(object):
 
     def mark_req_logged(self, req):
         req.environ['swift.proxy_access_log_made'] = True
+
+    def obscure_sensitive(self, value):
+        if not value:
+            return '-'
+        if len(value) > self.reveal_sensitive_prefix:
+            return value[:self.reveal_sensitive_prefix] + '...'
+        return value
 
     def log_request(self, req, status_int, bytes_received, bytes_sent,
                     request_time):
@@ -122,7 +146,7 @@ class ProxyLoggingMiddleware(object):
         if self.req_already_logged(req):
             return
         req_path = get_valid_utf8_str(req.path)
-        the_request = quote(unquote(req_path))
+        the_request = quote(unquote(req_path), QUOTE_SAFE)
         if req.query_string:
             the_request = the_request + '?' + req.query_string
         logged_headers = None
@@ -131,7 +155,7 @@ class ProxyLoggingMiddleware(object):
                                        for k, v in req.headers.items())
         method = self.method_from_req(req)
         self.access_logger.info(' '.join(
-            quote(str(x) if x else '-')
+            quote(str(x) if x else '-', QUOTE_SAFE)
             for x in (
                 get_remote_client(req),
                 req.remote_addr,
@@ -142,7 +166,7 @@ class ProxyLoggingMiddleware(object):
                 status_int,
                 req.referer,
                 req.user_agent,
-                req.headers.get('x-auth-token'),
+                self.obscure_sensitive(req.headers.get('x-auth-token')),
                 bytes_received,
                 bytes_sent,
                 req.headers.get('etag', None),
@@ -150,6 +174,7 @@ class ProxyLoggingMiddleware(object):
                 logged_headers,
                 '%.4f' % request_time,
                 req.environ.get('swift.source'),
+                ','.join(req.environ.get('swift.log_info') or '-'),
             )))
         self.mark_req_logged(req)
         # Log timing and bytes-transfered data to StatsD

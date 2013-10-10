@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +14,9 @@
 # limitations under the License.
 
 import cPickle as pickle
-import json
 import os
 import unittest
+from contextlib import closing
 from gzip import GzipFile
 from shutil import rmtree
 from time import time
@@ -42,13 +42,15 @@ class TestObjectUpdater(unittest.TestCase):
                                     'object_updater')
         rmtree(self.testdir, ignore_errors=1)
         os.mkdir(self.testdir)
-        pickle.dump(
-            RingData([[0, 1, 0, 1], [1, 0, 1, 0]],
-                     [{'id': 0, 'ip': '127.0.0.1', 'port': 1, 'device': 'sda1',
-                       'zone': 0},
-                      {'id': 1, 'ip': '127.0.0.1', 'port': 1, 'device': 'sda1',
-                       'zone': 2}], 30),
-            GzipFile(os.path.join(self.testdir, 'container.ring.gz'), 'wb'))
+        ring_file = os.path.join(self.testdir, 'container.ring.gz')
+        with closing(GzipFile(ring_file, 'wb')) as f:
+            pickle.dump(
+                RingData([[0, 1, 0, 1], [1, 0, 1, 0]],
+                         [{'id': 0, 'ip': '127.0.0.1', 'port': 1,
+                           'device': 'sda1', 'zone': 0},
+                          {'id': 1, 'ip': '127.0.0.1', 'port': 1,
+                           'device': 'sda1', 'zone': 2}], 30),
+                f)
         self.devices_dir = os.path.join(self.testdir, 'devices')
         os.mkdir(self.devices_dir)
         self.sda1 = os.path.join(self.devices_dir, 'sda1')
@@ -173,7 +175,7 @@ class TestObjectUpdater(unittest.TestCase):
                             line.split(':')[1].strip()
                         line = inc.readline()
                     self.assert_('x-container-timestamp' in headers)
-            except BaseException, err:
+            except BaseException as err:
                 return err
             return None
 
@@ -190,7 +192,7 @@ class TestObjectUpdater(unittest.TestCase):
                     err = event.wait()
                     if err:
                         raise err
-            except BaseException, err:
+            except BaseException as err:
                 return err
             return None
 

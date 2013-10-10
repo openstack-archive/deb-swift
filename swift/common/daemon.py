@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 
 import os
 import sys
+import time
 import signal
 from re import sub
 
@@ -98,6 +99,12 @@ def run_daemon(klass, conf_file, section_name='', once=False, **kwargs):
     # By default, disable eventlet printing stacktraces
     eventlet_debug = utils.config_true_value(conf.get('eventlet_debug', 'no'))
     eventlet.debug.hub_exceptions(eventlet_debug)
+
+    # Ensure TZ environment variable exists to avoid stat('/etc/localtime') on
+    # some platforms. This locks in reported times to the timezone in which
+    # the server first starts running in locations that periodically change
+    # timezones.
+    os.environ['TZ'] = time.strftime("%z", time.gmtime())
 
     try:
         klass(conf).run(once=once, **kwargs)

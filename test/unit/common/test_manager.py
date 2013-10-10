@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ import sys
 import resource
 import signal
 import errno
-from contextlib import contextmanager
 from collections import defaultdict
 from threading import Thread
 from time import sleep, time
@@ -108,14 +107,16 @@ class TestManagerModule(unittest.TestCase):
                                         manager.MAX_MEMORY)),
             ]
             self.assertEquals(manager.resource.called_with_args, expected)
-            self.assertEquals(manager.os.environ['PYTHON_EGG_CACHE'], '/tmp')
+            self.assertTrue(
+                manager.os.environ['PYTHON_EGG_CACHE'].startswith('/tmp'))
 
             # test error condition
             manager.resource = MockResource(error=ValueError())
             manager.os.environ = {}
             manager.setup_env()
             self.assertEquals(manager.resource.called_with_args, [])
-            self.assertEquals(manager.os.environ['PYTHON_EGG_CACHE'], '/tmp')
+            self.assertTrue(
+                manager.os.environ['PYTHON_EGG_CACHE'].startswith('/tmp'))
 
             manager.resource = MockResource(error=OSError())
             manager.os.environ = {}
@@ -453,6 +454,47 @@ class TestServer(unittest.TestCase):
             conf_file = conf_files[0]
             conf = self.join_swift_dir(server_name + '.conf')
             self.assertEquals(conf_file, conf)
+
+    def test_proxy_conf_dir(self):
+        conf_files = (
+            'proxy-server.conf.d/00.conf',
+            'proxy-server.conf.d/01.conf',
+        )
+        with temptree(conf_files) as t:
+            manager.SWIFT_DIR = t
+            server = manager.Server('proxy')
+            conf_dirs = server.conf_files()
+            self.assertEquals(len(conf_dirs), 1)
+            conf_dir = conf_dirs[0]
+            proxy_conf_dir = self.join_swift_dir('proxy-server.conf.d')
+            self.assertEquals(proxy_conf_dir, conf_dir)
+
+    def test_conf_dir(self):
+        conf_files = (
+            'object-server/object-server.conf-base',
+            'object-server/1.conf.d/base.conf',
+            'object-server/1.conf.d/1.conf',
+            'object-server/2.conf.d/base.conf',
+            'object-server/2.conf.d/2.conf',
+            'object-server/3.conf.d/base.conf',
+            'object-server/3.conf.d/3.conf',
+            'object-server/4.conf.d/base.conf',
+            'object-server/4.conf.d/4.conf',
+        )
+        with temptree(conf_files) as t:
+            manager.SWIFT_DIR = t
+            server = manager.Server('object-replicator')
+            conf_dirs = server.conf_files()
+            self.assertEquals(len(conf_dirs), 4)
+            c1 = self.join_swift_dir('object-server/1.conf.d')
+            c2 = self.join_swift_dir('object-server/2.conf.d')
+            c3 = self.join_swift_dir('object-server/3.conf.d')
+            c4 = self.join_swift_dir('object-server/4.conf.d')
+            for c in [c1, c2, c3, c4]:
+                self.assert_(c in conf_dirs)
+            # test configs returned sorted
+            sorted_confs = sorted([c1, c2, c3, c4])
+            self.assertEquals(conf_dirs, sorted_confs)
 
     def test_iter_pid_files(self):
         """
@@ -1013,7 +1055,7 @@ class TestServer(unittest.TestCase):
                         self.assertEquals(status, 1)
                     self.assert_('failed' in pop_stream(f))
                     # test multiple procs
-                    procs = [MockProcess() for i in range(3)]
+                    procs = [MockProcess(delay=.5) for i in range(3)]
                     for proc in procs:
                         proc.start()
                     server.procs = procs
@@ -1148,8 +1190,8 @@ class TestServer(unittest.TestCase):
                             4: conf4,
                         }
                         self.assertEquals(server.launch(once=True), expected)
-                        self.assertEquals(mock_spawn.conf_files, [conf1, conf2,
-                                                                 conf3, conf4])
+                        self.assertEquals(mock_spawn.conf_files, [
+                            conf1, conf2, conf3, conf4])
                         expected = {
                             'once': True,
                         }
@@ -1270,7 +1312,7 @@ class TestManager(unittest.TestCase):
             self.assert_(server.server in manager.ALL_SERVERS)
         # test dedupe
         m = manager.Manager(['main', 'rest', 'proxy', 'object',
-                                           'container', 'account'])
+                             'container', 'account'])
         self.assertEquals(len(m.servers), len(manager.ALL_SERVERS))
         for server in m.servers:
             self.assert_(server.server in manager.ALL_SERVERS)
@@ -1562,7 +1604,7 @@ class TestManager(unittest.TestCase):
             manager.Server = _orig_server
             manager.watch_server_pids = _orig_watch_server_pids
 
-    # TODO: more tests
+    # TODO(clayg): more tests
     def test_shutdown(self):
         m = manager.Manager(['test'])
         m.stop_was_called = False

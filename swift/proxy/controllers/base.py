@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,25 +24,29 @@
 #   These shenanigans are to ensure all related objects can be garbage
 # collected. We've seen objects hang around forever otherwise.
 
+import os
 import time
 import functools
 import inspect
+import itertools
+from swift import gettext_ as _
+from urllib import quote
 
 from eventlet import spawn_n, GreenPile
 from eventlet.queue import Queue, Empty, Full
 from eventlet.timeout import Timeout
 
-from swift.common.wsgi import make_pre_authed_request
+from swift.common.wsgi import make_pre_authed_env
 from swift.common.utils import normalize_timestamp, config_true_value, \
-    public, split_path, cache_from_env
+    public, split_path, list_from_csv, GreenthreadSafeIterator, \
+    quorum_size
 from swift.common.bufferedhttp import http_connect
-from swift.common.constraints import MAX_ACCOUNT_NAME_LENGTH
 from swift.common.exceptions import ChunkReadTimeout, ConnectionTimeout
 from swift.common.http import is_informational, is_success, is_redirection, \
     is_server_error, HTTP_OK, HTTP_PARTIAL_CONTENT, HTTP_MULTIPLE_CHOICES, \
     HTTP_BAD_REQUEST, HTTP_NOT_FOUND, HTTP_SERVICE_UNAVAILABLE, \
     HTTP_INSUFFICIENT_STORAGE, HTTP_UNAUTHORIZED
-from swift.common.swob import Request, Response
+from swift.common.swob import Request, Response, HeaderKeyDict
 
 
 def update_headers(response, headers):
@@ -90,11 +94,15 @@ def delay_denial(func):
 
 
 def get_account_memcache_key(account):
-    return 'account/%s' % account
+    cache_key, env_key = _get_cache_key(account, None)
+    return cache_key
 
 
 def get_container_memcache_key(account, container):
-    return 'container/%s/%s' % (account, container)
+    if not container:
+        raise ValueError("container not provided")
+    cache_key, env_key = _get_cache_key(account, container)
+    return cache_key
 
 
 def headers_to_account_info(headers, status_int=HTTP_OK):
@@ -104,6 +112,10 @@ def headers_to_account_info(headers, status_int=HTTP_OK):
     headers = dict((k.lower(), v) for k, v in dict(headers).iteritems())
     return {
         'status': status_int,
+        # 'container_count' anomaly:
+        # Previous code sometimes expects an int sometimes a string
+        # Current code aligns to str and None, yet translates to int in
+        # deprecated functions as needed
         'container_count': headers.get('x-account-container-count'),
         'total_object_count': headers.get('x-account-object-count'),
         'bytes': headers.get('x-account-bytes-used'),
@@ -129,8 +141,6 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
         'cors': {
             'allow_origin': headers.get(
                 'x-container-meta-access-control-allow-origin'),
-            'allow_headers': headers.get(
-                'x-container-meta-access-control-allow-headers'),
             'expose_headers': headers.get(
                 'x-container-meta-access-control-expose-headers'),
             'max_age': headers.get(
@@ -140,6 +150,22 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
                      for key, value in headers.iteritems()
                      if key.startswith('x-container-meta-'))
     }
+
+
+def headers_to_object_info(headers, status_int=HTTP_OK):
+    """
+    Construct a cacheable dict of object info based on response headers.
+    """
+    headers = dict((k.lower(), v) for k, v in dict(headers).iteritems())
+    info = {'status': status_int,
+            'length': headers.get('content-length'),
+            'type': headers.get('content-type'),
+            'etag': headers.get('etag'),
+            'meta': dict((key[14:], value)
+                         for key, value in headers.iteritems()
+                         if key.startswith('x-object-meta-'))
+            }
+    return info
 
 
 def cors_validation(func):
@@ -163,7 +189,7 @@ def cors_validation(func):
             # Yes, this is a CORS request so test if the origin is allowed
             container_info = \
                 controller.container_info(controller.account_name,
-                                          controller.container_name)
+                                          controller.container_name, req)
             cors_info = container_info.get('cors', {})
 
             # Call through to the decorated method
@@ -180,14 +206,14 @@ def cors_validation(func):
                               'content-type', 'expires', 'last-modified',
                               'pragma', 'etag', 'x-timestamp', 'x-trans-id']
             for header in resp.headers:
-                if header.startswith('x-container-meta') or \
-                        header.startswith('x-object-meta'):
+                if header.startswith('X-Container-Meta') or \
+                        header.startswith('X-Object-Meta'):
                     expose_headers.append(header.lower())
             if cors_info.get('expose_headers'):
                 expose_headers.extend(
-                    [a.strip()
-                     for a in cors_info['expose_headers'].split(' ')
-                     if a.strip()])
+                    [header_line.strip()
+                     for header_line in cors_info['expose_headers'].split(' ')
+                     if header_line.strip()])
             resp.headers['Access-Control-Expose-Headers'] = \
                 ', '.join(expose_headers)
 
@@ -203,33 +229,36 @@ def cors_validation(func):
     return wrapped
 
 
+def get_object_info(env, app, path=None, swift_source=None):
+    """
+    Get the info structure for an object, based on env and app.
+    This is useful to middlewares.
+    Note: This call bypasses auth. Success does not imply that the
+          request has authorization to the object.
+    """
+    (version, account, container, obj) = \
+        split_path(path or env['PATH_INFO'], 4, 4, True)
+    info = _get_object_info(app, env, account, container, obj,
+                            swift_source=swift_source)
+    if not info:
+        info = headers_to_object_info({}, 0)
+    return info
+
+
 def get_container_info(env, app, swift_source=None):
     """
     Get the info structure for a container, based on env and app.
     This is useful to middlewares.
     Note: This call bypasses auth. Success does not imply that the
-          request has authorization to the container_info.
+          request has authorization to the account.
     """
-    cache = cache_from_env(env)
-    if not cache:
-        return None
-    (version, account, container, _) = \
+    (version, account, container, unused) = \
         split_path(env['PATH_INFO'], 3, 4, True)
-    cache_key = get_container_memcache_key(account, container)
-    # Use a unique environment cache key per container.  If you copy this env
-    # to make a new request, it won't accidentally reuse the old container info
-    env_key = 'swift.%s' % cache_key
-    if env_key not in env:
-        container_info = cache.get(cache_key)
-        if not container_info:
-            resp = make_pre_authed_request(
-                env, 'HEAD', '/%s/%s/%s' % (version, account, container),
-                swift_source=swift_source,
-            ).get_response(app)
-            container_info = headers_to_container_info(
-                resp.headers, resp.status_int)
-        env[env_key] = container_info
-    return env[env_key]
+    info = get_info(app, env, account, container, ret_not_found=True,
+                    swift_source=swift_source)
+    if not info:
+        info = headers_to_container_info({}, 0)
+    return info
 
 
 def get_account_info(env, app, swift_source=None):
@@ -237,28 +266,256 @@ def get_account_info(env, app, swift_source=None):
     Get the info structure for an account, based on env and app.
     This is useful to middlewares.
     Note: This call bypasses auth. Success does not imply that the
-          request has authorization to the account_info.
+          request has authorization to the container.
     """
-    cache = cache_from_env(env)
-    if not cache:
-        return None
-    (version, account, container, _) = \
+    (version, account, _junk, _junk) = \
         split_path(env['PATH_INFO'], 2, 4, True)
-    cache_key = get_account_memcache_key(account)
-    # Use a unique environment cache key per account.  If you copy this env
-    # to make a new request, it won't accidentally reuse the old account info
+    info = get_info(app, env, account, ret_not_found=True,
+                    swift_source=swift_source)
+    if not info:
+        info = headers_to_account_info({}, 0)
+    if info.get('container_count') is None:
+        info['container_count'] = 0
+    else:
+        info['container_count'] = int(info['container_count'])
+    return info
+
+
+def _get_cache_key(account, container):
+    """
+    Get the keys for both memcache (cache_key) and env (env_key)
+    where info about accounts and containers is cached
+    :param   account: The name of the account
+    :param container: The name of the container (or None if account)
+    :returns a tuple of (cache_key, env_key)
+    """
+
+    if container:
+        cache_key = 'container/%s/%s' % (account, container)
+    else:
+        cache_key = 'account/%s' % account
+    # Use a unique environment cache key per account and one container.
+    # This allows caching both account and container and ensures that when we
+    # copy this env to form a new request, it won't accidentally reuse the
+    # old container or account info
     env_key = 'swift.%s' % cache_key
-    if env_key not in env:
-        account_info = cache.get(cache_key)
-        if not account_info:
-            resp = make_pre_authed_request(
-                env, 'HEAD', '/%s/%s' % (version, account),
-                swift_source=swift_source,
-            ).get_response(app)
-            account_info = headers_to_account_info(
-                resp.headers, resp.status_int)
-        env[env_key] = account_info
-    return env[env_key]
+    return cache_key, env_key
+
+
+def get_object_env_key(account, container, obj):
+    """
+    Get the keys for env (env_key) where info about object is cached
+    :param   account: The name of the account
+    :param container: The name of the container
+    :param obj: The name of the object
+    :returns a string env_key
+    """
+    env_key = 'swift.object/%s/%s/%s' % (account,
+                                         container, obj)
+    return env_key
+
+
+def _set_info_cache(app, env, account, container, resp):
+    """
+    Cache info in both memcache and env.
+
+    Caching is used to avoid unnecessary calls to account & container servers.
+    This is a private function that is being called by GETorHEAD_base and
+    by clear_info_cache.
+    Any attempt to GET or HEAD from the container/account server should use
+    the GETorHEAD_base interface which would than set the cache.
+
+    :param  app: the application object
+    :param  account: the unquoted account name
+    :param  container: the unquoted containr name or None
+    :param resp: the response received or None if info cache should be cleared
+    """
+
+    if container:
+        cache_time = app.recheck_container_existence
+    else:
+        cache_time = app.recheck_account_existence
+    cache_key, env_key = _get_cache_key(account, container)
+
+    if resp:
+        if resp.status_int == HTTP_NOT_FOUND:
+            cache_time *= 0.1
+        elif not is_success(resp.status_int):
+            cache_time = None
+    else:
+        cache_time = None
+
+    # Next actually set both memcache and the env chache
+    memcache = getattr(app, 'memcache', None) or env.get('swift.cache')
+    if not cache_time:
+        env.pop(env_key, None)
+        if memcache:
+            memcache.delete(cache_key)
+        return
+
+    if container:
+        info = headers_to_container_info(resp.headers, resp.status_int)
+    else:
+        info = headers_to_account_info(resp.headers, resp.status_int)
+    if memcache:
+        memcache.set(cache_key, info, time=cache_time)
+    env[env_key] = info
+
+
+def _set_object_info_cache(app, env, account, container, obj, resp):
+    """
+    Cache object info env. Do not cache object informations in
+    memcache. This is an intentional omission as it would lead
+    to cache pressure. This is a per-request cache.
+
+    Caching is used to avoid unnecessary calls to object servers.
+    This is a private function that is being called by GETorHEAD_base.
+    Any attempt to GET or HEAD from the object server should use
+    the GETorHEAD_base interface which would then set the cache.
+
+    :param  app: the application object
+    :param  account: the unquoted account name
+    :param  container: the unquoted container name or None
+    :param  object: the unquoted object name or None
+    :param resp: the response received or None if info cache should be cleared
+    """
+
+    env_key = get_object_env_key(account, container, obj)
+
+    if not resp:
+        env.pop(env_key, None)
+        return
+
+    info = headers_to_object_info(resp.headers, resp.status_int)
+    env[env_key] = info
+
+
+def clear_info_cache(app, env, account, container=None):
+    """
+    Clear the cached info in both memcache and env
+
+    :param  app: the application object
+    :param  account: the account name
+    :param  container: the containr name or None if setting info for containers
+    """
+    _set_info_cache(app, env, account, container, None)
+
+
+def _get_info_cache(app, env, account, container=None):
+    """
+    Get the cached info from env or memcache (if used) in that order
+    Used for both account and container info
+    A private function used by get_info
+
+    :param  app: the application object
+    :param  env: the environment used by the current request
+    :returns the cached info or None if not cached
+    """
+
+    cache_key, env_key = _get_cache_key(account, container)
+    if env_key in env:
+        return env[env_key]
+    memcache = getattr(app, 'memcache', None) or env.get('swift.cache')
+    if memcache:
+        info = memcache.get(cache_key)
+        if info:
+            env[env_key] = info
+        return info
+    return None
+
+
+def _prepare_pre_auth_info_request(env, path, swift_source):
+    """
+    Prepares a pre authed request to obtain info using a HEAD.
+
+    :param env: the environment used by the current request
+    :param path: The unquoted request path
+    :param swift_source: value for swift.source in WSGI environment
+    :returns: the pre authed request
+    """
+    # Set the env for the pre_authed call without a query string
+    newenv = make_pre_authed_env(env, 'HEAD', path, agent='Swift',
+                                 query_string='', swift_source=swift_source)
+    # Note that Request.blank expects quoted path
+    return Request.blank(quote(path), environ=newenv)
+
+
+def get_info(app, env, account, container=None, ret_not_found=False,
+             swift_source=None):
+    """
+    Get the info about accounts or containers
+
+    Note: This call bypasses auth. Success does not imply that the
+          request has authorization to the info.
+
+    :param app: the application object
+    :param env: the environment used by the current request
+    :param account: The unquoted name of the account
+    :param container: The unquoted name of the container (or None if account)
+    :returns: the cached info or None if cannot be retrieved
+    """
+    info = _get_info_cache(app, env, account, container)
+    if info:
+        if ret_not_found or is_success(info['status']):
+            return info
+        return None
+    # Not in cache, let's try the account servers
+    path = '/v1/%s' % account
+    if container:
+        # Stop and check if we have an account?
+        if not get_info(app, env, account):
+            return None
+        path += '/' + container
+
+    req = _prepare_pre_auth_info_request(
+        env, path, (swift_source or 'GET_INFO'))
+    # Whenever we do a GET/HEAD, the GETorHEAD_base will set the info in
+    # the environment under environ[env_key] and in memcache. We will
+    # pick the one from environ[env_key] and use it to set the caller env
+    resp = req.get_response(app)
+    cache_key, env_key = _get_cache_key(account, container)
+    try:
+        info = resp.environ[env_key]
+        env[env_key] = info
+        if ret_not_found or is_success(info['status']):
+            return info
+    except (KeyError, AttributeError):
+        pass
+    return None
+
+
+def _get_object_info(app, env, account, container, obj, swift_source=None):
+    """
+    Get the info about object
+
+    Note: This call bypasses auth. Success does not imply that the
+          request has authorization to the info.
+
+    :param app: the application object
+    :param env: the environment used by the current request
+    :param account: The unquoted name of the account
+    :param container: The unquoted name of the container
+    :param obj: The unquoted name of the object
+    :returns: the cached info or None if cannot be retrieved
+    """
+    env_key = get_object_env_key(account, container, obj)
+    info = env.get(env_key)
+    if info:
+        return info
+    # Not in cached, let's try the object servers
+    path = '/v1/%s/%s/%s' % (account, container, obj)
+    req = _prepare_pre_auth_info_request(env, path, swift_source)
+    # Whenever we do a GET/HEAD, the GETorHEAD_base will set the info in
+    # the environment under environ[env_key]. We will
+    # pick the one from environ[env_key] and use it to set the caller env
+    resp = req.get_response(app)
+    try:
+        info = resp.environ[env_key]
+        env[env_key] = info
+        return info
+    except (KeyError, AttributeError):
+        pass
+    return None
 
 
 class Controller(object):
@@ -269,40 +526,81 @@ class Controller(object):
     pass_through_headers = []
 
     def __init__(self, app):
+        """
+        Creates a controller attached to an application instance
+
+        :param app: the application instance
+        """
         self.account_name = None
         self.app = app
         self.trans_id = '-'
-        self.allowed_methods = set()
-        all_methods = inspect.getmembers(self, predicate=inspect.ismethod)
-        for name, m in all_methods:
-            if getattr(m, 'publicly_accessible', False):
-                self.allowed_methods.add(name)
+        self._allowed_methods = None
+
+    @property
+    def allowed_methods(self):
+        if self._allowed_methods is None:
+            self._allowed_methods = set()
+            all_methods = inspect.getmembers(self, predicate=inspect.ismethod)
+            for name, m in all_methods:
+                if getattr(m, 'publicly_accessible', False):
+                    self._allowed_methods.add(name)
+        return self._allowed_methods
+
+    def _x_remove_headers(self):
+        """
+        Returns a list of headers that must not be sent to the backend
+
+        :returns: a list of header
+        """
+        return []
 
     def transfer_headers(self, src_headers, dst_headers):
+        """
+        Transfer legal headers from an original client request to dictionary
+        that will be used as headers by the backend request
 
+        :param src_headers: A dictionary of the original client request headers
+        :param dst_headers: A dictionary of the backend request headers
+        """
         st = self.server_type.lower()
+
         x_remove = 'x-remove-%s-meta-' % st
-        x_remove_read = 'x-remove-%s-read' % st
-        x_remove_write = 'x-remove-%s-write' % st
-        x_meta = 'x-%s-meta-' % st
         dst_headers.update((k.lower().replace('-remove', '', 1), '')
                            for k in src_headers
                            if k.lower().startswith(x_remove) or
-                           k.lower() in (x_remove_read, x_remove_write))
+                           k.lower() in self._x_remove_headers())
 
+        x_meta = 'x-%s-meta-' % st
         dst_headers.update((k.lower(), v)
                            for k, v in src_headers.iteritems()
                            if k.lower() in self.pass_through_headers or
                            k.lower().startswith(x_meta))
 
-    def error_increment(self, node):
+    def generate_request_headers(self, orig_req=None, additional=None,
+                                 transfer=False):
         """
-        Handles incrementing error counts when talking to nodes.
+        Create a list of headers to be used in backend requets
 
-        :param node: dictionary of node to increment the error count for
+        :param orig_req: the original request sent by the client to the proxy
+        :param additional: additional headers to send to the backend
+        :param transfer: If True, transfer headers from original client request
+        :returns: a dictionary of headers
         """
-        node['errors'] = node.get('errors', 0) + 1
-        node['last_error'] = time.time()
+        # Use the additional headers first so they don't overwrite the headers
+        # we require.
+        headers = HeaderKeyDict(additional) if additional else HeaderKeyDict()
+        if transfer:
+            self.transfer_headers(orig_req.headers, headers)
+        headers.setdefault('x-timestamp', normalize_timestamp(time.time()))
+        if orig_req:
+            referer = orig_req.as_referer()
+        else:
+            referer = ''
+        headers['x-trans-id'] = self.trans_id
+        headers['connection'] = 'close'
+        headers['user-agent'] = 'proxy-server %s' % os.getpid()
+        headers['referer'] = referer
+        return headers
 
     def error_occurred(self, node, msg):
         """
@@ -311,10 +609,11 @@ class Controller(object):
         :param node: dictionary of node to handle errors for
         :param msg: error message
         """
-        self.error_increment(node)
-        self.app.logger.error(_('%(msg)s %(ip)s:%(port)s'),
+        node['errors'] = node.get('errors', 0) + 1
+        node['last_error'] = time.time()
+        self.app.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
                               {'msg': msg, 'ip': node['ip'],
-                              'port': node['port']})
+                              'port': node['port'], 'device': node['device']})
 
     def exception_occurred(self, node, typ, additional_info):
         """
@@ -352,125 +651,53 @@ class Controller(object):
                 _('Node error limited %(ip)s:%(port)s (%(device)s)'), node)
         return limited
 
-    def error_limit(self, node):
+    def error_limit(self, node, msg):
         """
-        Mark a node as error limited.
+        Mark a node as error limited. This immediately pretends the
+        node received enough errors to trigger error suppression. Use
+        this for errors like Insufficient Storage. For other errors
+        use :func:`error_occurred`.
 
         :param node: dictionary of node to error limit
+        :param msg: error message
         """
         node['errors'] = self.app.error_suppression_limit + 1
         node['last_error'] = time.time()
+        self.app.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
+                              {'msg': msg, 'ip': node['ip'],
+                              'port': node['port'], 'device': node['device']})
 
-    def account_info(self, account, autocreate=False):
+    def account_info(self, account, req=None):
         """
         Get account information, and also verify that the account exists.
 
         :param account: name of the account to get the info for
+        :param req: caller's HTTP request context object (optional)
         :returns: tuple of (account partition, account nodes, container_count)
                   or (None, None, None) if it does not exist
         """
         partition, nodes = self.app.account_ring.get_nodes(account)
-        account_info = {'status': 0,
-                        'container_count': 0,
-                        'total_object_count': None,
-                        'bytes': None,
-                        'meta': {}}
-        # 0 = no responses, 200 = found, 404 = not found, -1 = mixed responses
-        if self.app.memcache:
-            cache_key = get_account_memcache_key(account)
-            cache_value = self.app.memcache.get(cache_key)
-            if not isinstance(cache_value, dict):
-                result_code = cache_value
-                container_count = 0
-            else:
-                result_code = cache_value['status']
-                try:
-                    container_count = int(cache_value['container_count'])
-                except ValueError:
-                    container_count = 0
-            if result_code == HTTP_OK:
-                return partition, nodes, container_count
-            elif result_code == HTTP_NOT_FOUND and not autocreate:
-                return None, None, None
-        result_code = 0
-        attempts_left = len(nodes)
-        path = '/%s' % account
-        headers = {'x-trans-id': self.trans_id, 'Connection': 'close'}
-        iternodes = self.iter_nodes(partition, nodes, self.app.account_ring)
-        while attempts_left > 0:
-            try:
-                node = iternodes.next()
-            except StopIteration:
-                break
-            attempts_left -= 1
-            try:
-                start_node_timing = time.time()
-                with ConnectionTimeout(self.app.conn_timeout):
-                    conn = http_connect(node['ip'], node['port'],
-                                        node['device'], partition, 'HEAD',
-                                        path, headers)
-                self.app.set_node_timing(node, time.time() - start_node_timing)
-                with Timeout(self.app.node_timeout):
-                    resp = conn.getresponse()
-                    resp.read()
-                    if is_success(resp.status):
-                        result_code = HTTP_OK
-                        account_info.update(
-                            headers_to_account_info(resp.getheaders()))
-                        break
-                    elif resp.status == HTTP_NOT_FOUND:
-                        if result_code == 0:
-                            result_code = HTTP_NOT_FOUND
-                        elif result_code != HTTP_NOT_FOUND:
-                            result_code = -1
-                    elif resp.status == HTTP_INSUFFICIENT_STORAGE:
-                        self.error_limit(node)
-                        continue
-                    else:
-                        result_code = -1
-            except (Exception, Timeout):
-                self.exception_occurred(node, _('Account'),
-                                        _('Trying to get account info for %s')
-                                        % path)
-        if result_code == HTTP_NOT_FOUND and autocreate:
-            if len(account) > MAX_ACCOUNT_NAME_LENGTH:
-                return None, None, None
-            headers = {'X-Timestamp': normalize_timestamp(time.time()),
-                       'X-Trans-Id': self.trans_id,
-                       'Connection': 'close'}
-            resp = self.make_requests(Request.blank('/v1' + path),
-                                      self.app.account_ring, partition, 'PUT',
-                                      path, [headers] * len(nodes))
-            if not is_success(resp.status_int):
-                self.app.logger.warning('Could not autocreate account %r' %
-                                        path)
-                return None, None, None
-            result_code = HTTP_OK
-        if self.app.memcache and result_code in (HTTP_OK, HTTP_NOT_FOUND):
-            if result_code == HTTP_OK:
-                cache_timeout = self.app.recheck_account_existence
-            else:
-                cache_timeout = self.app.recheck_account_existence * 0.1
-            account_info.update(status=result_code)
-            self.app.memcache.set(cache_key,
-                                  account_info,
-                                  time=cache_timeout)
-        if result_code == HTTP_OK:
-            try:
-                container_count = int(account_info['container_count'])
-            except ValueError:
-                container_count = 0
-            return partition, nodes, container_count
-        return None, None, None
+        if req:
+            env = getattr(req, 'environ', {})
+        else:
+            env = {}
+        info = get_info(self.app, env, account)
+        if not info:
+            return None, None, None
+        if info.get('container_count') is None:
+            container_count = 0
+        else:
+            container_count = int(info['container_count'])
+        return partition, nodes, container_count
 
-    def container_info(self, account, container, account_autocreate=False):
+    def container_info(self, account, container, req=None):
         """
         Get container information and thusly verify container existence.
-        This will also make a call to account_info to verify that the
-        account exists.
+        This will also verify account existence.
 
         :param account: account name for the container
         :param container: container name to look up
+        :param req: caller's HTTP request context object (optional)
         :returns: dict containing at least container partition ('partition'),
                   container nodes ('containers'), container read
                   acl ('read_acl'), container write acl ('write_acl'),
@@ -478,95 +705,95 @@ class Controller(object):
                   Values are set to None if the container does not exist.
         """
         part, nodes = self.app.container_ring.get_nodes(account, container)
-        path = '/%s/%s' % (account, container)
-        container_info = {'status': 0, 'read_acl': None,
-                          'write_acl': None, 'sync_key': None,
-                          'count': None, 'bytes': None,
-                          'versions': None, 'partition': None,
-                          'nodes': None}
-        if self.app.memcache:
-            cache_key = get_container_memcache_key(account, container)
-            cache_value = self.app.memcache.get(cache_key)
-            if isinstance(cache_value, dict):
-                if 'container_size' in cache_value:
-                    cache_value['count'] = cache_value['container_size']
-                if is_success(cache_value['status']):
-                    container_info.update(cache_value)
-                    container_info['partition'] = part
-                    container_info['nodes'] = nodes
-                return container_info
-        if not self.account_info(account, autocreate=account_autocreate)[1]:
-            return container_info
-        attempts_left = len(nodes)
-        headers = {'x-trans-id': self.trans_id, 'Connection': 'close'}
-        for node in self.iter_nodes(part, nodes, self.app.container_ring):
-            try:
-                start_node_timing = time.time()
-                with ConnectionTimeout(self.app.conn_timeout):
-                    conn = http_connect(node['ip'], node['port'],
-                                        node['device'], part, 'HEAD',
-                                        path, headers)
-                self.app.set_node_timing(node, time.time() - start_node_timing)
-                with Timeout(self.app.node_timeout):
-                    resp = conn.getresponse()
-                    resp.read()
-                if is_success(resp.status):
-                    container_info.update(
-                        headers_to_container_info(resp.getheaders()))
-                    break
-                elif resp.status == HTTP_NOT_FOUND:
-                    container_info['status'] = HTTP_NOT_FOUND
-                else:
-                    container_info['status'] = -1
-                    if resp.status == HTTP_INSUFFICIENT_STORAGE:
-                        self.error_limit(node)
-            except (Exception, Timeout):
-                self.exception_occurred(
-                    node, _('Container'),
-                    _('Trying to get container info for %s') % path)
-            attempts_left -= 1
-            if attempts_left <= 0:
-                break
-        if self.app.memcache:
-            if container_info['status'] == HTTP_OK:
-                self.app.memcache.set(
-                    cache_key, container_info,
-                    time=self.app.recheck_container_existence)
-            elif container_info['status'] == HTTP_NOT_FOUND:
-                self.app.memcache.set(
-                    cache_key, container_info,
-                    time=self.app.recheck_container_existence * 0.1)
-        if container_info['status'] == HTTP_OK:
-            container_info['partition'] = part
-            container_info['nodes'] = nodes
-        return container_info
+        if req:
+            env = getattr(req, 'environ', {})
+        else:
+            env = {}
+        info = get_info(self.app, env, account, container)
+        if not info:
+            info = headers_to_container_info({}, 0)
+            info['partition'] = None
+            info['nodes'] = None
+        else:
+            info['partition'] = part
+            info['nodes'] = nodes
+        return info
 
-    def iter_nodes(self, partition, nodes, ring):
+    def iter_nodes(self, ring, partition, node_iter=None):
         """
-        Node iterator that will first iterate over the normal nodes for a
-        partition and then the handoff partitions for the node.
+        Yields nodes for a ring partition, skipping over error
+        limited nodes and stopping at the configurable number of
+        nodes. If a node yielded subsequently gets error limited, an
+        extra node will be yielded to take its place.
 
-        :param partition: partition to iterate nodes for
-        :param nodes: list of node dicts from the ring
-        :param ring: ring to get handoff nodes from
+        Note that if you're going to iterate over this concurrently from
+        multiple greenthreads, you'll want to use a
+        swift.common.utils.GreenthreadSafeIterator to serialize access.
+        Otherwise, you may get ValueErrors from concurrent access. (You also
+        may not, depending on how logging is configured, the vagaries of
+        socket IO and eventlet, and the phase of the moon.)
+
+        :param ring: ring to get yield nodes from
+        :param partition: ring partition to yield nodes for
+        :param node_iter: optional iterable of nodes to try. Useful if you
+            want to filter or reorder the nodes.
         """
-        for node in nodes:
+        part_nodes = ring.get_part_nodes(partition)
+        if node_iter is None:
+            node_iter = itertools.chain(part_nodes,
+                                        ring.get_more_nodes(partition))
+        num_primary_nodes = len(part_nodes)
+
+        # Use of list() here forcibly yanks the first N nodes (the primary
+        # nodes) from node_iter, so the rest of its values are handoffs.
+        primary_nodes = self.app.sort_nodes(
+            list(itertools.islice(node_iter, num_primary_nodes)))
+        handoff_nodes = node_iter
+        nodes_left = self.app.request_node_count(ring)
+
+        for node in primary_nodes:
             if not self.error_limited(node):
                 yield node
+                if not self.error_limited(node):
+                    nodes_left -= 1
+                    if nodes_left <= 0:
+                        return
+
         handoffs = 0
-        for node in ring.get_more_nodes(partition):
+        for node in handoff_nodes:
             if not self.error_limited(node):
                 handoffs += 1
                 if self.app.log_handoffs:
                     self.app.logger.increment('handoff_count')
                     self.app.logger.warning(
                         'Handoff requested (%d)' % handoffs)
-                    if handoffs == len(nodes):
+                    if handoffs == len(primary_nodes):
                         self.app.logger.increment('handoff_all_count')
                 yield node
+                if not self.error_limited(node):
+                    nodes_left -= 1
+                    if nodes_left <= 0:
+                        return
 
     def _make_request(self, nodes, part, method, path, headers, query,
                       logger_thread_locals):
+        """
+        Sends an HTTP request to a single node and aggregates the result.
+        It attempts the primary node, then iterates over the handoff nodes
+        as needed.
+
+        :param nodes: an iterator of the backend server and handoff servers
+        :param part: the partition number
+        :param method: the method to send to the backend
+        :param path: the path to send to the backend
+        :param headers: a list of dicts, where each dict represents one
+                        backend request that should be made.
+        :param query: query string to send to the backend.
+        :param logger_thread_locals: The thread local values to be set on the
+                                     self.app.logger to retain transaction
+                                     logging information.
+        :returns: a swob.Response object
+        """
         self.app.logger.thread_locals = logger_thread_locals
         for node in nodes:
             try:
@@ -581,9 +808,10 @@ class Controller(object):
                     resp = conn.getresponse()
                     if not is_informational(resp.status) and \
                             not is_server_error(resp.status):
-                        return resp.status, resp.reason, resp.read()
+                        return resp.status, resp.reason, resp.getheaders(), \
+                            resp.read()
                     elif resp.status == HTTP_INSUFFICIENT_STORAGE:
-                        self.error_limit(node)
+                        self.error_limit(node, _('ERROR Insufficient Storage'))
             except (Exception, Timeout):
                 self.exception_occurred(node, self.server_type,
                                         _('Trying to %(method)s %(path)s') %
@@ -596,25 +824,32 @@ class Controller(object):
         It attempts the primary nodes concurrently, then iterates over the
         handoff nodes as needed.
 
+        :param req: a request sent by the client
+        :param ring: the ring used for finding backend servers
+        :param part: the partition number
+        :param method: the method to send to the backend
+        :param path: the path to send to the backend
         :param headers: a list of dicts, where each dict represents one
                         backend request that should be made.
+        :param query_string: optional query string to send to the backend
         :returns: a swob.Response object
         """
         start_nodes = ring.get_part_nodes(part)
-        nodes = self.iter_nodes(part, start_nodes, ring)
+        nodes = GreenthreadSafeIterator(self.iter_nodes(ring, part))
         pile = GreenPile(len(start_nodes))
         for head in headers:
             pile.spawn(self._make_request, nodes, part, method, path,
                        head, query_string, self.app.logger.thread_locals)
         response = [resp for resp in pile if resp]
         while len(response) < len(start_nodes):
-            response.append((HTTP_SERVICE_UNAVAILABLE, '', ''))
-        statuses, reasons, bodies = zip(*response)
+            response.append((HTTP_SERVICE_UNAVAILABLE, '', '', ''))
+        statuses, reasons, resp_headers, bodies = zip(*response)
         return self.best_response(req, statuses, reasons, bodies,
-                                  '%s %s' % (self.server_type, req.method))
+                                  '%s %s' % (self.server_type, req.method),
+                                  headers=resp_headers)
 
     def best_response(self, req, statuses, reasons, bodies, server_type,
-                      etag=None):
+                      etag=None, headers=None):
         """
         Given a list of responses from several servers, choose the best to
         return to the API.
@@ -625,6 +860,7 @@ class Controller(object):
         :param bodies: bodies of each response
         :param server_type: type of server the responses came from
         :param etag: etag
+        :param headers: headers of each response
         :returns: swob.Response object with the correct status, body, etc. set
         """
         resp = Response(request=req)
@@ -632,11 +868,13 @@ class Controller(object):
             for hundred in (HTTP_OK, HTTP_MULTIPLE_CHOICES, HTTP_BAD_REQUEST):
                 hstatuses = \
                     [s for s in statuses if hundred <= s < hundred + 100]
-                if len(hstatuses) > len(statuses) / 2:
+                if len(hstatuses) >= quorum_size(len(statuses)):
                     status = max(hstatuses)
                     status_index = statuses.index(status)
                     resp.status = '%s %s' % (status, reasons[status_index])
                     resp.body = bodies[status_index]
+                    if headers:
+                        update_headers(resp, headers[status_index])
                     if etag:
                         resp.headers['etag'] = etag.strip('"')
                     return resp
@@ -647,12 +885,22 @@ class Controller(object):
 
     @public
     def GET(self, req):
-        """Handler for HTTP GET requests."""
+        """
+        Handler for HTTP GET requests.
+
+        :param req: The client request
+        :returns: the response to the client
+        """
         return self.GETorHEAD(req)
 
     @public
     def HEAD(self, req):
-        """Handler for HTTP HEAD requests."""
+        """
+        Handler for HTTP HEAD requests.
+
+        :param req: The client request
+        :returns: the response to the client
+        """
         return self.GETorHEAD(req)
 
     def _make_app_iter_reader(self, node, source, queue, logger_thread_locals):
@@ -733,18 +981,23 @@ class Controller(object):
             raise
 
     def close_swift_conn(self, src):
+        """
+        Force close the http connection to the backend.
+
+        :param src: the response from the backend
+        """
         try:
-            src.swift_conn.close()
-        except Exception:
-            pass
-        src.swift_conn = None
-        try:
-            while src.read(self.app.object_chunk_size):
-                pass
-        except Exception:
-            pass
-        try:
-            src.close()
+            # Since the backends set "Connection: close" in their response
+            # headers, the response object (src) is solely responsible for the
+            # socket. The connection object (src.swift_conn) has no references
+            # to the socket, so calling its close() method does nothing, and
+            # therefore we don't do it.
+            #
+            # Also, since calling the response's close() method might not
+            # close the underlying socket but only decrement some
+            # reference-counter, we have a special method here that really,
+            # really kills the underlying socket with a close() syscall.
+            src.nuke_from_orbit()  # it's the only way to be sure
         except Exception:
             pass
 
@@ -752,40 +1005,55 @@ class Controller(object):
         """
         Indicates whether or not the request made to the backend found
         what it was looking for.
+
+        :param src: the response from the backend
+        :returns: True if found, False if not
         """
         return is_success(src.status) or is_redirection(src.status)
 
-    def GETorHEAD_base(self, req, server_type, partition, nodes, path,
-                       attempts):
+    def autocreate_account(self, env, account):
+        """
+        Autocreate an account
+
+        :param env: the environment of the request leading to this autocreate
+        :param account: the unquoted account name
+        """
+        partition, nodes = self.app.account_ring.get_nodes(account)
+        path = '/%s' % account
+        headers = {'X-Timestamp': normalize_timestamp(time.time()),
+                   'X-Trans-Id': self.trans_id,
+                   'Connection': 'close'}
+        resp = self.make_requests(Request.blank('/v1' + path),
+                                  self.app.account_ring, partition, 'PUT',
+                                  path, [headers] * len(nodes))
+        if is_success(resp.status_int):
+            self.app.logger.info('autocreate account %r' % path)
+            clear_info_cache(self.app, env, account)
+        else:
+            self.app.logger.warning('Could not autocreate account %r' % path)
+
+    def GETorHEAD_base(self, req, server_type, ring, partition, path):
         """
         Base handler for HTTP GET or HEAD requests.
 
         :param req: swob.Request object
         :param server_type: server type
+        :param ring: the ring to obtain nodes from
         :param partition: partition
-        :param nodes: nodes
         :param path: path for the request
-        :param attempts: number of attempts to try
         :returns: swob.Response object
         """
         statuses = []
         reasons = []
         bodies = []
+        source_headers = []
         sources = []
         newest = config_true_value(req.headers.get('x-newest', 'f'))
-        nodes = iter(nodes)
-        while len(statuses) < attempts:
-            try:
-                node = nodes.next()
-            except StopIteration:
-                break
-            if self.error_limited(node):
-                continue
+        headers = self.generate_request_headers(req, additional=req.headers)
+        for node in self.iter_nodes(ring, partition):
             start_node_timing = time.time()
             try:
                 with ConnectionTimeout(self.app.conn_timeout):
-                    headers = dict(req.headers)
-                    headers['Connection'] = 'close'
                     conn = http_connect(
                         node['ip'], node['port'], node['device'], partition,
                         req.method, path, headers=headers,
@@ -806,32 +1074,36 @@ class Controller(object):
                     statuses.append(HTTP_NOT_FOUND)
                     reasons.append('')
                     bodies.append('')
+                    source_headers.append('')
                     self.close_swift_conn(possible_source)
                 else:
                     statuses.append(possible_source.status)
                     reasons.append(possible_source.reason)
                     bodies.append('')
-                    sources.append(possible_source)
+                    source_headers.append('')
+                    sources.append((possible_source, node))
                     if not newest:  # one good source is enough
                         break
             else:
                 statuses.append(possible_source.status)
                 reasons.append(possible_source.reason)
                 bodies.append(possible_source.read())
+                source_headers.append(possible_source.getheaders())
                 if possible_source.status == HTTP_INSUFFICIENT_STORAGE:
-                    self.error_limit(node)
+                    self.error_limit(node, _('ERROR Insufficient Storage'))
                 elif is_server_error(possible_source.status):
                     self.error_occurred(node, _('ERROR %(status)d %(body)s '
                                                 'From %(type)s Server') %
                                         {'status': possible_source.status,
                                          'body': bodies[-1][:1024],
                                          'type': server_type})
+        res = None
         if sources:
-            sources.sort(key=source_key)
-            source = sources.pop()
-            for src in sources:
+            sources.sort(key=lambda s: source_key(s[0]))
+            source, node = sources.pop()
+            for src, _junk in sources:
                 self.close_swift_conn(src)
-            res = Response(request=req, conditional_response=True)
+            res = Response(request=req)
             if req.method == 'GET' and \
                     source.status in (HTTP_OK, HTTP_PARTIAL_CONTENT):
                 res.app_iter = self._make_app_iter(node, source)
@@ -848,9 +1120,22 @@ class Controller(object):
             if source.getheader('Content-Type'):
                 res.charset = None
                 res.content_type = source.getheader('Content-Type')
-            return res
-        return self.best_response(req, statuses, reasons, bodies,
-                                  '%s %s' % (server_type, req.method))
+        if not res:
+            res = self.best_response(req, statuses, reasons, bodies,
+                                     '%s %s' % (server_type, req.method),
+                                     headers=source_headers)
+        try:
+            (account, container) = split_path(req.path_info, 1, 2)
+            _set_info_cache(self.app, req.environ, account, container, res)
+        except ValueError:
+            pass
+        try:
+            (account, container, obj) = split_path(req.path_info, 3, 3, True)
+            _set_object_info_cache(self.app, req.environ, account,
+                                   container, obj, res)
+        except ValueError:
+            pass
+        return res
 
     def is_origin_allowed(self, cors_info, origin):
         """
@@ -890,7 +1175,8 @@ class Controller(object):
         # This is a CORS preflight request so check it's allowed
         try:
             container_info = \
-                self.container_info(self.account_name, self.container_name)
+                self.container_info(self.account_name,
+                                    self.container_name, req)
         except AttributeError:
             # This should only happen for requests to the Account. A future
             # change could allow CORS requests to the Account level as well.
@@ -905,15 +1191,15 @@ class Controller(object):
             resp.status = HTTP_UNAUTHORIZED
             return resp
 
-        # Always allow the x-auth-token header. This ensures
-        # clients can always make a request to the resource.
+        # Allow all headers requested in the request. The CORS
+        # specification does leave the door open for this, as mentioned in
+        # http://www.w3.org/TR/cors/#resource-preflight-requests
+        # Note: Since the list of headers can be unbounded
+        # simply returning headers can be enough.
         allow_headers = set()
-        if cors.get('allow_headers'):
+        if req.headers.get('Access-Control-Request-Headers'):
             allow_headers.update(
-                [a.strip()
-                 for a in cors['allow_headers'].split(' ')
-                 if a.strip()])
-        allow_headers.add('x-auth-token')
+                list_from_csv(req.headers['Access-Control-Request-Headers']))
 
         # Populate the response with the CORS preflight headers
         headers['access-control-allow-origin'] = req_origin_value
@@ -921,7 +1207,8 @@ class Controller(object):
             headers['access-control-max-age'] = cors.get('max_age')
         headers['access-control-allow-methods'] = \
             ', '.join(self.allowed_methods)
-        headers['access-control-allow-headers'] = ', '.join(allow_headers)
+        if allow_headers:
+            headers['access-control-allow-headers'] = ', '.join(allow_headers)
         resp.headers = headers
 
         return resp

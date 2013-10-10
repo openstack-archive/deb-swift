@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -66,9 +66,10 @@ Using this in combination with browser form post translation
 middleware could also allow direct-from-browser uploads to specific
 locations in Swift.
 
-Note that changing the X-Account-Meta-Temp-URL-Key will invalidate
-any previously generated temporary URLs within 60 seconds (the
-memcache time for the key).
+TempURL supports up to two keys, specified by X-Account-Meta-Temp-URL-Key and
+X-Account-Meta-Temp-URL-Key-2. Signatures are checked against both keys, if
+present. This is to allow for key rotation without invalidating all existing
+temporary URLs.
 
 With GET TempURLs, a Content-Disposition header will be set on the
 response so that browsers will interpret this as a file attachment to
@@ -91,13 +92,13 @@ __all__ = ['TempURL', 'filter_factory',
 import hmac
 from hashlib import sha1
 from os.path import basename
-from StringIO import StringIO
-from time import gmtime, strftime, time
-from urllib import unquote, urlencode
+from time import time
+from urllib import urlencode
 from urlparse import parse_qs
 
-from swift.common.wsgi import make_pre_authed_env
-from swift.common.http import HTTP_UNAUTHORIZED
+from swift.proxy.controllers.base import get_account_info
+from swift.common.swob import HeaderKeyDict
+from swift.common.utils import split_path
 
 
 #: Default headers to remove from incoming requests. Simply a whitespace
@@ -121,6 +122,21 @@ DEFAULT_OUTGOING_REMOVE_HEADERS = 'x-object-meta-*'
 #: whitespace delimited list of header names and names can optionally end with
 #: '*' to indicate a prefix match.
 DEFAULT_OUTGOING_ALLOW_HEADERS = 'x-object-meta-public-*'
+
+
+def get_tempurl_keys_from_metadata(meta):
+    """
+    Extracts the tempurl keys from metadata.
+
+    :param meta: account metadata
+    :returns: list of keys found (possibly empty if no keys set)
+
+    Example:
+      meta = get_account_info(...)['meta']
+      keys = get_tempurl_keys_from_metadata(meta)
+    """
+    return [value for key, value in meta.iteritems()
+            if key.lower() in ('temp-url-key', 'temp-url-key-2')]
 
 
 class TempURL(object):
@@ -174,6 +190,9 @@ class TempURL(object):
         #: The filter configuration dict.
         self.conf = conf
 
+        #: The methods allowed with Temp URLs.
+        self.methods = conf.get('methods', 'GET HEAD PUT').split()
+
         headers = DEFAULT_INCOMING_REMOVE_HEADERS
         if 'incoming_remove_headers' in conf:
             headers = conf['incoming_remove_headers']
@@ -203,7 +222,7 @@ class TempURL(object):
         headers = DEFAULT_OUTGOING_REMOVE_HEADERS
         if 'outgoing_remove_headers' in conf:
             headers = conf['outgoing_remove_headers']
-        headers = [h.lower() for h in headers.split()]
+        headers = [h.title() for h in headers.split()]
         #: Headers to remove from outgoing responses. Lowercase, like
         #: `x-account-meta-temp-url-key`.
         self.outgoing_remove_headers = [h for h in headers if h[-1] != '*']
@@ -215,7 +234,7 @@ class TempURL(object):
         headers = DEFAULT_OUTGOING_ALLOW_HEADERS
         if 'outgoing_allow_headers' in conf:
             headers = conf['outgoing_allow_headers']
-        headers = [h.lower() for h in headers.split()]
+        headers = [h.title() for h in headers.split()]
         #: Headers to allow in outgoing responses. Lowercase, like
         #: `x-matches-remove-prefix-but-okay`.
         self.outgoing_allow_headers = [h for h in headers if h[-1] != '*']
@@ -234,6 +253,8 @@ class TempURL(object):
         :param start_response: The WSGI start_response hook.
         :returns: Response as per WSGI.
         """
+        if env['REQUEST_METHOD'] == 'OPTIONS':
+            return self.app(env, start_response)
         temp_url_sig, temp_url_expires, filename = self._get_temp_url_info(env)
         if temp_url_sig is None and temp_url_expires is None:
             return self.app(env, start_response)
@@ -242,20 +263,20 @@ class TempURL(object):
         account = self._get_account(env)
         if not account:
             return self._invalid(env, start_response)
-        key = self._get_key(env, account)
-        if not key:
+        keys = self._get_keys(env, account)
+        if not keys:
             return self._invalid(env, start_response)
         if env['REQUEST_METHOD'] == 'HEAD':
-            hmac_val = self._get_hmac(env, temp_url_expires, key,
-                                      request_method='GET')
-            if temp_url_sig != hmac_val:
-                hmac_val = self._get_hmac(env, temp_url_expires, key,
-                                          request_method='PUT')
-                if temp_url_sig != hmac_val:
+            hmac_vals = self._get_hmacs(env, temp_url_expires, keys,
+                                        request_method='GET')
+            if temp_url_sig not in hmac_vals:
+                hmac_vals = self._get_hmacs(env, temp_url_expires, keys,
+                                            request_method='PUT')
+                if temp_url_sig not in hmac_vals:
                     return self._invalid(env, start_response)
         else:
-            hmac_val = self._get_hmac(env, temp_url_expires, key)
-            if temp_url_sig != hmac_val:
+            hmac_vals = self._get_hmacs(env, temp_url_expires, keys)
+            if temp_url_sig not in hmac_vals:
                 return self._invalid(env, start_response)
         self._clean_incoming_headers(env)
         env['swift.authorize'] = lambda req: None
@@ -280,33 +301,31 @@ class TempURL(object):
                                    if h.lower() != 'content-disposition')
                     already = False
                 if not already:
+                    name = filename or basename(env['PATH_INFO'].rstrip('/'))
                     headers.append((
                         'Content-Disposition',
                         'attachment; filename="%s"' % (
-                            filename or
-                            basename(env['PATH_INFO'])).replace('"', '\\"')))
+                            name.replace('"', '\\"'))))
             return start_response(status, headers, exc_info)
 
         return self.app(env, _start_response)
 
     def _get_account(self, env):
         """
-        Returns just the account for the request, if it's an object GET, PUT,
-        or HEAD request; otherwise, None is returned.
+        Returns just the account for the request, if it's an object
+        request and one of the configured methods; otherwise, None is
+        returned.
 
         :param env: The WSGI environment for the request.
         :returns: Account str or None.
         """
-        account = None
-        if env['REQUEST_METHOD'] in ('GET', 'PUT', 'HEAD'):
-            parts = env['PATH_INFO'].split('/', 4)
-            # Must be five parts, ['', 'v1', 'a', 'c', 'o'], must be a v1
-            # request, have account, container, and object values, and the
-            # object value can't just have '/'s.
-            if len(parts) == 5 and not parts[0] and parts[1] == 'v1' and \
-                    parts[2] and parts[3] and parts[4].strip('/'):
-                account = parts[2]
-        return account
+        if env['REQUEST_METHOD'] in self.methods:
+            try:
+                ver, acc, cont, obj = split_path(env['PATH_INFO'], 4, 4, True)
+            except ValueError:
+                return None
+            if ver == 'v1' and obj.strip('/'):
+                return acc
 
     def _get_temp_url_info(self, env):
         """
@@ -334,40 +353,32 @@ class TempURL(object):
             filename = qs['filename'][0]
         return temp_url_sig, temp_url_expires, filename
 
-    def _get_key(self, env, account):
+    def _get_keys(self, env, account):
         """
-        Returns the X-Account-Meta-Temp-URL-Key header value for the
-        account, or None if none is set.
+        Returns the X-Account-Meta-Temp-URL-Key[-2] header values for the
+        account, or an empty list if none is set.
+
+        Returns 0, 1, or 2 elements depending on how many keys are set
+        in the account's metadata.
 
         :param env: The WSGI environment for the request.
         :param account: Account str.
-        :returns: X-Account-Meta-Temp-URL-Key str value, or None.
+        :returns: [X-Account-Meta-Temp-URL-Key str value if set,
+                   X-Account-Meta-Temp-URL-Key-2 str value if set]
         """
-        key = None
-        memcache = env.get('swift.cache')
-        if memcache:
-            key = memcache.get('temp-url-key/%s' % account)
-        if not key:
-            newenv = make_pre_authed_env(env, 'HEAD', '/v1/' + account,
-                                         self.agent, swift_source='TU')
-            newenv['CONTENT_LENGTH'] = '0'
-            newenv['wsgi.input'] = StringIO('')
-            key = [None]
+        account_info = get_account_info(env, self.app, swift_source='TU')
+        return get_tempurl_keys_from_metadata(account_info['meta'])
 
-            def _start_response(status, response_headers, exc_info=None):
-                for h, v in response_headers:
-                    if h.lower() == 'x-account-meta-temp-url-key':
-                        key[0] = v
-
-            i = iter(self.app(newenv, _start_response))
-            try:
-                i.next()
-            except StopIteration:
-                pass
-            key = key[0]
-            if key and memcache:
-                memcache.set('temp-url-key/%s' % account, key, time=60)
-        return key
+    def _get_hmacs(self, env, expires, keys, request_method=None):
+        """
+        :param env: The WSGI environment for the request.
+        :param expires: Unix timestamp as an int for when the URL
+                        expires.
+        :param keys: Key strings, from the X-Account-Meta-Temp-URL-Key[-2] of
+                     the account.
+        """
+        return [self._get_hmac(env, expires, key, request_method)
+                for key in keys]
 
     def _get_hmac(self, env, expires, key, request_method=None):
         """
@@ -446,7 +457,7 @@ class TempURL(object):
                   removed as per the middlware configuration for
                   outgoing responses.
         """
-        headers = dict(headers)
+        headers = HeaderKeyDict(headers)
         for h in headers.keys():
             remove = h in self.outgoing_remove_headers
             if not remove:
@@ -468,7 +479,7 @@ class TempURL(object):
 
 
 def filter_factory(global_conf, **local_conf):
-    """ Returns the WSGI filter for use with paste.deploy. """
+    """Returns the WSGI filter for use with paste.deploy."""
     conf = global_conf.copy()
     conf.update(local_conf)
     return lambda app: TempURL(app, conf)

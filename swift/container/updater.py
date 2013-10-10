@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,15 +18,16 @@ import os
 import signal
 import sys
 import time
+from swift import gettext_ as _
 from random import random, shuffle
 from tempfile import mkstemp
 
 from eventlet import spawn, patcher, Timeout
 
 import swift.common.db
+from swift.container.backend import ContainerBroker
 from swift.container.server import DATADIR
 from swift.common.bufferedhttp import http_connect
-from swift.common.db import ContainerBroker
 from swift.common.exceptions import ConnectionTimeout
 from swift.common.ring import Ring
 from swift.common.utils import get_logger, config_true_value, dump_recon_cache
@@ -61,6 +62,7 @@ class ContainerUpdater(Daemon):
         self.recon_cache_path = conf.get('recon_cache_path',
                                          '/var/cache/swift')
         self.rcache = os.path.join(self.recon_cache_path, "container.recon")
+        self.user_agent = 'container-updater %s' % os.getpid()
 
     def get_account_ring(self):
         """Get the account ring.  Load it if it hasn't been yet."""
@@ -269,14 +271,16 @@ class ContainerUpdater(Daemon):
         """
         with ConnectionTimeout(self.conn_timeout):
             try:
+                headers = {
+                    'X-Put-Timestamp': put_timestamp,
+                    'X-Delete-Timestamp': delete_timestamp,
+                    'X-Object-Count': count,
+                    'X-Bytes-Used': bytes,
+                    'X-Account-Override-Deleted': 'yes',
+                    'user-agent': self.user_agent}
                 conn = http_connect(
                     node['ip'], node['port'], node['device'], part,
-                    'PUT', container,
-                    headers={'X-Put-Timestamp': put_timestamp,
-                             'X-Delete-Timestamp': delete_timestamp,
-                             'X-Object-Count': count,
-                             'X-Bytes-Used': bytes,
-                             'X-Account-Override-Deleted': 'yes'})
+                    'PUT', container, headers=headers)
             except (Exception, Timeout):
                 self.logger.exception(_(
                     'ERROR account update failed with '
@@ -292,3 +296,5 @@ class ContainerUpdater(Daemon):
                     self.logger.exception(
                         _('Exception with %(ip)s:%(port)s/%(device)s'), node)
                 return HTTP_INTERNAL_SERVER_ERROR
+            finally:
+                conn.close()

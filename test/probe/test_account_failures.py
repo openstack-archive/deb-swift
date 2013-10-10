@@ -1,5 +1,5 @@
 #!/usr/bin/python -u
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ class TestAccountFailures(TestCase):
     def setUp(self):
         (self.pids, self.port2server, self.account_ring, self.container_ring,
          self.object_ring, self.url, self.token,
-         self.account) = reset_environment()
+         self.account, self.configs) = reset_environment()
 
     def tearDown(self):
         kill_servers(self.port2server, self.pids)
@@ -140,7 +140,7 @@ class TestAccountFailures(TestCase):
         for node in xrange(1, 5):
             processes.append(Popen([
                 'swift-container-updater',
-                '/etc/swift/container-server/%d.conf' % node,
+                self.configs['container'] % node,
                 'once']))
         for process in processes:
             process.wait()

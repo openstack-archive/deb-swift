@@ -24,7 +24,7 @@
 
 .SH SYNOPSIS
 .LP
-.B swift-dispersion-report [-d|--debug] [-j|--dump-json] [-p|--partitions] [--container-only|--object-only] [conf_file]
+.B swift-dispersion-report [-d|--debug] [-j|--dump-json] [-p|--partitions] [--container-only|--object-only] [--insecure] [conf_file]
 
 .SH DESCRIPTION 
 .PP
@@ -84,6 +84,13 @@ Only run the container report
 .IP "\fB--object-only\fR"
 Only run the object report
 
+.SH OPTIONS
+.RS 0
+.PD 1
+.IP "\fB--insecure\fR"
+Allow accessing insecure keystone server. The keystone's certificate will not
+be verified.
+
 .SH CONFIGURATION
 .PD 0 
 Example \fI/etc/swift/dispersion.conf\fR: 
@@ -94,7 +101,7 @@ Example \fI/etc/swift/dispersion.conf\fR:
 .IP "auth_user = dpstats:dpstats"
 .IP "auth_key = dpstats"
 .IP "swift_dir = /etc/swift"
-.IP "# dispersion_coverage = 1"
+.IP "# dispersion_coverage = 1.0"
 .IP "# retries = 5"
 .IP "# concurrency = 25"
 .IP "# dump_json = no"

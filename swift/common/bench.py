@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import signal
 import socket
 import logging
 from contextlib import contextmanager
+from swift import gettext_ as _
 from optparse import Values
 
 import eventlet
@@ -51,7 +52,7 @@ def delete_containers(logger, conf):
     def _deleter(url, token, container):
         try:
             client.delete_container(url, token, container)
-        except client.ClientException, e:
+        except client.ClientException as e:
             if e.http_status != HTTP_CONFLICT:
                 logger.warn("Unable to delete container '%s'. "
                             "Got http status '%d'."
@@ -351,6 +352,7 @@ class BenchController(object):
         self.delete = config_true_value(conf.delete)
         self.gets = int(conf.num_gets)
         self.aborted = False
+        self.delay = int(self.conf.delay)
 
     def sigint1(self, signum, frame):
         if self.delete:
@@ -368,6 +370,7 @@ class BenchController(object):
         sys.exit('Final SIGINT received.')
 
     def run(self):
+        eventlet.patcher.monkey_patch(socket=True)
         signal.signal(signal.SIGINT, self.sigint1)
         puts = BenchPUT(self.logger, self.conf, self.names)
         self.running = puts
@@ -377,6 +380,11 @@ class BenchController(object):
             self.running = gets
             gets.run()
         if self.delete:
+            if self.delay != 0:
+                self.logger.info('Delay before '
+                                 'DELETE request %s sec'
+                                 % self.delay)
+                time.sleep(self.delay)
             dels = BenchDELETE(self.logger, self.conf, self.names)
             self.running = dels
             dels.run()
@@ -405,7 +413,7 @@ class BenchDELETE(Bench):
                     direct_client.direct_delete_object(node, partition,
                                                        self.account,
                                                        container_name, name)
-            except client.ClientException, e:
+            except client.ClientException as e:
                 self.logger.debug(str(e))
                 self.failures += 1
         self.complete += 1
@@ -434,7 +442,7 @@ class BenchGET(Bench):
                     direct_client.direct_get_object(node, partition,
                                                     self.account,
                                                     container_name, name)
-            except client.ClientException, e:
+            except client.ClientException as e:
                 self.logger.debug(str(e))
                 self.failures += 1
         self.complete += 1
@@ -478,7 +486,7 @@ class BenchPUT(Bench):
                                                     container_name, name,
                                                     source,
                                                     content_length=len(source))
-            except client.ClientException, e:
+            except client.ClientException as e:
                 self.logger.debug(str(e))
                 self.failures += 1
             else:

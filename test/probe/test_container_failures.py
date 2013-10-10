@@ -1,5 +1,5 @@
 #!/usr/bin/python -u
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ from unittest import main, TestCase
 from uuid import uuid4
 
 from eventlet import GreenPool, Timeout
+import eventlet
 from sqlite3 import connect
 from swiftclient import client
 
@@ -27,6 +28,8 @@ from swift.common import direct_client
 from swift.common.utils import hash_path, readconf
 from test.probe.common import get_to_final_state, kill_nonprimary_server, \
     kill_server, kill_servers, reset_environment, start_server
+
+eventlet.monkey_patch(all=False, socket=True)
 
 
 def get_db_file_path(obj_dir):
@@ -41,7 +44,7 @@ class TestContainerFailures(TestCase):
     def setUp(self):
         (self.pids, self.port2server, self.account_ring, self.container_ring,
          self.object_ring, self.url, self.token,
-         self.account) = reset_environment()
+         self.account, self.configs) = reset_environment()
 
     def tearDown(self):
         kill_servers(self.port2server, self.pids)
@@ -104,7 +107,7 @@ class TestContainerFailures(TestCase):
             try:
                 direct_client.direct_get_container(cnode, cpart, self.account,
                                                    container1)
-            except client.ClientException, err:
+            except client.ClientException as err:
                 exc = err
             self.assertEquals(exc.http_status, 404)
         headers, containers = client.get_account(self.url, self.token)
@@ -120,8 +123,7 @@ class TestContainerFailures(TestCase):
             node_id = (onode['port'] - 6000) / 10
             device = onode['device']
             hash_str = hash_path(self.account, container)
-            server_conf = readconf('/etc/swift/container-server/%s.conf' %
-                                   node_id)
+            server_conf = readconf(self.configs['container'] % node_id)
             devices = server_conf['app:container-server']['devices']
             obj_dir = '%s/%s/containers/%s/%s/%s/' % (devices,
                                                       device, opart,
@@ -145,7 +147,7 @@ class TestContainerFailures(TestCase):
                 exc = None
                 try:
                     client.delete_container(self.url, self.token, container)
-                except client.ClientException, err:
+                except client.ClientException as err:
                     exc = err
                 self.assertEquals(exc.http_status, 503)
             else:
@@ -158,7 +160,7 @@ class TestContainerFailures(TestCase):
                 pool.spawn(run_test, 2, True)
                 pool.spawn(run_test, 3, True)
                 pool.waitall()
-        except Timeout, err:
+        except Timeout as err:
             raise Exception(
                 "The server did not return a 503 on container db locks, "
                 "it just hangs: %s" % err)

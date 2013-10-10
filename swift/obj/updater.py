@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import os
 import signal
 import sys
 import time
+from swift import gettext_ as _
 from random import random
 
 from eventlet import patcher, Timeout
@@ -107,7 +108,7 @@ class ObjectUpdater(Daemon):
                 time.sleep(self.interval - elapsed)
 
     def run_once(self, *args, **kwargs):
-        """Run the updater once"""
+        """Run the updater once."""
         self.logger.info(_('Begin object update single threaded sweep'))
         begin = time.time()
         self.successes = 0
@@ -228,10 +229,12 @@ class ObjectUpdater(Daemon):
         :param obj: object name being updated
         :param headers: headers to send with the update
         """
+        headers_out = headers.copy()
+        headers_out['user-agent'] = 'obj-updater %s' % os.getpid()
         try:
             with ConnectionTimeout(self.conn_timeout):
                 conn = http_connect(node['ip'], node['port'], node['device'],
-                                    part, op, obj, headers)
+                                    part, op, obj, headers_out)
             with Timeout(self.node_timeout):
                 resp = conn.getresponse()
                 resp.read()

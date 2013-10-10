@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +26,9 @@ a record ending in the configured storage domain or it reaches the configured
 maximum lookup depth. If a match is found, the environment's Host header is
 rewritten and the request is passed further down the WSGI chain.
 """
+
+import socket
+from swift import gettext_ as _
 
 try:
     import dns.resolver
@@ -56,6 +59,18 @@ def lookup_cname(domain):  # pragma: no cover
         return ttl, result
     except (DNSException, NXDOMAIN, NoAnswer):
         return 0, None
+
+
+def is_ip(domain):
+    try:
+        socket.inet_pton(socket.AF_INET, domain)
+        return True
+    except socket.error:
+        try:
+            socket.inet_pton(socket.AF_INET6, domain)
+            return True
+        except socket.error:
+            return False
 
 
 class CNAMELookupMiddleware(object):
@@ -92,6 +107,8 @@ class CNAMELookupMiddleware(object):
         if ':' in given_domain:
             given_domain, port = given_domain.rsplit(':', 1)
         if given_domain == self.storage_domain[1:]:  # strip initial '.'
+            return self.app(env, start_response)
+        if is_ip(given_domain):
             return self.app(env, start_response)
         a_domain = given_domain
         if not a_domain.endswith(self.storage_domain):

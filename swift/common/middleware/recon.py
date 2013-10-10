@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,9 @@
 
 import errno
 import os
+from swift import gettext_ as _
 
+from swift import __version__ as swiftver
 from swift.common.swob import Request, Response
 from swift.common.utils import get_logger, config_true_value, json
 from swift.common.constraints import check_mount
@@ -76,6 +78,11 @@ class ReconMiddleware(object):
         except Exception:
             self.logger.exception(_('Error retrieving recon data'))
         return dict((key, None) for key in cache_keys)
+
+    def get_version(self):
+        """get swift version"""
+        verinfo = {'version': swiftver}
+        return verinfo
 
     def get_mounted(self, openr=open):
         """get ALL mounted fs from /proc/mounts"""
@@ -221,7 +228,7 @@ class ReconMiddleware(object):
                             md5sum.update(block)
                             block = f.read(4096)
                     sums[ringfile] = md5sum.hexdigest()
-                except IOError, err:
+                except IOError as err:
                     sums[ringfile] = None
                     if err.errno != errno.ENOENT:
                         self.logger.exception(_('Error reading ringfile'))
@@ -305,6 +312,8 @@ class ReconMiddleware(object):
             content = self.get_quarantine_count()
         elif rcheck == "sockstat":
             content = self.get_socket_info()
+        elif rcheck == "version":
+            content = self.get_version()
         else:
             content = "Invalid path: %s" % req.path
             return Response(request=req, status="404 Not Found",

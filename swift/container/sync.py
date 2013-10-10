@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from swift import gettext_ as _
 from time import ctime, time
 from random import random, shuffle
 from struct import unpack_from
@@ -23,49 +24,13 @@ import swift.common.db
 from swift.container import server as container_server
 from swiftclient import ClientException, delete_object, put_object, \
     quote
+from swift.container.backend import ContainerBroker
 from swift.common.direct_client import direct_get_object
 from swift.common.ring import Ring
-from swift.common.db import ContainerBroker
 from swift.common.utils import audit_location_generator, get_logger, \
-    hash_path, config_true_value, validate_sync_to, whataremyips
+    hash_path, config_true_value, validate_sync_to, whataremyips, FileLikeIter
 from swift.common.daemon import Daemon
 from swift.common.http import HTTP_UNAUTHORIZED, HTTP_NOT_FOUND
-
-
-class _Iter2FileLikeObject(object):
-    """
-    Returns an iterator's contents via :func:`read`, making it look like a file
-    object.
-    """
-
-    def __init__(self, iterator):
-        self.iterator = iterator
-        self._chunk = ''
-
-    def read(self, size=-1):
-        """
-        read([size]) -> read at most size bytes, returned as a string.
-
-        If the size argument is negative or omitted, read until EOF is reached.
-        Notice that when in non-blocking mode, less data than what was
-        requested may be returned, even if no size parameter was given.
-        """
-        if size < 0:
-            chunk = self._chunk
-            self._chunk = ''
-            return chunk + ''.join(self.iterator)
-        chunk = self._chunk
-        self._chunk = ''
-        if chunk and len(chunk) <= size:
-            return chunk
-        try:
-            chunk += self.iterator.next()
-        except StopIteration:
-            pass
-        if len(chunk) <= size:
-            return chunk
-        self._chunk = chunk[size:]
-        return chunk[:size]
 
 
 class ContainerSync(Daemon):
@@ -191,6 +156,7 @@ class ContainerSync(Daemon):
             begin = time()
             all_locs = audit_location_generator(self.devices,
                                                 container_server.DATADIR,
+                                                '.db',
                                                 mount_check=self.mount_check,
                                                 logger=self.logger)
             for path, device, partition in all_locs:
@@ -208,7 +174,7 @@ class ContainerSync(Daemon):
         self.logger.info(_('Begin container sync "once" mode'))
         begin = time()
         all_locs = audit_location_generator(self.devices,
-                                            container_server.DATADIR,
+                                            container_server.DATADIR, '.db',
                                             mount_check=self.mount_check,
                                             logger=self.logger)
         for path, device, partition in all_locs:
@@ -249,9 +215,8 @@ class ContainerSync(Daemon):
 
         :param path: the path to a container db
         """
+        broker = None
         try:
-            if not path.endswith('.db'):
-                return
             broker = ContainerBroker(path)
             info = broker.get_info()
             x, nodes = self.container_ring.get_nodes(info['account'],
@@ -330,10 +295,11 @@ class ContainerSync(Daemon):
                     broker.set_x_container_sync_points(sync_point1, None)
                 self.container_syncs += 1
                 self.logger.increment('syncs')
-        except (Exception, Timeout), err:
+        except (Exception, Timeout) as err:
             self.container_failures += 1
             self.logger.increment('failures')
-            self.logger.exception(_('ERROR Syncing %s'), (broker.db_file))
+            self.logger.exception(_('ERROR Syncing %s'),
+                                  broker.db_file if broker else path)
 
     def container_sync_row(self, row, sync_to, sync_key, broker, info):
         """
@@ -357,7 +323,7 @@ class ContainerSync(Daemon):
                                   headers={'x-timestamp': row['created_at'],
                                            'x-container-sync-key': sync_key},
                                   proxy=self.proxy)
-                except ClientException, err:
+                except ClientException as err:
                     if err.http_status != HTTP_NOT_FOUND:
                         raise
                 self.container_deletes += 1
@@ -382,14 +348,14 @@ class ContainerSync(Daemon):
                             timestamp = this_timestamp
                             headers = these_headers
                             body = this_body
-                    except ClientException, err:
+                    except ClientException as err:
                         # If any errors are not 404, make sure we report the
                         # non-404 one. We don't want to mistakenly assume the
                         # object no longer exists just because one says so and
                         # the others errored for some other reason.
                         if not exc or exc.http_status == HTTP_NOT_FOUND:
                             exc = err
-                    except (Exception, Timeout), err:
+                    except (Exception, Timeout) as err:
                         exc = err
                 if timestamp < looking_for_timestamp:
                     if exc:
@@ -409,12 +375,12 @@ class ContainerSync(Daemon):
                 headers['x-timestamp'] = row['created_at']
                 headers['x-container-sync-key'] = sync_key
                 put_object(sync_to, name=row['name'], headers=headers,
-                           contents=_Iter2FileLikeObject(body),
+                           contents=FileLikeIter(body),
                            proxy=self.proxy)
                 self.container_puts += 1
                 self.logger.increment('puts')
                 self.logger.timing_since('puts.timing', start_time)
-        except ClientException, err:
+        except ClientException as err:
             if err.http_status == HTTP_UNAUTHORIZED:
                 self.logger.info(
                     _('Unauth %(sync_from)r => %(sync_to)r'),
@@ -435,7 +401,7 @@ class ContainerSync(Daemon):
             self.container_failures += 1
             self.logger.increment('failures')
             return False
-        except (Exception, Timeout), err:
+        except (Exception, Timeout) as err:
             self.logger.exception(
                 _('ERROR Syncing %(db_file)s %(row)s'),
                 {'db_file': broker.db_file, 'row': row})

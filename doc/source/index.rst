@@ -1,5 +1,5 @@
 ..
-      Copyright 2010-2012 OpenStack LLC 
+      Copyright 2010-2012 OpenStack Foundation
       All Rights Reserved.
 
       Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -54,6 +54,7 @@ Overview and Concepts
     overview_container_sync
     overview_expiring_objects
     cors
+    crossdomain
     associated_projects
 
 Developer Documentation
@@ -65,6 +66,7 @@ Developer Documentation
     development_guidelines
     development_saio
     development_auth
+    backends
 
 Administrator Documentation
 ===========================
@@ -74,7 +76,9 @@ Administrator Documentation
     
     howto_installmultinode
     deployment_guide
+    apache_deployment_guide
     admin_guide
+    replication_network
 
 Source Documentation
 ====================

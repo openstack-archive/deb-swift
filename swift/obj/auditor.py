@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,12 +15,14 @@
 
 import os
 import time
+from swift import gettext_ as _
 
 from eventlet import Timeout
 
+from swift.obj import diskfile
 from swift.obj import server as object_server
 from swift.common.utils import get_logger, audit_location_generator, \
-    ratelimit_sleep, config_true_value, dump_recon_cache
+    ratelimit_sleep, config_true_value, dump_recon_cache, list_from_csv, json
 from swift.common.exceptions import AuditException, DiskFileError, \
     DiskFileNotExist
 from swift.common.daemon import Daemon
@@ -56,10 +58,14 @@ class AuditorWorker(object):
         self.recon_cache_path = conf.get('recon_cache_path',
                                          '/var/cache/swift')
         self.rcache = os.path.join(self.recon_cache_path, "object.recon")
+        self.stats_sizes = sorted(
+            [int(s) for s in list_from_csv(conf.get('object_size_stats'))])
+        self.stats_buckets = dict(
+            [(s, 0) for s in self.stats_sizes + ['OVER']])
 
     def audit_all_objects(self, mode='once'):
-        self.logger.info(_('Begin object audit "%s" mode (%s)' %
-                           (mode, self.auditor_type)))
+        self.logger.info(_('Begin object audit "%s" mode (%s)') %
+                         (mode, self.auditor_type))
         begin = reported = time.time()
         self.total_bytes_processed = 0
         self.total_files_processed = 0
@@ -67,12 +73,12 @@ class AuditorWorker(object):
         total_errors = 0
         time_auditing = 0
         all_locs = audit_location_generator(self.devices,
-                                            object_server.DATADIR,
+                                            object_server.DATADIR, '.data',
                                             mount_check=self.mount_check,
                                             logger=self.logger)
         for path, device, partition in all_locs:
             loop_time = time.time()
-            self.object_audit(path, device, partition)
+            self.failsafe_object_audit(path, device, partition)
             self.logger.timing_since('timing', loop_time)
             self.files_running_time = ratelimit_sleep(
                 self.files_running_time, self.max_files_per_second)
@@ -124,6 +130,37 @@ class AuditorWorker(object):
                 'frate': self.total_files_processed / elapsed,
                 'brate': self.total_bytes_processed / elapsed,
                 'audit': time_auditing, 'audit_rate': time_auditing / elapsed})
+        if self.stats_sizes:
+            self.logger.info(
+                _('Object audit stats: %s') % json.dumps(self.stats_buckets))
+
+    def record_stats(self, obj_size):
+        """
+        Based on config's object_size_stats will keep track of how many objects
+        fall into the specified ranges. For example with the following:
+
+        object_size_stats = 10, 100, 1024
+
+        and your system has 3 objects of sizes: 5, 20, and 10000 bytes the log
+        will look like: {"10": 1, "100": 1, "1024": 0, "OVER": 1}
+        """
+        for size in self.stats_sizes:
+            if obj_size <= size:
+                self.stats_buckets[size] += 1
+                break
+        else:
+            self.stats_buckets["OVER"] += 1
+
+    def failsafe_object_audit(self, path, device, partition):
+        """
+        Entrypoint to object_audit, with a failsafe generic exception handler.
+        """
+        try:
+            self.object_audit(path, device, partition)
+        except (Exception, Timeout):
+            self.logger.increment('errors')
+            self.errors += 1
+            self.logger.exception(_('ERROR Trying to audit %s'), path)
 
     def object_audit(self, path, device, partition):
         """
@@ -134,26 +171,23 @@ class AuditorWorker(object):
         :param partition: the partition the path is on
         """
         try:
-            if not path.endswith('.data'):
-                return
             try:
-                name = object_server.read_metadata(path)['name']
-            except (Exception, Timeout), exc:
+                name = diskfile.read_metadata(path)['name']
+            except (Exception, Timeout) as exc:
                 raise AuditException('Error when reading metadata: %s' % exc)
             _junk, account, container, obj = name.split('/', 3)
-            df = object_server.DiskFile(self.devices, device, partition,
-                                        account, container, obj, self.logger,
-                                        keep_data_fp=True)
+            df = diskfile.DiskFile(self.devices, device, partition,
+                                   account, container, obj, self.logger)
+            df.open()
             try:
-                if df.data_file is None:
-                    # file is deleted, we found the tombstone
-                    return
                 try:
                     obj_size = df.get_data_file_size()
-                except DiskFileError, e:
-                    raise AuditException(str(e))
                 except DiskFileNotExist:
                     return
+                except DiskFileError as e:
+                    raise AuditException(str(e))
+                if self.stats_sizes:
+                    self.record_stats(obj_size)
                 if self.zero_byte_only_at_fps and obj_size:
                     self.passes += 1
                     return
@@ -172,19 +206,14 @@ class AuditorWorker(object):
                         {'path': path})
             finally:
                 df.close(verify_file=False)
-        except AuditException, err:
+        except AuditException as err:
             self.logger.increment('quarantines')
             self.quarantines += 1
             self.logger.error(_('ERROR Object %(obj)s failed audit and will '
                                 'be quarantined: %(err)s'),
                               {'obj': path, 'err': err})
-            object_server.quarantine_renamer(
+            diskfile.quarantine_renamer(
                 os.path.join(self.devices, device), path)
-            return
-        except (Exception, Timeout):
-            self.logger.increment('errors')
-            self.errors += 1
-            self.logger.exception(_('ERROR Trying to audit %s'), path)
             return
         self.passes += 1
 

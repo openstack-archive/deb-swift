@@ -1,4 +1,4 @@
-# Copyright (c) 2012 OpenStack, LLC.
+# Copyright (c) 2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ class FakeApp(object):
                 return resp(env, start_response)
         status, headers, body = self.status_headers_body_iter.next()
         return Response(status=status, headers=headers,
-                              body=body)(env, start_response)
+                        body=body)(env, start_response)
 
 
 class SwiftAuth(unittest.TestCase):
@@ -83,7 +83,7 @@ class SwiftAuth(unittest.TestCase):
         role = self.test_auth.reseller_admin_role
         headers = self._get_identity_headers(role=role)
         req = self._make_request('/v1/AUTH_acct/c', headers)
-        resp = req.get_response(self._get_successful_middleware())
+        req.get_response(self._get_successful_middleware())
         self.assertTrue(req.environ.get('reseller_request'))
 
     def test_confirmed_identity_is_not_authorized(self):
@@ -115,6 +115,16 @@ class SwiftAuth(unittest.TestCase):
         test_auth = keystoneauth.filter_factory(conf)(FakeApp())
         account = tenant_id = 'foo'
         self.assertTrue(test_auth._reseller_check(account, tenant_id))
+
+    def test_reseller_prefix_added_underscore(self):
+        conf = {'reseller_prefix': 'AUTH'}
+        test_auth = keystoneauth.filter_factory(conf)(FakeApp())
+        self.assertEqual(test_auth.reseller_prefix, "AUTH_")
+
+    def test_reseller_prefix_not_added_double_underscores(self):
+        conf = {'reseller_prefix': 'AUTH_'}
+        test_auth = keystoneauth.filter_factory(conf)(FakeApp())
+        self.assertEqual(test_auth.reseller_prefix, "AUTH_")
 
     def test_override_asked_for_but_not_allowed(self):
         conf = {'allow_overrides': 'false'}
@@ -164,13 +174,19 @@ class TestAuthorize(unittest.TestCase):
     def _get_account(self, identity=None):
         if not identity:
             identity = self._get_identity()
-        return self.test_auth._get_account_for_tenant(identity['tenant'][0])
+        return self.test_auth._get_account_for_tenant(
+            identity['HTTP_X_TENANT_ID'])
 
-    def _get_identity(self, tenant_id='tenant_id',
-                      tenant_name='tenant_name', user='user', roles=None):
-        if not roles:
-            roles = []
-        return dict(tenant=(tenant_id, tenant_name), user=user, roles=roles)
+    def _get_identity(self, tenant_id='tenant_id', tenant_name='tenant_name',
+                      user_id='user_id', user_name='user_name', roles=[]):
+        if isinstance(roles, list):
+            roles = ','.join(roles)
+        return {'HTTP_X_USER_ID': user_id,
+                'HTTP_X_USER_NAME': user_name,
+                'HTTP_X_TENANT_ID': tenant_id,
+                'HTTP_X_TENANT_NAME': tenant_name,
+                'HTTP_X_ROLES': roles,
+                'HTTP_X_IDENTITY_STATUS': 'Confirmed'}
 
     def _check_authenticate(self, account=None, identity=None, headers=None,
                             exception=None, acl=None, env=None, path=None):
@@ -180,14 +196,18 @@ class TestAuthorize(unittest.TestCase):
             account = self._get_account(identity)
         if not path:
             path = '/v1/%s/c' % account
-        default_env = {'keystone.identity': identity,
-                       'REMOTE_USER': identity['tenant']}
+        default_env = {'REMOTE_USER': identity['HTTP_X_TENANT_ID']}
+        default_env.update(identity)
         if env:
             default_env.update(env)
         req = self._make_request(path, headers=headers, environ=default_env)
         req.acl = acl
         result = self.test_auth.authorize(req)
-        if exception:
+
+        # if we have requested an exception but nothing came back then
+        if exception and not result:
+            self.fail("error %s was not returned" % (str(exception)))
+        elif exception:
             self.assertEquals(result.status_int, exception)
         else:
             self.assertTrue(result is None)
@@ -225,8 +245,8 @@ class TestAuthorize(unittest.TestCase):
         self.assertTrue(req.environ.get('swift_owner'))
 
     def _check_authorize_for_tenant_owner_match(self, exception=None):
-        identity = self._get_identity()
-        identity['user'] = identity['tenant'][1]
+        identity = self._get_identity(user_name='same_name',
+                                      tenant_name='same_name')
         req = self._check_authenticate(identity=identity, exception=exception)
         expected = bool(exception is None)
         self.assertEqual(bool(req.environ.get('swift_owner')), expected)
@@ -271,31 +291,100 @@ class TestAuthorize(unittest.TestCase):
 
     def test_authorize_succeeds_for_tenant_name_user_in_roles(self):
         identity = self._get_identity()
-        acl = '%s:%s' % (identity['tenant'][1], identity['user'])
-        self._check_authenticate(identity=identity, acl=acl)
+        user_name = identity['HTTP_X_USER_NAME']
+        user_id = identity['HTTP_X_USER_ID']
+        tenant_id = identity['HTTP_X_TENANT_ID']
+        for user in [user_id, user_name, '*']:
+            acl = '%s:%s' % (tenant_id, user)
+            self._check_authenticate(identity=identity, acl=acl)
 
     def test_authorize_succeeds_for_tenant_id_user_in_roles(self):
         identity = self._get_identity()
-        acl = '%s:%s' % (identity['tenant'][0], identity['user'])
-        self._check_authenticate(identity=identity, acl=acl)
+        user_name = identity['HTTP_X_USER_NAME']
+        user_id = identity['HTTP_X_USER_ID']
+        tenant_name = identity['HTTP_X_TENANT_NAME']
+        for user in [user_id, user_name, '*']:
+            acl = '%s:%s' % (tenant_name, user)
+            self._check_authenticate(identity=identity, acl=acl)
 
     def test_authorize_succeeds_for_wildcard_tenant_user_in_roles(self):
         identity = self._get_identity()
-        acl = '*:%s' % (identity['user'])
-        self._check_authenticate(identity=identity, acl=acl)
+        user_name = identity['HTTP_X_USER_NAME']
+        user_id = identity['HTTP_X_USER_ID']
+        for user in [user_id, user_name, '*']:
+            acl = '*:%s' % user
+            self._check_authenticate(identity=identity, acl=acl)
 
     def test_cross_tenant_authorization_success(self):
-        self.assertTrue(self.test_auth._authorize_cross_tenant('userA',
-            'tenantID', 'tenantNAME', ['tenantID:userA']))
-        self.assertTrue(self.test_auth._authorize_cross_tenant('userA',
-            'tenantID', 'tenantNAME', ['tenantNAME:userA']))
-        self.assertTrue(self.test_auth._authorize_cross_tenant('userA',
-            'tenantID', 'tenantNAME', ['*:userA']))
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME',
+                ['tenantID:userA']),
+            'tenantID:userA')
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME',
+                ['tenantNAME:userA']),
+            'tenantNAME:userA')
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME', ['*:userA']),
+            '*:userA')
+
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME',
+                ['tenantID:userID']),
+            'tenantID:userID')
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME',
+                ['tenantNAME:userID']),
+            'tenantNAME:userID')
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME', ['*:userID']),
+            '*:userID')
+
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME', ['tenantID:*']),
+            'tenantID:*')
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME', ['tenantNAME:*']),
+            'tenantNAME:*')
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME', ['*:*']),
+            '*:*')
 
     def test_cross_tenant_authorization_failure(self):
-        self.assertFalse(self.test_auth._authorize_cross_tenant('userA',
-            'tenantID', 'tenantNAME', ['tenantXYZ:userA']))
+        self.assertEqual(
+            self.test_auth._authorize_cross_tenant(
+                'userID', 'userA', 'tenantID', 'tenantNAME',
+                ['tenantXYZ:userA']),
+            None)
 
+    def test_delete_own_account_not_allowed(self):
+        roles = self.test_auth.operator_roles.split(',')
+        identity = self._get_identity(roles=roles)
+        account = self._get_account(identity)
+        self._check_authenticate(account=account,
+                                 identity=identity,
+                                 exception=HTTP_FORBIDDEN,
+                                 path='/v1/' + account,
+                                 env={'REQUEST_METHOD': 'DELETE'})
+
+    def test_delete_own_account_when_reseller_allowed(self):
+        roles = [self.test_auth.reseller_admin_role]
+        identity = self._get_identity(roles=roles)
+        account = self._get_account(identity)
+        req = self._check_authenticate(account=account,
+                                       identity=identity,
+                                       path='/v1/' + account,
+                                       env={'REQUEST_METHOD': 'DELETE'})
+        self.assertEqual(bool(req.environ.get('swift_owner')), True)
 
 if __name__ == '__main__':
     unittest.main()

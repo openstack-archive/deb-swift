@@ -1,3 +1,174 @@
+swift (1.10.0)
+
+    * Added support for pooling memcache connections
+
+    * Added support to replicating handoff partitions first in object
+      replication. Can also configure now many remote nodes a storage node
+      must talk to before removing a local handoff partition.
+
+    * Fixed bug where memcache entries would not expire
+
+    * Much faster calculation for choosing handoff nodes
+
+    * Added container listing ratelimiting
+
+    * Fixed issue where the proxy would continue to read from a storage
+      server even after a client had disconnected
+
+    * Added support for headers that are only visible to the owner of a Swift
+      account
+
+    * Fixed ranged GET with If-None-Match
+
+    * Fixed an issue where rings may not be balanced after initial creation
+
+    * Fixed internationalization support
+
+    * Return the correct etag for a static large object on the PUT response
+
+    * Allow users to extract archives to containers with ACLs set
+
+    * Fix support for range requests against static large objects
+
+    * Now logs x-copy-from header in a useful place
+
+    * Reverted back to old XML output of account and container listings to
+      ensure older clients do not break
+
+    * Account quotas now appropriately handle copy requests
+
+    * Fix issue with UTF-8 handling in versioned writes
+
+    * Various other bug fixes and improvements, including support for running
+      Swift under Pypy and continuing work to support storage policies
+
+swift (1.9.1)
+
+    * Disallow PUT, POST, and DELETE requests from creating older tombstone
+      files, preventing the possibility of filling up the disk and removing
+      unnecessary container updates.
+
+    * Set default wsgi workers to cpu_count
+
+      Change the default value of wsgi workers from 1 to auto. The new
+      default value for workers in the proxy, container, account & object
+      wsgi servers will spawn as many workers per process as you have cpu
+      cores. This will not be ideal for some configurations, but it's much
+      more likely to produce a successful out of the box deployment.
+
+    * Added reveal_sensitive_prefix config setting to filter the auth token
+      logged by the proxy server.
+
+    * Ensure Keystone's reseller prefix ends with an underscore. Previously
+      this was a recommendation--now it is enforced.
+
+    * Added log_file_pattern config to swift-drive-audit for drive errors
+
+    * Add support for telling Swift to detect a content type on a request.
+
+    * Additional object stats are now logged in the object auditor
+
+    * Moved the DiskFile interface into its own module
+
+    * Ensure the SQLite cursors are closed when creating functions
+
+    * Better support for valid Accept headers
+
+    * In Keystone, don't allow users to delete their own account
+
+    * Return a UTC timezone designator in container listings
+
+    * Ensure that users can't remove their account quotas
+
+    * Allow floating point value for dispersion coverage
+
+    * Fix incorrect error page handling in staticweb
+
+    * Add utf-8 charset to multipart-manifest=get response.
+
+    * Allow dispersion tools to use keystone server with insecure certificate
+
+    * Ensure that files are always closed in tests
+
+    * Use OpenStack's "Hacking" guidelines for code formatting
+
+    * Various other minor bug fixes and improvements
+
+swift (1.9.0)
+
+    * Global clusters support
+
+      The "region" concept introduced in Swift 1.8.0 has been augmented with
+      support for using a separate replication network and configuring read
+      and write affinity. These features combine to offer support for a single
+      Swift cluster spanning wide geographic area.
+
+    * Disk performance
+
+      The object server now can be configured to use threadpools to increase
+      performance and smooth out latency throughout the system. Also, many
+      disk operations were reordered to increase reliability and improve
+      performance.
+
+    * Added config file conf.d support
+
+      Allow Swift daemons and servers to optionally accept a directory as the
+      configuration parameter. This allows different parts of the config file
+      to be managed separately, eg each middleware could use a separate file
+      for its particular config settings.
+
+    * Allow two TempURL keys per account
+
+      By adding a second key, a user can safely rotate keys and prevent URLs
+      already in use from becoming invalid. TempURL middlware has also been
+      updated to allow a configuable set of allowed methods and to prevent a
+      bugrelated to content-disposition names.
+
+    * Added crossdomain.xml middleware. See
+      http://docs.openstack.org/developer/swift/crossdomain.html for details
+
+    * Added rsync bandwidth limit setting for object replicator
+
+    * Transaction ID updated to include the time and an optional suffix
+
+    * Added x-remove-versions-location header to disable versioned writes
+
+    * Improvements to support for Keystone ACLs
+
+    * Added parallelism to object expirer daemon
+
+    * Added support for ring hash prefix in addition to the existing suffix
+
+    * Allow all headers requested for CORS
+
+    * Stop getting useless bytes on manifest Range requests
+
+    * Improved container-sync resiliency
+
+    * Added example Apache config files. See
+      http://docs.openstack.org/developer/swift/apache_deployment_guide.html
+      for more info
+
+    * If an account is marked as deleted but hasn't been reaped and is still
+      on disk, responses will include an "X-Account-Status" header
+
+    * Fix 503 on account/container HEAD with invalid format
+
+    * Added extra safety on account-level DELETE when using bulk deletes
+
+    * Made colons quote-safe in logs (mainly for IPv6)
+
+    * Fixed bug with bulk delete max items
+
+    * Fixed static large object manifest range requests
+
+    * Prevent static large objects from containing other static large objects
+
+    * Fixed issue with use of delimiter in container queries where some
+      objects would not be listed
+
+    * Various other minor bug fixes and improvements
+
 swift (1.8.0)
 
     * Make rings' replica count adjustable

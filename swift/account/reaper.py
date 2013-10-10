@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,15 +15,16 @@
 
 import os
 import random
+from swift import gettext_ as _
 from logging import DEBUG
 from math import sqrt
-from time import time
+from time import time, ctime
 
 from eventlet import GreenPool, sleep, Timeout
 
 import swift.common.db
 from swift.account.server import DATADIR
-from swift.common.db import AccountBroker
+from swift.account.backend import AccountBroker
 from swift.common.direct_client import ClientException, \
     direct_delete_container, direct_delete_object, direct_get_container
 from swift.common.ring import Ring
@@ -72,28 +73,30 @@ class AccountReaper(Daemon):
         swift.common.db.DB_PREALLOCATION = \
             config_true_value(conf.get('db_preallocation', 'f'))
         self.delay_reaping = int(conf.get('delay_reaping') or 0)
+        reap_warn_after = float(conf.get('reap_warn_after') or 86400 * 30)
+        self.reap_not_done_after = reap_warn_after + self.delay_reaping
 
     def get_account_ring(self):
-        """ The account :class:`swift.common.ring.Ring` for the cluster. """
+        """The account :class:`swift.common.ring.Ring` for the cluster."""
         if not self.account_ring:
             self.account_ring = Ring(self.swift_dir, ring_name='account')
         return self.account_ring
 
     def get_container_ring(self):
-        """ The container :class:`swift.common.ring.Ring` for the cluster. """
+        """The container :class:`swift.common.ring.Ring` for the cluster."""
         if not self.container_ring:
             self.container_ring = Ring(self.swift_dir, ring_name='container')
         return self.container_ring
 
     def get_object_ring(self):
-        """ The object :class:`swift.common.ring.Ring` for the cluster. """
+        """The object :class:`swift.common.ring.Ring` for the cluster."""
         if not self.object_ring:
             self.object_ring = Ring(self.swift_dir, ring_name='object')
         return self.object_ring
 
     def run_forever(self, *args, **kwargs):
-        """
-        Main entry point when running the reaper in its normal daemon mode.
+        """Main entry point when running the reaper in normal daemon mode.
+
         This repeatedly calls :func:`reap_once` no quicker than the
         configuration interval.
         """
@@ -203,7 +206,7 @@ class AccountReaper(Daemon):
 
         .. seealso::
 
-            :class:`swift.common.db.AccountBroker` for the broker class.
+            :class:`swift.account.backend.AccountBroker` for the broker class.
 
         .. seealso::
 
@@ -240,6 +243,8 @@ class AccountReaper(Daemon):
                     self.logger.exception(
                         _('Exception with containers for account %s'), account)
                 marker = containers[-1][0]
+                if marker == '':
+                    break
             log = 'Completed pass on account %s' % account
         except (Exception, Timeout):
             self.logger.exception(
@@ -262,12 +267,16 @@ class AccountReaper(Daemon):
                 self.stats_objects_possibly_remaining
         if self.stats_return_codes:
             log += _(', return codes: ')
-            for code in sorted(self.stats_return_codes.keys()):
+            for code in sorted(self.stats_return_codes):
                 log += '%s %sxxs, ' % (self.stats_return_codes[code], code)
             log = log[:-2]
         log += _(', elapsed: %.02fs') % (time() - begin)
         self.logger.info(log)
         self.logger.timing_since('timing', self.start_time)
+        if self.stats_containers_remaining and \
+           begin - float(info['delete_timestamp']) >= self.reap_not_done_after:
+            self.logger.warn(_('Account %s has not been reaped since %s') %
+                             (account, ctime(float(info['delete_timestamp']))))
         return True
 
     def reap_container(self, account, account_partition, account_nodes,
@@ -322,7 +331,7 @@ class AccountReaper(Daemon):
                 self.stats_return_codes[2] = \
                     self.stats_return_codes.get(2, 0) + 1
                 self.logger.increment('return_codes.2')
-            except ClientException, err:
+            except ClientException as err:
                 if self.logger.getEffectiveLevel() <= DEBUG:
                     self.logger.exception(
                         _('Exception with %(ip)s:%(port)s/%(device)s'), node)
@@ -346,6 +355,8 @@ class AccountReaper(Daemon):
                                       {'container': container,
                                        'account': account})
             marker = objects[-1]['name']
+            if marker == '':
+                break
         successes = 0
         failures = 0
         for node in nodes:
@@ -363,7 +374,7 @@ class AccountReaper(Daemon):
                 self.stats_return_codes[2] = \
                     self.stats_return_codes.get(2, 0) + 1
                 self.logger.increment('return_codes.2')
-            except ClientException, err:
+            except ClientException as err:
                 if self.logger.getEffectiveLevel() <= DEBUG:
                     self.logger.exception(
                         _('Exception with %(ip)s:%(port)s/%(device)s'), node)
@@ -422,7 +433,7 @@ class AccountReaper(Daemon):
                 self.stats_return_codes[2] = \
                     self.stats_return_codes.get(2, 0) + 1
                 self.logger.increment('return_codes.2')
-            except ClientException, err:
+            except ClientException as err:
                 if self.logger.getEffectiveLevel() <= DEBUG:
                     self.logger.exception(
                         _('Exception with %(ip)s:%(port)s/%(device)s'), node)

@@ -1,4 +1,4 @@
-# Copyright (c) 2013 OpenStack, LLC.
+# Copyright (c) 2013 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,14 +16,14 @@
 import tarfile
 from urllib import quote, unquote
 from xml.sax import saxutils
+from time import time
 from swift.common.swob import Request, HTTPBadGateway, \
     HTTPCreated, HTTPBadRequest, HTTPNotFound, HTTPUnauthorized, HTTPOk, \
     HTTPPreconditionFailed, HTTPRequestEntityTooLarge, HTTPNotAcceptable, \
-    HTTPLengthRequired, wsgify
-from swift.common.utils import json, TRUE_VALUES
+    HTTPLengthRequired, HTTPException, HTTPServerError, wsgify
+from swift.common.utils import json, get_logger
 from swift.common.constraints import check_utf8, MAX_FILE_SIZE
-from swift.common.http import HTTP_BAD_REQUEST, HTTP_UNAUTHORIZED, \
-    HTTP_NOT_FOUND
+from swift.common.http import HTTP_UNAUTHORIZED, HTTP_NOT_FOUND
 from swift.common.constraints import MAX_OBJECT_NAME_LENGTH, \
     MAX_CONTAINER_NAME_LENGTH
 
@@ -44,26 +44,19 @@ ACCEPTABLE_FORMATS = ['text/plain', 'application/json', 'application/xml',
 
 def get_response_body(data_format, data_dict, error_list):
     """
-    Returns a properly formatted response body according to format.
+    Returns a properly formatted response body according to format. Handles
+    json and xml, otherwise will return text/plain. Note: xml response does not
+    include xml declaration.
     :params data_format: resulting format
     :params data_dict: generated data about results.
     :params error_list: list of quoted filenames that failed
     """
-    if data_format == 'text/plain':
-        output = ''
-        for key in sorted(data_dict.keys()):
-            output += '%s: %s\n' % (key, data_dict[key])
-        output += 'Errors:\n'
-        output += '\n'.join(
-            ['%s, %s' % (name, status)
-             for name, status in error_list])
-        return output
     if data_format == 'application/json':
         data_dict['Errors'] = error_list
         return json.dumps(data_dict)
-    if data_format.endswith('/xml'):
-        output = '<?xml version="1.0" encoding="UTF-8"?>\n<delete>\n'
-        for key in sorted(data_dict.keys()):
+    if data_format and data_format.endswith('/xml'):
+        output = '<delete>\n'
+        for key in sorted(data_dict):
             xml_key = key.replace(' ', '_').lower()
             output += '<%s>%s</%s>\n' % (xml_key, data_dict[key], xml_key)
         output += '<errors>\n'
@@ -74,7 +67,15 @@ def get_response_body(data_format, data_dict, error_list):
              name, status in error_list])
         output += '</errors>\n</delete>\n'
         return output
-    raise HTTPNotAcceptable('Invalid output type')
+
+    output = ''
+    for key in sorted(data_dict):
+        output += '%s: %s\n' % (key, data_dict[key])
+    output += 'Errors:\n'
+    output += '\n'.join(
+        ['%s, %s' % (name, status)
+         for name, status in error_list])
+    return output
 
 
 class Bulk(object):
@@ -106,13 +107,31 @@ class Bulk(object):
     Only regular files will be uploaded. Empty directories, symlinks, etc will
     not be uploaded.
 
-    If all valid files were uploaded successfully will return an HTTPCreated
-    response. If any files failed to be created will return an HTTPBadGateway
-    response. In both cases the response body will specify the number of files
-    successfully uploaded and a list of the files that failed. The return body
-    will be formatted in the way specified in the request's Accept header.
-    Acceptable formats are text/plain, application/json, application/xml, and
-    text/xml.
+    The response from bulk operations functions differently from other swift
+    responses. This is because a short request body sent from the client could
+    result in many operations on the proxy server and precautions need to be
+    made to prevent the request from timing out due to lack of activity. To
+    this end, the client will always receive a 200 OK response, regardless of
+    the actual success of the call.  The body of the response must be parsed to
+    determine the actual success of the operation. In addition to this the
+    client may receive zero or more whitespace characters prepended to the
+    actual response body while the proxy server is completing the request.
+
+    The format of the response body defaults to text/plain but can be either
+    json or xml depending on the Accept header. Acceptable formats are
+    text/plain, application/json, application/xml, and text/xml. An example
+    body is as follows:
+
+    {"Response Status": "201 Created",
+     "Response Body": "",
+     "Errors": [],
+     "Number Files Created": 10}
+
+    If all valid files were uploaded successfully the Response Status will be
+    201 Created.  If any files failed to be created the response code
+    corresponds to the subrequest's error. Possible codes are 400, 401, 502 (on
+    server errors), etc. In both cases the response body will specify the
+    number of files successfully uploaded and a list of the files that failed.
 
     There are proxy logs created for each file (which becomes a subrequest) in
     the tar. The subrequest's proxy log will have a swift.source set to "EA"
@@ -125,11 +144,11 @@ class Bulk(object):
 
     Will delete multiple objects or containers from their account with a
     single request. Responds to DELETE requests with query parameter
-    ?bulk-delete set. The Content-Type should be set to text/plain.
-    The body of the DELETE request will be a newline separated list of url
-    encoded objects to delete. You can only delete 1000 (configurable) objects
-    per request. The objects specified in the DELETE request body must be URL
-    encoded and in the form:
+    ?bulk-delete set. The request url is your storage url. The Content-Type
+    should be set to text/plain. The body of the DELETE request will be a
+    newline separated list of url encoded objects to delete. You can delete
+    10,000 (configurable) objects per request. The objects specified in the
+    DELETE request body must be URL encoded and in the form:
 
     /container_name/obj_name
 
@@ -137,10 +156,21 @@ class Bulk(object):
 
     /container_name
 
-    If all items were successfully deleted (or did not exist), will return an
-    HTTPOk. If any failed to delete, will return an HTTPBadGateway. In
-    both cases the response body will specify the number of items
-    successfully deleted, not found, and a list of those that failed.
+    The response is similar to bulk deletes as in every response will be a 200
+    OK and you must parse the response body for actual results. An example
+    response is:
+
+    {"Number Not Found": 0,
+     "Response Status": "200 OK",
+     "Response Body": "",
+     "Errors": [],
+     "Number Deleted": 6}
+
+    If all items were successfully deleted (or did not exist), the Response
+    Status will be 200 OK. If any failed to delete, the response code
+    corresponds to the subrequest's error. Possible codes are 400, 401, 502 (on
+    server errors), etc. In all cases the response body will specify the number
+    of items successfully deleted, not found, and a list of those that failed.
     The return body will be formatted in the way specified in the request's
     Accept header. Acceptable formats are text/plain, application/json,
     application/xml, and text/xml.
@@ -155,29 +185,44 @@ class Bulk(object):
 
     def __init__(self, app, conf):
         self.app = app
+        self.logger = get_logger(conf, log_route='bulk')
         self.max_containers = int(
             conf.get('max_containers_per_extraction', 10000))
         self.max_failed_extractions = int(
             conf.get('max_failed_extractions', 1000))
+        self.max_failed_deletes = int(
+            conf.get('max_failed_deletes', 1000))
         self.max_deletes_per_request = int(
-            conf.get('max_deletes_per_request', 1000))
+            conf.get('max_deletes_per_request', 10000))
+        self.yield_frequency = int(conf.get('yield_frequency', 60))
 
     def create_container(self, req, container_path):
         """
-        Makes a subrequest to create a new container.
+        Checks if the container exists and if not try to create it.
         :params container_path: an unquoted path to a container to be created
-        :returns: None on success
-        :raises: CreateContainerError on creation error
+        :returns: True if created container, False if container exists
+        :raises: CreateContainerError when unable to create container
         """
         new_env = req.environ.copy()
         new_env['PATH_INFO'] = container_path
         new_env['swift.source'] = 'EA'
-        create_cont_req = Request.blank(container_path, environ=new_env)
-        resp = create_cont_req.get_response(self.app)
-        if resp.status_int // 100 != 2:
-            raise CreateContainerError(
-                "Create Container Failed: " + container_path,
-                resp.status_int, resp.status)
+        new_env['REQUEST_METHOD'] = 'HEAD'
+        head_cont_req = Request.blank(container_path, environ=new_env)
+        resp = head_cont_req.get_response(self.app)
+        if resp.is_success:
+            return False
+        if resp.status_int == 404:
+            new_env = req.environ.copy()
+            new_env['PATH_INFO'] = container_path
+            new_env['swift.source'] = 'EA'
+            new_env['REQUEST_METHOD'] = 'PUT'
+            create_cont_req = Request.blank(container_path, environ=new_env)
+            resp = create_cont_req.get_response(self.app)
+            if resp.is_success:
+                return True
+        raise CreateContainerError(
+            "Create Container Failed: " + container_path,
+            resp.status_int, resp.status)
 
     def get_objs_to_delete(self, req):
         """
@@ -196,15 +241,19 @@ class Bulk(object):
         while data_remaining:
             if '\n' in line:
                 obj_to_delete, line = line.split('\n', 1)
-                objs_to_delete.append(unquote(obj_to_delete))
+                obj_to_delete = obj_to_delete.strip()
+                objs_to_delete.append(
+                    {'name': unquote(obj_to_delete)})
             else:
                 data = req.body_file.read(MAX_PATH_LENGTH)
                 if data:
                     line += data
                 else:
                     data_remaining = False
-                    if line.strip():
-                        objs_to_delete.append(unquote(line))
+                    obj_to_delete = line.strip()
+                    if obj_to_delete:
+                        objs_to_delete.append(
+                            {'name': unquote(obj_to_delete)})
             if len(objs_to_delete) > self.max_deletes_per_request:
                 raise HTTPRequestEntityTooLarge(
                     'Maximum Bulk Deletes: %d per request' %
@@ -213,99 +262,157 @@ class Bulk(object):
                 raise HTTPBadRequest('Invalid File Name')
         return objs_to_delete
 
-    def handle_delete(self, req, objs_to_delete=None, user_agent='BulkDelete',
-                      swift_source='BD'):
+    def handle_delete_iter(self, req, objs_to_delete=None,
+                           user_agent='BulkDelete', swift_source='BD',
+                           out_content_type='text/plain'):
         """
+        A generator that can be assigned to a swob Response's app_iter which,
+        when iterated over, will delete the objects specified in request body.
+        Will occasionally yield whitespace while request is being processed.
+        When the request is completed will yield a response body that can be
+        parsed to determine success. See above documentation for details.
+
         :params req: a swob Request
-        :raises HTTPException: on unhandled errors
-        :returns: a swob Response
+        :params objs_to_delete: a list of dictionaries that specifies the
+            objects to be deleted. If None, uses self.get_objs_to_delete to
+            query request.
         """
-        try:
-            vrs, account, _junk = req.split_path(2, 3, True)
-        except ValueError:
-            return HTTPNotFound(request=req)
-
-        incoming_format = req.headers.get('Content-Type')
-        if incoming_format and not incoming_format.startswith('text/plain'):
-            # For now only accept newline separated object names
-            return HTTPNotAcceptable(request=req)
-        out_content_type = req.accept.best_match(ACCEPTABLE_FORMATS)
-        if not out_content_type:
-            return HTTPNotAcceptable(request=req)
-
-        if objs_to_delete is None:
-            objs_to_delete = self.get_objs_to_delete(req)
+        last_yield = time()
+        separator = ''
         failed_files = []
-        success_count = not_found_count = 0
-        failed_file_response_type = HTTPBadRequest
-        for obj_to_delete in objs_to_delete:
-            obj_to_delete = obj_to_delete.strip().lstrip('/')
-            if not obj_to_delete:
-                continue
-            delete_path = '/'.join(['', vrs, account, obj_to_delete])
-            if not check_utf8(delete_path):
-                failed_files.append([quote(delete_path),
-                                     HTTPPreconditionFailed().status])
-                continue
-            new_env = req.environ.copy()
-            new_env['PATH_INFO'] = delete_path
-            del(new_env['wsgi.input'])
-            new_env['CONTENT_LENGTH'] = 0
-            new_env['HTTP_USER_AGENT'] = \
-                '%s %s' % (req.environ.get('HTTP_USER_AGENT'), user_agent)
-            new_env['swift.source'] = swift_source
-            delete_obj_req = Request.blank(delete_path, new_env)
-            resp = delete_obj_req.get_response(self.app)
-            if resp.status_int // 100 == 2:
-                success_count += 1
-            elif resp.status_int == HTTP_NOT_FOUND:
-                not_found_count += 1
-            elif resp.status_int == HTTP_UNAUTHORIZED:
-                return HTTPUnauthorized(request=req)
-            else:
-                if resp.status_int // 100 == 5:
-                    failed_file_response_type = HTTPBadGateway
-                failed_files.append([quote(delete_path), resp.status])
+        resp_dict = {'Response Status': HTTPOk().status,
+                     'Response Body': '',
+                     'Number Deleted': 0,
+                     'Number Not Found': 0}
+        try:
+            if not out_content_type:
+                raise HTTPNotAcceptable(request=req)
+            if out_content_type.endswith('/xml'):
+                yield '<?xml version="1.0" encoding="UTF-8"?>\n'
 
-        resp_body = get_response_body(
-            out_content_type,
-            {'Number Deleted': success_count,
-             'Number Not Found': not_found_count},
-            failed_files)
-        if (success_count or not_found_count) and not failed_files:
-            return HTTPOk(resp_body, content_type=out_content_type)
-        if failed_files:
-            return failed_file_response_type(
-                resp_body, content_type=out_content_type)
-        return HTTPBadRequest('Invalid bulk delete.')
+            try:
+                vrs, account, _junk = req.split_path(2, 3, True)
+            except ValueError:
+                raise HTTPNotFound(request=req)
 
-    def handle_extract(self, req, compress_type):
+            incoming_format = req.headers.get('Content-Type')
+            if incoming_format and \
+                    not incoming_format.startswith('text/plain'):
+                # For now only accept newline separated object names
+                raise HTTPNotAcceptable(request=req)
+
+            if objs_to_delete is None:
+                objs_to_delete = self.get_objs_to_delete(req)
+            failed_file_response_type = HTTPBadRequest
+            req.environ['eventlet.minimum_write_chunk_size'] = 0
+            for obj_to_delete in objs_to_delete:
+                if last_yield + self.yield_frequency < time():
+                    separator = '\r\n\r\n'
+                    last_yield = time()
+                    yield ' '
+                obj_name = obj_to_delete['name']
+                if not obj_name:
+                    continue
+                if len(failed_files) >= self.max_failed_deletes:
+                    raise HTTPBadRequest('Max delete failures exceeded')
+                if obj_to_delete.get('error'):
+                    if obj_to_delete['error']['code'] == HTTP_NOT_FOUND:
+                        resp_dict['Number Not Found'] += 1
+                    else:
+                        failed_files.append([quote(obj_name),
+                                            obj_to_delete['error']['message']])
+                    continue
+                delete_path = '/'.join(['', vrs, account,
+                                        obj_name.lstrip('/')])
+                if not check_utf8(delete_path):
+                    failed_files.append([quote(obj_name),
+                                         HTTPPreconditionFailed().status])
+                    continue
+                new_env = req.environ.copy()
+                new_env['PATH_INFO'] = delete_path
+                del(new_env['wsgi.input'])
+                new_env['CONTENT_LENGTH'] = 0
+                new_env['HTTP_USER_AGENT'] = \
+                    '%s %s' % (req.environ.get('HTTP_USER_AGENT'), user_agent)
+                new_env['swift.source'] = swift_source
+                delete_obj_req = Request.blank(delete_path, new_env)
+                resp = delete_obj_req.get_response(self.app)
+                if resp.status_int // 100 == 2:
+                    resp_dict['Number Deleted'] += 1
+                elif resp.status_int == HTTP_NOT_FOUND:
+                    resp_dict['Number Not Found'] += 1
+                elif resp.status_int == HTTP_UNAUTHORIZED:
+                    failed_files.append([quote(obj_name),
+                                         HTTPUnauthorized().status])
+                else:
+                    if resp.status_int // 100 == 5:
+                        failed_file_response_type = HTTPBadGateway
+                    failed_files.append([quote(obj_name), resp.status])
+
+            if failed_files:
+                resp_dict['Response Status'] = \
+                    failed_file_response_type().status
+            elif not (resp_dict['Number Deleted'] or
+                      resp_dict['Number Not Found']):
+                resp_dict['Response Status'] = HTTPBadRequest().status
+                resp_dict['Response Body'] = 'Invalid bulk delete.'
+
+        except HTTPException as err:
+            resp_dict['Response Status'] = err.status
+            resp_dict['Response Body'] = err.body
+        except Exception:
+            self.logger.exception('Error in bulk delete.')
+            resp_dict['Response Status'] = HTTPServerError().status
+
+        yield separator + get_response_body(out_content_type,
+                                            resp_dict, failed_files)
+
+    def handle_extract_iter(self, req, compress_type,
+                            out_content_type='text/plain'):
         """
+        A generator that can be assigned to a swob Response's app_iter which,
+        when iterated over, will extract and PUT the objects pulled from the
+        request body. Will occasionally yield whitespace while request is being
+        processed. When the request is completed will yield a response body
+        that can be parsed to determine success. See above documentation for
+        details.
+
         :params req: a swob Request
         :params compress_type: specifying the compression type of the tar.
-                               Accepts '', 'gz, or 'bz2'
-        :raises HTTPException: on unhandled errors
-        :returns: a swob response to request
+            Accepts '', 'gz', or 'bz2'
         """
-        success_count = 0
+        resp_dict = {'Response Status': HTTPCreated().status,
+                     'Response Body': '', 'Number Files Created': 0}
         failed_files = []
-        existing_containers = set()
-        out_content_type = req.accept.best_match(ACCEPTABLE_FORMATS)
-        if not out_content_type:
-            return HTTPNotAcceptable(request=req)
-        if req.content_length is None and \
-                req.headers.get('transfer-encoding', '').lower() != 'chunked':
-            return HTTPLengthRequired(request=req)
+        last_yield = time()
+        separator = ''
+        containers_accessed = set()
         try:
-            vrs, account, extract_base = req.split_path(2, 3, True)
-        except ValueError:
-            return HTTPNotFound(request=req)
-        extract_base = extract_base or ''
-        extract_base = extract_base.rstrip('/')
-        try:
+            if not out_content_type:
+                raise HTTPNotAcceptable(request=req)
+            if out_content_type.endswith('/xml'):
+                yield '<?xml version="1.0" encoding="UTF-8"?>\n'
+
+            if req.content_length is None and \
+                    req.headers.get('transfer-encoding',
+                                    '').lower() != 'chunked':
+                raise HTTPLengthRequired(request=req)
+            try:
+                vrs, account, extract_base = req.split_path(2, 3, True)
+            except ValueError:
+                raise HTTPNotFound(request=req)
+            extract_base = extract_base or ''
+            extract_base = extract_base.rstrip('/')
             tar = tarfile.open(mode='r|' + compress_type,
                                fileobj=req.body_file)
+            failed_response_type = HTTPBadRequest
+            req.environ['eventlet.minimum_write_chunk_size'] = 0
+            containers_created = 0
             while True:
+                if last_yield + self.yield_frequency < time():
+                    separator = '\r\n\r\n'
+                    last_yield = time()
+                    yield ' '
                 tar_info = tar.next()
                 if tar_info is None or \
                         len(failed_files) >= self.max_failed_extractions:
@@ -325,38 +432,41 @@ class Bulk(object):
                     container = obj_path.split('/', 1)[0]
                     if not check_utf8(destination):
                         failed_files.append(
-                            [quote(destination[:MAX_PATH_LENGTH]),
+                            [quote(obj_path[:MAX_PATH_LENGTH]),
                              HTTPPreconditionFailed().status])
                         continue
                     if tar_info.size > MAX_FILE_SIZE:
                         failed_files.append([
-                            quote(destination[:MAX_PATH_LENGTH]),
+                            quote(obj_path[:MAX_PATH_LENGTH]),
                             HTTPRequestEntityTooLarge().status])
                         continue
-                    if container not in existing_containers:
+                    container_failure = None
+                    if container not in containers_accessed:
+                        cont_path = '/'.join(['', vrs, account, container])
                         try:
-                            self.create_container(
-                                req, '/'.join(['', vrs, account, container]))
-                            existing_containers.add(container)
-                        except CreateContainerError, err:
+                            if self.create_container(req, cont_path):
+                                containers_created += 1
+                                if containers_created > self.max_containers:
+                                    raise HTTPBadRequest(
+                                        'More than %d containers to create '
+                                        'from tar.' % self.max_containers)
+                        except CreateContainerError as err:
+                            # the object PUT to this container still may
+                            # succeed if acls are set
+                            container_failure = [
+                                quote(cont_path[:MAX_PATH_LENGTH]),
+                                err.status]
                             if err.status_int == HTTP_UNAUTHORIZED:
-                                return HTTPUnauthorized(request=req)
-                            failed_files.append([
-                                quote(destination[:MAX_PATH_LENGTH]),
-                                err.status])
-                            continue
+                                raise HTTPUnauthorized(request=req)
                         except ValueError:
                             failed_files.append([
-                                quote(destination[:MAX_PATH_LENGTH]),
-                                HTTP_BAD_REQUEST])
+                                quote(obj_path[:MAX_PATH_LENGTH]),
+                                HTTPBadRequest().status])
                             continue
-                        if len(existing_containers) > self.max_containers:
-                            return HTTPBadRequest(
-                                'More than %d base level containers in tar.' %
-                                self.max_containers)
 
                     tar_file = tar.extractfile(tar_info)
                     new_env = req.environ.copy()
+                    new_env['REQUEST_METHOD'] = 'PUT'
                     new_env['wsgi.input'] = tar_file
                     new_env['PATH_INFO'] = destination
                     new_env['CONTENT_LENGTH'] = tar_info.size
@@ -365,42 +475,67 @@ class Bulk(object):
                         '%s BulkExpand' % req.environ.get('HTTP_USER_AGENT')
                     create_obj_req = Request.blank(destination, new_env)
                     resp = create_obj_req.get_response(self.app)
-                    if resp.status_int // 100 == 2:
-                        success_count += 1
+                    containers_accessed.add(container)
+                    if resp.is_success:
+                        resp_dict['Number Files Created'] += 1
                     else:
+                        if container_failure:
+                            failed_files.append(container_failure)
                         if resp.status_int == HTTP_UNAUTHORIZED:
-                            return HTTPUnauthorized(request=req)
+                            failed_files.append([
+                                quote(obj_path[:MAX_PATH_LENGTH]),
+                                HTTPUnauthorized().status])
+                            raise HTTPUnauthorized(request=req)
+                        if resp.status_int // 100 == 5:
+                            failed_response_type = HTTPBadGateway
                         failed_files.append([
-                            quote(destination[:MAX_PATH_LENGTH]), resp.status])
+                            quote(obj_path[:MAX_PATH_LENGTH]), resp.status])
 
-            resp_body = get_response_body(
-                out_content_type,
-                {'Number Files Created': success_count},
-                failed_files)
-            if success_count and not failed_files:
-                return HTTPCreated(resp_body, content_type=out_content_type)
             if failed_files:
-                return HTTPBadGateway(resp_body, content_type=out_content_type)
-            return HTTPBadRequest('Invalid Tar File: No Valid Files')
+                resp_dict['Response Status'] = failed_response_type().status
+            elif not resp_dict['Number Files Created']:
+                resp_dict['Response Status'] = HTTPBadRequest().status
+                resp_dict['Response Body'] = 'Invalid Tar File: No Valid Files'
 
-        except tarfile.TarError, tar_error:
-            return HTTPBadRequest('Invalid Tar File: %s' % tar_error)
+        except HTTPException as err:
+            resp_dict['Response Status'] = err.status
+            resp_dict['Response Body'] = err.body
+        except tarfile.TarError as tar_error:
+            resp_dict['Response Status'] = HTTPBadRequest().status
+            resp_dict['Response Body'] = 'Invalid Tar File: %s' % tar_error
+        except Exception:
+            self.logger.exception('Error in extract archive.')
+            resp_dict['Response Status'] = HTTPServerError().status
+
+        yield separator + get_response_body(
+            out_content_type, resp_dict, failed_files)
 
     @wsgify
     def __call__(self, req):
         extract_type = req.params.get('extract-archive')
+        resp = None
         if extract_type is not None and req.method == 'PUT':
             archive_type = {
                 'tar': '', 'tar.gz': 'gz',
                 'tar.bz2': 'bz2'}.get(extract_type.lower().strip('.'))
             if archive_type is not None:
-                return self.handle_extract(req, archive_type)
+                resp = HTTPOk(request=req)
+                out_content_type = req.accept.best_match(ACCEPTABLE_FORMATS)
+                if out_content_type:
+                    resp.content_type = out_content_type
+                resp.app_iter = self.handle_extract_iter(
+                    req, archive_type, out_content_type=out_content_type)
             else:
-                return HTTPBadRequest("Unsupported archive format")
+                resp = HTTPBadRequest("Unsupported archive format")
         if 'bulk-delete' in req.params and req.method == 'DELETE':
-            return self.handle_delete(req)
+            resp = HTTPOk(request=req)
+            out_content_type = req.accept.best_match(ACCEPTABLE_FORMATS)
+            if out_content_type:
+                resp.content_type = out_content_type
+            resp.app_iter = self.handle_delete_iter(
+                req, out_content_type=out_content_type)
 
-        return self.app
+        return resp or self.app
 
 
 def filter_factory(global_conf, **local_conf):

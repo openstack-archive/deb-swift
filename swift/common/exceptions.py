@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,10 +30,6 @@ class SwiftException(Exception):
     pass
 
 
-class SwiftConfigurationError(SwiftException):
-    pass
-
-
 class AuditException(SwiftException):
     pass
 
@@ -42,15 +38,27 @@ class DiskFileError(SwiftException):
     pass
 
 
-class DiskFileNotExist(SwiftException):
+class DiskFileNotOpenError(DiskFileError):
+    pass
+
+
+class DiskFileCollision(DiskFileError):
+    pass
+
+
+class DiskFileNotExist(DiskFileError):
+    pass
+
+
+class DiskFileNoSpace(DiskFileError):
+    pass
+
+
+class DiskFileDeviceUnavailable(DiskFileError):
     pass
 
 
 class PathNotDir(OSError):
-    pass
-
-
-class AuthException(SwiftException):
     pass
 
 
@@ -104,5 +112,5 @@ class ListingIterNotAuthorized(ListingIterError):
         self.aresp = aresp
 
 
-class SloSegmentError(SwiftException):
+class SegmentError(SwiftException):
     pass

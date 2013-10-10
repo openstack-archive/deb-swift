@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,8 +26,7 @@
 
 import mimetypes
 import os
-from ConfigParser import ConfigParser
-import uuid
+from swift import gettext_ as _
 from random import shuffle
 from time import time
 
@@ -35,13 +34,14 @@ from eventlet import Timeout
 
 from swift.common.ring import Ring
 from swift.common.utils import cache_from_env, get_logger, \
-    get_remote_client, split_path, config_true_value
+    get_remote_client, split_path, config_true_value, generate_trans_id, \
+    affinity_key_function, affinity_locality_predicate
 from swift.common.constraints import check_utf8
 from swift.proxy.controllers import AccountController, ObjectController, \
     ContainerController
 from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
     HTTPMethodNotAllowed, HTTPNotFound, HTTPPreconditionFailed, \
-    HTTPServerError, Request
+    HTTPServerError, HTTPException, Request
 
 
 class Application(object):
@@ -63,6 +63,7 @@ class Application(object):
         self.put_queue_depth = int(conf.get('put_queue_depth', 10))
         self.object_chunk_size = int(conf.get('object_chunk_size', 65536))
         self.client_chunk_size = int(conf.get('client_chunk_size', 65536))
+        self.trans_id_suffix = conf.get('trans_id_suffix', '')
         self.error_suppression_interval = \
             int(conf.get('error_suppression_interval', 60))
         self.error_suppression_limit = \
@@ -75,8 +76,6 @@ class Application(object):
             config_true_value(conf.get('allow_account_management', 'no'))
         self.object_post_as_copy = \
             config_true_value(conf.get('object_post_as_copy', 'true'))
-        self.resellers_conf = ConfigParser()
-        self.resellers_conf.read(os.path.join(swift_dir, 'resellers.conf'))
         self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self.container_ring = container_ring or Ring(swift_dir,
                                                      ring_name='container')
@@ -115,6 +114,52 @@ class Application(object):
         self.sorting_method = conf.get('sorting_method', 'shuffle').lower()
         self.allow_static_large_object = config_true_value(
             conf.get('allow_static_large_object', 'true'))
+        self.max_large_object_get_time = float(
+            conf.get('max_large_object_get_time', '86400'))
+        value = conf.get('request_node_count', '2 * replicas').lower().split()
+        if len(value) == 1:
+            value = int(value[0])
+            self.request_node_count = lambda r: value
+        elif len(value) == 3 and value[1] == '*' and value[2] == 'replicas':
+            value = int(value[0])
+            self.request_node_count = lambda r: value * r.replica_count
+        else:
+            raise ValueError(
+                'Invalid request_node_count value: %r' % ''.join(value))
+        try:
+            read_affinity = conf.get('read_affinity', '')
+            self.read_affinity_sort_key = affinity_key_function(read_affinity)
+        except ValueError as err:
+            # make the message a little more useful
+            raise ValueError("Invalid read_affinity value: %r (%s)" %
+                             (read_affinity, err.message))
+        try:
+            write_affinity = conf.get('write_affinity', '')
+            self.write_affinity_is_local_fn \
+                = affinity_locality_predicate(write_affinity)
+        except ValueError as err:
+            # make the message a little more useful
+            raise ValueError("Invalid write_affinity value: %r (%s)" %
+                             (write_affinity, err.message))
+        value = conf.get('write_affinity_node_count',
+                         '2 * replicas').lower().split()
+        if len(value) == 1:
+            value = int(value[0])
+            self.write_affinity_node_count = lambda r: value
+        elif len(value) == 3 and value[1] == '*' and value[2] == 'replicas':
+            value = int(value[0])
+            self.write_affinity_node_count = lambda r: value * r.replica_count
+        else:
+            raise ValueError(
+                'Invalid write_affinity_node_count value: %r' % ''.join(value))
+        swift_owner_headers = conf.get(
+            'swift_owner_headers',
+            'x-container-read, x-container-write, '
+            'x-container-sync-key, x-container-sync-to, '
+            'x-account-meta-temp-url-key, x-account-meta-temp-url-key-2')
+        self.swift_owner_headers = [
+            name.strip()
+            for name in swift_owner_headers.split(',') if name.strip()]
 
     def get_controller(self, path):
         """
@@ -210,7 +255,7 @@ class Application(object):
             controller = controller(self, **path_parts)
             if 'swift.trans_id' not in req.environ:
                 # if this wasn't set by an earlier middleware, set it now
-                trans_id = 'tx' + uuid.uuid4().hex
+                trans_id = generate_trans_id(self.trans_id_suffix)
                 req.environ['swift.trans_id'] = trans_id
                 self.logger.txn_id = trans_id
             req.headers['x-trans-id'] = req.environ['swift.trans_id']
@@ -245,6 +290,8 @@ class Application(object):
             # method the client actually sent.
             req.environ['swift.orig_req_method'] = req.method
             return handler(req)
+        except HTTPException as error_response:
+            return error_response
         except (Exception, Timeout):
             self.logger.exception(_('ERROR Unhandled exception in request'))
             return HTTPServerError(request=req)
@@ -267,6 +314,8 @@ class Application(object):
                 timing, expires = self.node_timings.get(node['ip'], (-1.0, 0))
                 return timing if expires > now else -1.0
             nodes.sort(key=key_func)
+        elif self.sorting_method == 'affinity':
+            nodes.sort(key=self.read_affinity_sort_key)
         return nodes
 
     def set_node_timing(self, node, timing):

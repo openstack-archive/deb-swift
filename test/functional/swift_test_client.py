@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2012 OpenStack, LLC.
+# Copyright (c) 2010-2012 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,6 +27,8 @@ import simplejson as json
 from nose import SkipTest
 from xml.dom import minidom
 from swiftclient import get_auth
+
+from test import safe_repr
 
 
 class AuthenticationFailed(Exception):
@@ -131,12 +133,10 @@ class Connection(object):
         auth_netloc = "%s:%d" % (self.auth_host, self.auth_port)
         auth_url = auth_scheme + auth_netloc + auth_path
 
-        (storage_url, storage_token) = get_auth(auth_url,
-              auth_user, self.password,
-              snet=False,
-              tenant_name=self.account,
-              auth_version=self.auth_version,
-              os_options={})
+        (storage_url, storage_token) = get_auth(
+            auth_url, auth_user, self.password, snet=False,
+            tenant_name=self.account, auth_version=self.auth_version,
+            os_options={})
 
         if not (storage_url and storage_token):
             raise AuthenticationFailed()
@@ -155,7 +155,11 @@ class Connection(object):
         self.storage_host = x[2].split(':')[0]
         if ':' in x[2]:
             self.storage_port = int(x[2].split(':')[1])
-        self.storage_url = '/%s/%s' % (x[3], x[4])
+        # Make sure storage_url is a string and not unicode, since
+        # keystoneclient (called by swiftclient) returns them in
+        # unicode and this would cause troubles when doing
+        # no_safe_quote query.
+        self.storage_url = str('/%s/%s' % (x[3], x[4]))
 
         self.storage_token = storage_token
 
@@ -214,18 +218,22 @@ class Connection(object):
 
         self.response = None
         try_count = 0
+        fail_messages = []
         while try_count < 5:
             try_count += 1
 
             try:
                 self.response = try_request()
-            except httplib.HTTPException:
+            except httplib.HTTPException as e:
+                fail_messages.append(safe_repr(e))
                 continue
 
             if self.response.status == 401:
+                fail_messages.append("Response 401")
                 self.authenticate()
                 continue
             elif self.response.status == 503:
+                fail_messages.append("Response 503")
                 if try_count != 5:
                     time.sleep(5)
                 continue
@@ -235,7 +243,11 @@ class Connection(object):
         if self.response:
             return self.response.status
 
-        raise RequestError('Unable to complete http request')
+        request = "{method} {path} headers: {headers} data: {data}".format(
+            method=method, path=path, headers=headers, data=data)
+        raise RequestError('Unable to complete http request: %s. '
+                           'Attempts: %s, Failures: %s' %
+                           (request, len(fail_messages), fail_messages))
 
     def put_start(self, path, hdrs={}, parms={}, cfg={}, chunked=False):
         self.http_connect()
@@ -310,21 +322,21 @@ class Account(Base):
         return Container(self.conn, self.name, container_name)
 
     def containers(self, hdrs={}, parms={}, cfg={}):
-        format = parms.get('format', None)
-        if format not in [None, 'json', 'xml']:
-            raise RequestError('Invalid format: %s' % format)
-        if format is None and 'format' in parms:
+        format_type = parms.get('format', None)
+        if format_type not in [None, 'json', 'xml']:
+            raise RequestError('Invalid format: %s' % format_type)
+        if format_type is None and 'format' in parms:
             del parms['format']
 
         status = self.conn.make_request('GET', self.path, hdrs=hdrs,
                                         parms=parms, cfg=cfg)
         if status == 200:
-            if format == 'json':
+            if format_type == 'json':
                 conts = json.loads(self.conn.response.read())
                 for cont in conts:
                     cont['name'] = cont['name'].encode('utf-8')
                 return conts
-            elif format == 'xml':
+            elif format_type == 'xml':
                 conts = []
                 tree = minidom.parseString(self.conn.response.read())
                 for x in tree.getElementsByTagName('container'):
@@ -387,8 +399,8 @@ class Container(Base):
 
     def delete_files(self):
         for f in listing_items(self.files):
-            file = self.file(f)
-            if not file.delete():
+            file_item = self.file(f)
+            if not file_item.delete():
                 return False
 
         return listing_empty(self.files)
@@ -400,37 +412,39 @@ class Container(Base):
         return File(self.conn, self.account, self.name, file_name)
 
     def files(self, hdrs={}, parms={}, cfg={}):
-        format = parms.get('format', None)
-        if format not in [None, 'json', 'xml']:
-            raise RequestError('Invalid format: %s' % format)
-        if format is None and 'format' in parms:
+        format_type = parms.get('format', None)
+        if format_type not in [None, 'json', 'xml']:
+            raise RequestError('Invalid format: %s' % format_type)
+        if format_type is None and 'format' in parms:
             del parms['format']
 
         status = self.conn.make_request('GET', self.path, hdrs=hdrs,
                                         parms=parms, cfg=cfg)
         if status == 200:
-            if format == 'json':
+            if format_type == 'json':
                 files = json.loads(self.conn.response.read())
 
-                for file in files:
-                    file['name'] = file['name'].encode('utf-8')
-                    file['content_type'] = file['content_type'].encode('utf-8')
+                for file_item in files:
+                    file_item['name'] = file_item['name'].encode('utf-8')
+                    file_item['content_type'] = file_item['content_type'].\
+                        encode('utf-8')
                 return files
-            elif format == 'xml':
+            elif format_type == 'xml':
                 files = []
                 tree = minidom.parseString(self.conn.response.read())
                 for x in tree.getElementsByTagName('object'):
-                    file = {}
+                    file_item = {}
                     for key in ['name', 'hash', 'bytes', 'content_type',
                                 'last_modified']:
 
-                        file[key] = x.getElementsByTagName(key)[0].\
+                        file_item[key] = x.getElementsByTagName(key)[0].\
                             childNodes[0].nodeValue
-                    files.append(file)
+                    files.append(file_item)
 
-                for file in files:
-                    file['name'] = file['name'].encode('utf-8')
-                    file['content_type'] = file['content_type'].encode('utf-8')
+                for file_item in files:
+                    file_item['name'] = file_item['name'].encode('utf-8')
+                    file_item['content_type'] = file_item['content_type'].\
+                        encode('utf-8')
                 return files
             else:
                 content = self.conn.response.read()
@@ -447,8 +461,8 @@ class Container(Base):
         raise ResponseError(self.conn.response)
 
     def info(self, hdrs={}, parms={}, cfg={}):
-        status = self.conn.make_request('HEAD', self.path, hdrs=hdrs,
-                                        parms=parms, cfg=cfg)
+        self.conn.make_request('HEAD', self.path, hdrs=hdrs,
+                               parms=parms, cfg=cfg)
 
         if self.conn.response.status == 204:
             fields = [['bytes_used', 'x-container-bytes-used'],
@@ -597,11 +611,11 @@ class File(Base):
              callback=None, cfg={}):
 
         if size > 0:
-            range = 'bytes=%d-%d' % (offset, (offset + size) - 1)
+            range_string = 'bytes=%d-%d' % (offset, (offset + size) - 1)
             if hdrs:
-                hdrs['Range'] = range
+                hdrs['Range'] = range_string
             else:
-                hdrs = {'Range': range}
+                hdrs = {'Range': range_string}
 
         status = self.conn.make_request('GET', self.path, hdrs=hdrs,
                                         cfg=cfg)
@@ -717,7 +731,7 @@ class File(Base):
                     callback(transferred, self.size)
 
             self.conn.put_end()
-        except socket.timeout, err:
+        except socket.timeout as err:
             raise err
 
         if (self.conn.response.status < 200) or \
