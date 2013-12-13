@@ -1,6 +1,8 @@
 swift (1.11.0-1) unstable; urgency=medium
 
   * New upstream relase.
+  * Removed swift-bench things, since that's gone from upstream project (it's
+    moved as a separate project at https://github.com/openstack/swift-bench).
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 13 Dec 2013 17:21:20 +0800
 

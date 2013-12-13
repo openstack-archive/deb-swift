@@ -1,5 +1,3 @@
-usr/bin/swift-bench
-usr/bin/swift-bench-client
 usr/bin/swift-dispersion-populate
 usr/bin/swift-dispersion-report
 usr/bin/swift-form-signature
