@@ -15,7 +15,6 @@
 
 """Tests for swift.common.wsgi"""
 
-from __future__ import with_statement
 import errno
 import logging
 import mimetools
@@ -25,6 +24,7 @@ import os
 import pickle
 from textwrap import dedent
 from gzip import GzipFile
+from contextlib import nested
 from StringIO import StringIO
 from collections import defaultdict
 from contextlib import closing
@@ -32,7 +32,11 @@ from urllib import quote
 
 from eventlet import listen
 
-import swift
+import mock
+
+import swift.common.middleware.catch_errors
+import swift.proxy.server
+
 from swift.common.swob import Request
 from swift.common import wsgi, utils, ring
 
@@ -242,11 +246,13 @@ class TestWSGI(unittest.TestCase):
                     socket.SO_REUSEADDR: 1,
                     socket.SO_KEEPALIVE: 1,
                 },
+                socket.IPPROTO_TCP: {
+                    socket.TCP_NODELAY: 1,
+                }
             }
             if hasattr(socket, 'TCP_KEEPIDLE'):
-                expected_socket_opts[socket.IPPROTO_TCP] = {
-                    socket.TCP_KEEPIDLE: 600,
-                }
+                expected_socket_opts[socket.IPPROTO_TCP][
+                    socket.TCP_KEEPIDLE] = 600
             self.assertEquals(sock.opts, expected_socket_opts)
             # test ssl
             sock = wsgi.get_socket(ssl_conf)
@@ -498,6 +504,40 @@ class TestWSGI(unittest.TestCase):
         self.assertEquals(r.body, 'the body')
         self.assertEquals(r.environ['swift.source'], 'UT')
 
+    def test_run_server_global_conf_callback(self):
+        calls = defaultdict(lambda: 0)
+
+        def _initrp(conf_file, app_section, *args, **kwargs):
+            return (
+                {'__file__': 'test', 'workers': 0},
+                'logger',
+                'log_name')
+
+        def _global_conf_callback(preloaded_app_conf, global_conf):
+            calls['_global_conf_callback'] += 1
+            self.assertEqual(
+                preloaded_app_conf, {'__file__': 'test', 'workers': 0})
+            self.assertEqual(global_conf, {'log_name': 'log_name'})
+            global_conf['test1'] = 'one'
+
+        def _loadapp(uri, name=None, **kwargs):
+            calls['_loadapp'] += 1
+            self.assertTrue('global_conf' in kwargs)
+            self.assertEqual(kwargs['global_conf'],
+                             {'log_name': 'log_name', 'test1': 'one'})
+
+        with nested(
+                mock.patch.object(wsgi, '_initrp', _initrp),
+                mock.patch.object(wsgi, 'get_socket'),
+                mock.patch.object(wsgi, 'drop_privileges'),
+                mock.patch.object(wsgi, 'loadapp', _loadapp),
+                mock.patch.object(wsgi, 'capture_stdio'),
+                mock.patch.object(wsgi, 'run_server')):
+            wsgi.run_wsgi('conf_file', 'app_section',
+                          global_conf_callback=_global_conf_callback)
+        self.assertEqual(calls['_global_conf_callback'], 1)
+        self.assertEqual(calls['_loadapp'], 1)
+
     def test_pre_auth_req_with_empty_env_no_path(self):
         r = wsgi.make_pre_authed_request(
             {}, 'GET')
@@ -557,6 +597,27 @@ class TestWSGIContext(unittest.TestCase):
         it = wc._app_call(r.environ)
         self.assertEquals(wc._response_status, '404 Not Found')
         self.assertEquals(''.join(it), 'Ok\n')
+
+    def test_app_iter_is_closable(self):
+
+        def app(env, start_response):
+            start_response('200 OK', [('Content-Length', '25')])
+            yield 'aaaaa'
+            yield 'bbbbb'
+            yield 'ccccc'
+            yield 'ddddd'
+            yield 'eeeee'
+
+        wc = wsgi.WSGIContext(app)
+        r = Request.blank('/')
+        iterable = wc._app_call(r.environ)
+        self.assertEquals(wc._response_status, '200 OK')
+
+        iterator = iter(iterable)
+        self.assertEqual('aaaaa', iterator.next())
+        self.assertEqual('bbbbb', iterator.next())
+        iterable.close()
+        self.assertRaises(StopIteration, iterator.next)
 
 
 if __name__ == '__main__':

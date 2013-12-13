@@ -147,7 +147,7 @@ class ContainerSync(Daemon):
         swift.common.db.DB_PREALLOCATION = \
             config_true_value(conf.get('db_preallocation', 'f'))
 
-    def run_forever(self):
+    def run_forever(self, *args, **kwargs):
         """
         Runs container sync scans until stopped.
         """
@@ -167,7 +167,7 @@ class ContainerSync(Daemon):
             if elapsed < self.interval:
                 sleep(self.interval - elapsed)
 
-    def run_once(self):
+    def run_once(self, *args, **kwargs):
         """
         Runs a single container sync scan.
         """
@@ -245,7 +245,7 @@ class ContainerSync(Daemon):
                 if err:
                     self.logger.info(
                         _('ERROR %(db_file)s: %(validate_sync_to_err)s'),
-                        {'db_file': broker.db_file,
+                        {'db_file': str(broker),
                          'validate_sync_to_err': err})
                     self.container_failures += 1
                     self.logger.increment('failures')
@@ -299,7 +299,7 @@ class ContainerSync(Daemon):
             self.container_failures += 1
             self.logger.increment('failures')
             self.logger.exception(_('ERROR Syncing %s'),
-                                  broker.db_file if broker else path)
+                                  broker if broker else path)
 
     def container_sync_row(self, row, sync_to, sync_key, broker, info):
         """
@@ -397,14 +397,14 @@ class ContainerSync(Daemon):
             else:
                 self.logger.exception(
                     _('ERROR Syncing %(db_file)s %(row)s'),
-                    {'db_file': broker.db_file, 'row': row})
+                    {'db_file': str(broker), 'row': row})
             self.container_failures += 1
             self.logger.increment('failures')
             return False
         except (Exception, Timeout) as err:
             self.logger.exception(
                 _('ERROR Syncing %(db_file)s %(row)s'),
-                {'db_file': broker.db_file, 'row': row})
+                {'db_file': str(broker), 'row': row})
             self.container_failures += 1
             self.logger.increment('failures')
             return False

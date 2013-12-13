@@ -13,14 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numbers
 import unittest
 import os
 import tarfile
 import urllib
+import zlib
 from shutil import rmtree
 from tempfile import mkdtemp
 from StringIO import StringIO
 from mock import patch
+from swift.common import utils
 from swift.common.middleware import bulk
 from swift.common.swob import Request, Response, HTTPException
 from swift.common.http import HTTP_NOT_FOUND, HTTP_UNAUTHORIZED
@@ -270,6 +273,16 @@ class TestUntar(unittest.TestCase):
         resp_body = self.handle_extract_and_iter(req, '')
         self.assertTrue('411 Length Required' in resp_body)
 
+    def test_bad_tar(self):
+        req = Request.blank('/create_cont_fail/acc/cont', body='')
+
+        def bad_open(*args, **kwargs):
+            raise zlib.error('bad tar')
+
+        with patch.object(tarfile, 'open', bad_open):
+            resp_body = self.handle_extract_and_iter(req, '')
+            self.assertTrue('400 Bad Request' in resp_body)
+
     def build_tar(self, dir_tree=None):
         if not dir_tree:
             dir_tree = [
@@ -354,7 +367,8 @@ class TestUntar(unittest.TestCase):
         resp_data = json.loads(resp_body)
         self.assertEquals(resp_data['Response Status'], '400 Bad Request')
         self.assertEquals(
-            resp_data['Response Body'], 'Invalid Tar File: not a gzip file')
+            resp_data['Response Body'].lower(),
+            'invalid tar file: not a gzip file')
 
     def test_extract_tar_fail_max_failed_extractions(self):
         self.build_tar()
@@ -519,7 +533,20 @@ class TestDelete(unittest.TestCase):
         self.assertEquals(resp_data['Errors'],
                           [['/c/file_c', 'unauthorized']])
 
-    def test_bulk_delete_works(self):
+    def test_bulk_delete_works_with_POST_verb(self):
+        req = Request.blank('/delete_works/AUTH_Acc', body='/c/f\n/c/f404',
+                            headers={'Accept': 'application/json'})
+        req.method = 'POST'
+        resp_body = self.handle_delete_and_iter(req)
+        self.assertEquals(
+            self.app.delete_paths,
+            ['/delete_works/AUTH_Acc/c/f', '/delete_works/AUTH_Acc/c/f404'])
+        self.assertEquals(self.app.calls, 2)
+        resp_data = json.loads(resp_body)
+        self.assertEquals(resp_data['Number Deleted'], 1)
+        self.assertEquals(resp_data['Number Not Found'], 1)
+
+    def test_bulk_delete_works_with_DELETE_verb(self):
         req = Request.blank('/delete_works/AUTH_Acc', body='/c/f\n/c/f404',
                             headers={'Accept': 'application/json'})
         req.method = 'DELETE'
@@ -539,7 +566,7 @@ class TestDelete(unittest.TestCase):
         req = Request.blank('/delete_works/AUTH_Acc',
                             headers={'Accept': 'application/json',
                                      'Content-Type': 'text/xml'})
-        req.method = 'DELETE'
+        req.method = 'POST'
         req.environ['wsgi.input'] = StringIO('/c/f\n/c/f404')
         resp_body = self.handle_delete_and_iter(req)
         resp_data = json.loads(resp_body)
@@ -550,7 +577,7 @@ class TestDelete(unittest.TestCase):
             self.assertEquals(args[1][0], ('Content-Type', 'application/json'))
 
         req = Request.blank('/delete_works/AUTH_Acc?bulk-delete')
-        req.method = 'DELETE'
+        req.method = 'POST'
         req.headers['Transfer-Encoding'] = 'chunked'
         req.headers['Accept'] = 'application/json'
         req.environ['wsgi.input'] = StringIO('/c/f%20')
@@ -561,7 +588,7 @@ class TestDelete(unittest.TestCase):
 
     def test_bulk_delete_get_objs(self):
         req = Request.blank('/delete_works/AUTH_Acc', body='1%20\r\n2\r\n')
-        req.method = 'DELETE'
+        req.method = 'POST'
         with patch.object(self.bulk, 'max_deletes_per_request', 2):
             results = self.bulk.get_objs_to_delete(req)
             self.assertEquals(results, [{'name': '1 '}, {'name': '2'}])
@@ -584,7 +611,7 @@ class TestDelete(unittest.TestCase):
         req = Request.blank('/delete_works/AUTH_Acc',
                             body='/c/f\n\n\n/c/f404\n\n\n/c/%2525',
                             headers={'Accept': 'application/json'})
-        req.method = 'DELETE'
+        req.method = 'POST'
         resp_body = self.handle_delete_and_iter(req)
         self.assertEquals(
             self.app.delete_paths,
@@ -598,7 +625,7 @@ class TestDelete(unittest.TestCase):
 
     def test_bulk_delete_too_many_newlines(self):
         req = Request.blank('/delete_works/AUTH_Acc')
-        req.method = 'DELETE'
+        req.method = 'POST'
         data = '\n\n' * self.bulk.max_deletes_per_request
         req.environ['wsgi.input'] = StringIO(data)
         req.content_length = len(data)
@@ -611,7 +638,7 @@ class TestDelete(unittest.TestCase):
                 '/c/f\xdebadutf8\n')
         req = Request.blank('/delete_works/AUTH_Acc', body=body,
                             headers={'Accept': 'application/json'})
-        req.method = 'DELETE'
+        req.method = 'POST'
         resp_body = self.handle_delete_and_iter(req)
         self.assertEquals(
             self.app.delete_paths,
@@ -640,7 +667,7 @@ class TestDelete(unittest.TestCase):
     def test_bulk_delete_unauth(self):
         req = Request.blank('/unauth/AUTH_acc/', body='/c/f\n/c/f_ok\n',
                             headers={'Accept': 'application/json'})
-        req.method = 'DELETE'
+        req.method = 'POST'
         resp_body = self.handle_delete_and_iter(req)
         self.assertEquals(self.app.calls, 2)
         resp_data = json.loads(resp_body)
@@ -651,7 +678,7 @@ class TestDelete(unittest.TestCase):
     def test_bulk_delete_500_resp(self):
         req = Request.blank('/broke/AUTH_acc/', body='/c/f\nc/f2\n',
                             headers={'Accept': 'application/json'})
-        req.method = 'DELETE'
+        req.method = 'POST'
         resp_body = self.handle_delete_and_iter(req)
         resp_data = json.loads(resp_body)
         self.assertEquals(
@@ -667,7 +694,7 @@ class TestDelete(unittest.TestCase):
     def test_bulk_delete_container_delete(self):
         req = Request.blank('/delete_cont_fail/AUTH_Acc', body='c\n',
                             headers={'Accept': 'application/json'})
-        req.method = 'DELETE'
+        req.method = 'POST'
         resp_body = self.handle_delete_and_iter(req)
         resp_data = json.loads(resp_body)
         self.assertEquals(resp_data['Number Deleted'], 0)
@@ -677,7 +704,7 @@ class TestDelete(unittest.TestCase):
     def test_bulk_delete_bad_file_too_long(self):
         req = Request.blank('/delete_works/AUTH_Acc',
                             headers={'Accept': 'application/json'})
-        req.method = 'DELETE'
+        req.method = 'POST'
         bad_file = 'c/' + ('1' * bulk.MAX_PATH_LENGTH)
         data = '/c/f\n' + bad_file + '\n/c/f'
         req.environ['wsgi.input'] = StringIO(data)
@@ -691,14 +718,14 @@ class TestDelete(unittest.TestCase):
     def test_bulk_delete_bad_file_over_twice_max_length(self):
         body = '/c/f\nc/' + ('123456' * bulk.MAX_PATH_LENGTH) + '\n'
         req = Request.blank('/delete_works/AUTH_Acc', body=body)
-        req.method = 'DELETE'
+        req.method = 'POST'
         resp_body = self.handle_delete_and_iter(req)
         self.assertTrue('400 Bad Request' in resp_body)
 
     def test_bulk_delete_max_failures(self):
         req = Request.blank('/unauth/AUTH_Acc', body='/c/f1\n/c/f2\n/c/f3',
                             headers={'Accept': 'application/json'})
-        req.method = 'DELETE'
+        req.method = 'POST'
         with patch.object(self.bulk, 'max_failed_deletes', 2):
             resp_body = self.handle_delete_and_iter(req)
             self.assertEquals(self.app.calls, 2)
@@ -710,6 +737,30 @@ class TestDelete(unittest.TestCase):
                               [['/c/f1', '401 Unauthorized'],
                                ['/c/f2', '401 Unauthorized']])
 
+
+class TestSwiftInfo(unittest.TestCase):
+    def setUp(self):
+        utils._swift_info = {}
+        utils._swift_admin_info = {}
+
+    def test_registered_defaults(self):
+        bulk.filter_factory({})
+        swift_info = utils.get_swift_info()
+        self.assertTrue('bulk_upload' in swift_info)
+        self.assertTrue(isinstance(
+            swift_info['bulk_upload'].get('max_containers_per_extraction'),
+            numbers.Integral))
+        self.assertTrue(isinstance(
+            swift_info['bulk_upload'].get('max_failed_extractions'),
+            numbers.Integral))
+
+        self.assertTrue('bulk_delete' in swift_info)
+        self.assertTrue(isinstance(
+            swift_info['bulk_delete'].get('max_deletes_per_request'),
+            numbers.Integral))
+        self.assertTrue(isinstance(
+            swift_info['bulk_delete'].get('max_failed_deletes'),
+            numbers.Integral))
 
 if __name__ == '__main__':
     unittest.main()

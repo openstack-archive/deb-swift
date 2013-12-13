@@ -18,6 +18,7 @@ import unittest
 from swift.common.middleware import keystoneauth
 from swift.common.swob import Request, Response
 from swift.common.http import HTTP_FORBIDDEN
+from test.unit import FakeLogger
 
 
 class FakeApp(object):
@@ -42,6 +43,7 @@ class FakeApp(object):
 class SwiftAuth(unittest.TestCase):
     def setUp(self):
         self.test_auth = keystoneauth.filter_factory({})(FakeApp())
+        self.test_auth.logger = FakeLogger()
 
     def _make_request(self, path=None, headers=None, **kwargs):
         if not path:
@@ -163,10 +165,18 @@ class SwiftAuth(unittest.TestCase):
         resp = req.get_response(self._get_successful_middleware())
         self.assertEqual(resp.status_int, 200)
 
+    def test_auth_scheme(self):
+        req = self._make_request(path='/v1/BLAH_foo/c/o',
+                                 headers={'X_IDENTITY_STATUS': 'Invalid'})
+        resp = req.get_response(self.test_auth)
+        self.assertEqual(resp.status_int, 401)
+        self.assertTrue('Www-Authenticate' in resp.headers)
+
 
 class TestAuthorize(unittest.TestCase):
     def setUp(self):
         self.test_auth = keystoneauth.filter_factory({})(FakeApp())
+        self.test_auth.logger = FakeLogger()
 
     def _make_request(self, path, **kwargs):
         return Request.blank(path, **kwargs)

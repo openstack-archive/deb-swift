@@ -28,7 +28,7 @@ from swift.common.swob import HTTPBadRequest, HTTPForbidden, HTTPNotFound, \
 
 from swift.common.middleware.acl import clean_acl, parse_acl, referrer_allowed
 from swift.common.utils import cache_from_env, get_logger, \
-    split_path, config_true_value
+    split_path, config_true_value, register_swift_info
 
 
 class TempAuth(object):
@@ -152,11 +152,18 @@ class TempAuth(object):
                     env['reseller_request'] = True
             else:
                 # Unauthorized token
-                if self.reseller_prefix:
+                if self.reseller_prefix and not s3:
                     # Because I know I'm the definitive auth for this token, I
                     # can deny it outright.
                     self.logger.increment('unauthorized')
-                    return HTTPUnauthorized()(env, start_response)
+                    try:
+                        vrs, realm, rest = split_path(env['PATH_INFO'],
+                                                      2, 3, True)
+                    except ValueError:
+                        realm = 'unknown'
+                    return HTTPUnauthorized(headers={
+                        'Www-Authenticate': 'Swift realm="%s"' % realm})(
+                            env, start_response)
                 # Because I'm not certain if I'm the definitive auth for empty
                 # reseller_prefixed tokens, I won't overwrite swift.authorize.
                 elif 'swift.authorize' not in env:
@@ -408,11 +415,15 @@ class TempAuth(object):
                 user = req.headers.get('x-auth-user')
                 if not user or ':' not in user:
                     self.logger.increment('token_denied')
-                    return HTTPUnauthorized(request=req)
+                    return HTTPUnauthorized(request=req, headers=
+                                            {'Www-Authenticate':
+                                             'Swift realm="%s"' % account})
                 account2, user = user.split(':', 1)
                 if account != account2:
                     self.logger.increment('token_denied')
-                    return HTTPUnauthorized(request=req)
+                    return HTTPUnauthorized(request=req, headers=
+                                            {'Www-Authenticate':
+                                             'Swift realm="%s"' % account})
             key = req.headers.get('x-storage-pass')
             if not key:
                 key = req.headers.get('x-auth-key')
@@ -422,7 +433,9 @@ class TempAuth(object):
                 user = req.headers.get('x-storage-user')
             if not user or ':' not in user:
                 self.logger.increment('token_denied')
-                return HTTPUnauthorized(request=req)
+                return HTTPUnauthorized(request=req, headers=
+                                        {'Www-Authenticate':
+                                         'Swift realm="unknown"'})
             account, user = user.split(':', 1)
             key = req.headers.get('x-auth-key')
             if not key:
@@ -431,15 +444,22 @@ class TempAuth(object):
             return HTTPBadRequest(request=req)
         if not all((account, user, key)):
             self.logger.increment('token_denied')
-            return HTTPUnauthorized(request=req)
+            realm = account or 'unknown'
+            return HTTPUnauthorized(request=req, headers={'Www-Authenticate':
+                                                          'Swift realm="%s"' %
+                                                          realm})
         # Authenticate user
         account_user = account + ':' + user
         if account_user not in self.users:
             self.logger.increment('token_denied')
-            return HTTPUnauthorized(request=req)
+            return HTTPUnauthorized(request=req, headers=
+                                    {'Www-Authenticate':
+                                     'Swift realm="%s"' % account})
         if self.users[account_user]['key'] != key:
             self.logger.increment('token_denied')
-            return HTTPUnauthorized(request=req)
+            return HTTPUnauthorized(request=req, headers=
+                                    {'Www-Authenticate':
+                                     'Swift realm="unknown"'})
         account_id = self.users[account_user]['url'].rsplit('/', 1)[-1]
         # Get memcache client
         memcache_client = cache_from_env(req.environ)
@@ -490,6 +510,7 @@ def filter_factory(global_conf, **local_conf):
     """Returns a WSGI filter app for use with paste.deploy."""
     conf = global_conf.copy()
     conf.update(local_conf)
+    register_swift_info('tempauth')
 
     def auth_filter(app):
         return TempAuth(app, conf)

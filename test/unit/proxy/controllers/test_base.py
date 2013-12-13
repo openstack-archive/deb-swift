@@ -18,8 +18,9 @@ from mock import patch
 from swift.proxy.controllers.base import headers_to_container_info, \
     headers_to_account_info, headers_to_object_info, get_container_info, \
     get_container_memcache_key, get_account_info, get_account_memcache_key, \
-    get_object_env_key, _get_cache_key, get_info, get_object_info, Controller
-from swift.common.swob import Request
+    get_object_env_key, _get_cache_key, get_info, get_object_info, \
+    Controller, GetOrHeadHandler
+from swift.common.swob import Request, HTTPException
 from swift.common.utils import split_path
 from test.unit import fake_http_connect, FakeRing, FakeMemcache
 from swift.proxy import server as proxy_server
@@ -88,7 +89,7 @@ class TestFuncs(unittest.TestCase):
 
     def test_GETorHEAD_base(self):
         base = Controller(self.app)
-        req = Request.blank('/a/c/o/with/slashes')
+        req = Request.blank('/v1/a/c/o/with/slashes')
         with patch('swift.proxy.controllers.base.'
                    'http_connect', fake_http_connect(200)):
             resp = base.GETorHEAD_base(req, 'object', FakeRing(), 'part',
@@ -96,14 +97,14 @@ class TestFuncs(unittest.TestCase):
         self.assertTrue('swift.object/a/c/o/with/slashes' in resp.environ)
         self.assertEqual(
             resp.environ['swift.object/a/c/o/with/slashes']['status'], 200)
-        req = Request.blank('/a/c/o')
+        req = Request.blank('/v1/a/c/o')
         with patch('swift.proxy.controllers.base.'
                    'http_connect', fake_http_connect(200)):
             resp = base.GETorHEAD_base(req, 'object', FakeRing(), 'part',
                                        '/a/c/o')
         self.assertTrue('swift.object/a/c/o' in resp.environ)
         self.assertEqual(resp.environ['swift.object/a/c/o']['status'], 200)
-        req = Request.blank('/a/c')
+        req = Request.blank('/v1/a/c')
         with patch('swift.proxy.controllers.base.'
                    'http_connect', fake_http_connect(200)):
             resp = base.GETorHEAD_base(req, 'container', FakeRing(), 'part',
@@ -111,7 +112,7 @@ class TestFuncs(unittest.TestCase):
         self.assertTrue('swift.container/a/c' in resp.environ)
         self.assertEqual(resp.environ['swift.container/a/c']['status'], 200)
 
-        req = Request.blank('/a')
+        req = Request.blank('/v1/a')
         with patch('swift.proxy.controllers.base.'
                    'http_connect', fake_http_connect(200)):
             resp = base.GETorHEAD_base(req, 'account', FakeRing(), 'part',
@@ -433,3 +434,39 @@ class TestFuncs(unittest.TestCase):
         self.assertEquals(
             resp,
             headers_to_object_info(headers.items(), 200))
+
+    def test_have_quorum(self):
+        base = Controller(self.app)
+        # just throw a bunch of test cases at it
+        self.assertEqual(base.have_quorum([201, 404], 3), False)
+        self.assertEqual(base.have_quorum([201, 201], 4), False)
+        self.assertEqual(base.have_quorum([201, 201, 404, 404], 4), False)
+        self.assertEqual(base.have_quorum([201, 503, 503, 201], 4), False)
+        self.assertEqual(base.have_quorum([201, 201], 3), True)
+        self.assertEqual(base.have_quorum([404, 404], 3), True)
+        self.assertEqual(base.have_quorum([201, 201], 2), True)
+        self.assertEqual(base.have_quorum([404, 404], 2), True)
+        self.assertEqual(base.have_quorum([201, 404, 201, 201], 4), True)
+
+    def test_range_fast_forward(self):
+        req = Request.blank('/')
+        handler = GetOrHeadHandler(None, req, None, None, None, None, {})
+        handler.fast_forward(50)
+        self.assertEquals(handler.backend_headers['Range'], 'bytes=50-')
+
+        handler = GetOrHeadHandler(None, req, None, None, None, None,
+                                   {'Range': 'bytes=23-50'})
+        handler.fast_forward(20)
+        self.assertEquals(handler.backend_headers['Range'], 'bytes=43-50')
+        self.assertRaises(HTTPException,
+                          handler.fast_forward, 80)
+
+        handler = GetOrHeadHandler(None, req, None, None, None, None,
+                                   {'Range': 'bytes=23-'})
+        handler.fast_forward(20)
+        self.assertEquals(handler.backend_headers['Range'], 'bytes=43-')
+
+        handler = GetOrHeadHandler(None, req, None, None, None, None,
+                                   {'Range': 'bytes=-100'})
+        handler.fast_forward(20)
+        self.assertEquals(handler.backend_headers['Range'], 'bytes=-80')

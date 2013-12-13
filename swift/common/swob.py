@@ -858,6 +858,18 @@ class Request(object):
                              self.environ['PATH_INFO'])
 
     @property
+    def swift_entity_path(self):
+        """
+        Provides the account/container/object path, sans API version.
+
+        This can be useful when constructing a path to send to a backend
+        server, as that path will need everything after the "/v1".
+        """
+        _ver, entity_path = self.split_path(1, 2, rest_with_last=True)
+        if entity_path is not None:
+            return '/' + entity_path
+
+    @property
     def url(self):
         "Provides the full url of the request"
         return self.host_url + self.path_qs
@@ -1042,6 +1054,8 @@ class Response(object):
             self.environ = {}
         if headers:
             self.headers.update(headers)
+        if self.status_int == 401 and 'www-authenticate' not in self.headers:
+            self.headers.update({'www-authenticate': self.www_authenticate()})
         for key, value in kw.iteritems():
             setattr(self, key, value)
         # When specifying both 'content_type' and 'charset' in the kwargs,
@@ -1151,6 +1165,21 @@ class Response(object):
         if not self.location.startswith('/'):
             return self.location
         return self.host_url + self.location
+
+    def www_authenticate(self):
+        """
+        Construct a suitable value for WWW-Authenticate response header
+
+        If we have a request and a valid-looking path, the realm
+        is the account; otherwise we set it to 'unknown'.
+        """
+        try:
+            vrs, realm, rest = self.request.split_path(2, 3, True)
+            if realm in ('v1.0', 'auth'):
+                realm = 'unknown'
+        except (AttributeError, ValueError):
+            realm = 'unknown'
+        return 'Swift realm="%s"' % realm
 
     @property
     def is_success(self):

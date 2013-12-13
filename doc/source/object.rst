@@ -24,6 +24,16 @@ Object Replicator
     :undoc-members:
     :show-inheritance:
 
+.. automodule:: swift.obj.ssync_sender
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+.. automodule:: swift.obj.ssync_receiver
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 .. _object-updater:
 
 Object Updater
@@ -44,3 +54,12 @@ Object Auditor
     :undoc-members:
     :show-inheritance:
 
+.. _object-diskfile:
+
+Object Backend
+==============
+
+.. automodule:: swift.obj.diskfile
+    :members:
+    :undoc-members:
+    :show-inheritance:

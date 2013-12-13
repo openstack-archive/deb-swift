@@ -48,6 +48,7 @@ post -m quota-bytes:
 
 from swift.common.swob import HTTPForbidden, HTTPRequestEntityTooLarge, \
     HTTPBadRequest, wsgify
+from swift.common.utils import register_swift_info
 from swift.proxy.controllers.base import get_account_info, get_object_info
 
 
@@ -63,7 +64,7 @@ class AccountQuotaMiddleware(object):
     @wsgify
     def __call__(self, request):
 
-        if request.method not in ("POST", "PUT"):
+        if request.method not in ("POST", "PUT", "COPY"):
             return self.app
 
         try:
@@ -98,8 +99,22 @@ class AccountQuotaMiddleware(object):
         if obj and request.method == "POST" or not obj:
             return self.app
 
-        copy_from = request.headers.get('X-Copy-From')
+        if request.method == 'COPY':
+            copy_from = container + '/' + obj
+        else:
+            copy_from = request.headers.get('X-Copy-From')
+
         content_length = (request.content_length or 0)
+
+        account_info = get_account_info(request.environ, self.app)
+        if not account_info or not account_info['bytes']:
+            return self.app
+        try:
+            quota = int(account_info['meta'].get('quota-bytes', -1))
+        except ValueError:
+            return self.app
+        if quota < 0:
+            return self.app
 
         if obj and copy_from:
             path = '/' + ver + '/' + account + '/' + copy_from.lstrip('/')
@@ -109,14 +124,8 @@ class AccountQuotaMiddleware(object):
             else:
                 content_length = int(object_info['length'])
 
-        account_info = get_account_info(request.environ, self.app)
-        if not account_info or not account_info['bytes']:
-            return self.app
-
         new_size = int(account_info['bytes']) + content_length
-        quota = int(account_info['meta'].get('quota-bytes', -1))
-
-        if 0 <= quota < new_size:
+        if quota < new_size:
             return HTTPRequestEntityTooLarge()
 
         return self.app
@@ -124,6 +133,8 @@ class AccountQuotaMiddleware(object):
 
 def filter_factory(global_conf, **local_conf):
     """Returns a WSGI filter app for use with paste.deploy."""
+    register_swift_info('account_quotas')
+
     def account_quota_filter(app):
         return AccountQuotaMiddleware(app)
     return account_quota_filter

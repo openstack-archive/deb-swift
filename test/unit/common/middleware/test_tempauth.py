@@ -143,6 +143,8 @@ class TestAuth(unittest.TestCase):
         self.assertEquals(resp.status_int, 401)
         self.assertEquals(req.environ['swift.authorize'],
                           self.test_auth.denied_response)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="unknown"')
 
     def test_anon(self):
         req = self._make_request('/v1/AUTH_account')
@@ -150,6 +152,15 @@ class TestAuth(unittest.TestCase):
         self.assertEquals(resp.status_int, 401)
         self.assertEquals(req.environ['swift.authorize'],
                           self.test_auth.authorize)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_account"')
+
+    def test_anon_badpath(self):
+        req = self._make_request('/v1')
+        resp = req.get_response(self.test_auth)
+        self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="unknown"')
 
     def test_override_asked_for_but_not_allowed(self):
         self.test_auth = \
@@ -158,6 +169,8 @@ class TestAuth(unittest.TestCase):
                                  environ={'swift.authorize_override': True})
         resp = req.get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_account"')
         self.assertEquals(req.environ['swift.authorize'],
                           self.test_auth.authorize)
 
@@ -182,6 +195,8 @@ class TestAuth(unittest.TestCase):
                                  headers={'X-Auth-Token': 'BLAH_t'})
         resp = req.get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="BLAH_account"')
         self.assertEquals(req.environ['swift.authorize'],
                           self.test_auth.denied_response)
 
@@ -205,6 +220,24 @@ class TestAuth(unittest.TestCase):
                                  headers={'X-Auth-Token': 't'})
         resp = req.get_response(local_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="account"')
+        self.assertEquals(local_app.calls, 1)
+        self.assertEquals(req.environ['swift.authorize'],
+                          local_auth.denied_response)
+
+    def test_auth_reseller_prefix_with_s3_deny(self):
+        # Ensures that when we have a reseller prefix and using a middleware
+        # relying on Http-Authorization (for example swift3), we don't deny a
+        # request outright but set up a denial swift.authorize and pass the
+        # request on down the chain.
+        local_app = FakeApp()
+        local_auth = auth.filter_factory({'reseller_prefix': 'PRE'})(local_app)
+        req = self._make_request('/v1/account',
+                                 headers={'X-Auth-Token': 't',
+                                          'Authorization': 'AWS user:pw'})
+        resp = req.get_response(local_auth)
+        self.assertEquals(resp.status_int, 401)
         self.assertEquals(local_app.calls, 1)
         self.assertEquals(req.environ['swift.authorize'],
                           local_auth.denied_response)
@@ -216,6 +249,8 @@ class TestAuth(unittest.TestCase):
         req = self._make_request('/v1/account')
         resp = req.get_response(local_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="account"')
         self.assertEquals(req.environ['swift.authorize'],
                           local_auth.authorize)
         # Now make sure we don't override an existing swift.authorize when we
@@ -234,11 +269,15 @@ class TestAuth(unittest.TestCase):
             '/v1/AUTH_cfa',
             headers={'X-Auth-Token': 'AUTH_t'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_cfa"')
 
     def test_authorize_bad_path(self):
         req = self._make_request('/badpath')
         resp = self.test_auth.authorize(req)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="unknown"')
         req = self._make_request('/badpath')
         req.remote_user = 'act:usr,act,AUTH_cfa'
         resp = self.test_auth.authorize(req)
@@ -318,6 +357,8 @@ class TestAuth(unittest.TestCase):
         req = self._make_request('/v1/AUTH_cfa/c')
         resp = self.test_auth.authorize(req)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_cfa"')
         req = self._make_request('/v1/AUTH_cfa/c')
         req.acl = '.r:*,.rlistings'
         self.assertEquals(self.test_auth.authorize(req), None)
@@ -325,10 +366,14 @@ class TestAuth(unittest.TestCase):
         req.acl = '.r:*'  # No listings allowed
         resp = self.test_auth.authorize(req)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_cfa"')
         req = self._make_request('/v1/AUTH_cfa/c')
         req.acl = '.r:.example.com,.rlistings'
         resp = self.test_auth.authorize(req)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_cfa"')
         req = self._make_request('/v1/AUTH_cfa/c')
         req.referer = 'http://www.example.com/index.html'
         req.acl = '.r:.example.com,.rlistings'
@@ -414,11 +459,16 @@ class TestAuth(unittest.TestCase):
     def test_get_token_fail(self):
         resp = self._make_request('/auth/v1.0').get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="unknown"')
         resp = self._make_request(
             '/auth/v1.0',
             headers={'X-Auth-User': 'act:usr',
                      'X-Auth-Key': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertTrue('Www-Authenticate' in resp.headers)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="act"')
 
     def test_get_token_fail_invalid_x_auth_user_format(self):
         resp = self._make_request(
@@ -426,6 +476,8 @@ class TestAuth(unittest.TestCase):
             headers={'X-Auth-User': 'usr',
                      'X-Auth-Key': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="act"')
 
     def test_get_token_fail_non_matching_account_in_request(self):
         resp = self._make_request(
@@ -433,6 +485,8 @@ class TestAuth(unittest.TestCase):
             headers={'X-Auth-User': 'act2:usr',
                      'X-Auth-Key': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="act"')
 
     def test_get_token_fail_bad_path(self):
         resp = self._make_request(
@@ -446,6 +500,8 @@ class TestAuth(unittest.TestCase):
             '/auth/v1/act/auth',
             headers={'X-Auth-User': 'act:usr'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="act"')
 
     def test_storage_url_default(self):
         self.test_auth = \
@@ -475,7 +531,7 @@ class TestAuth(unittest.TestCase):
         self.assertEquals(resp.headers['x-storage-url'],
                           'http://somehost:5678/v1/AUTH_test')
 
-    def test_storage_url_overriden_scheme(self):
+    def test_storage_url_overridden_scheme(self):
         self.test_auth = \
             auth.filter_factory({'user_test_tester': 'testing',
                                  'storage_url_scheme': 'fake'})(FakeApp())
@@ -619,6 +675,8 @@ class TestAuth(unittest.TestCase):
         req.remote_addr = '127.0.0.1'
         resp = req.get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_cfa"')
 
         self.test_auth.app = FakeApp(iter([('204 No Content', {}, '')]),
                                      sync_key='othersecret')
@@ -630,6 +688,8 @@ class TestAuth(unittest.TestCase):
         req.remote_addr = '127.0.0.1'
         resp = req.get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_cfa"')
 
         self.test_auth.app = FakeApp(iter([('204 No Content', {}, '')]),
                                      sync_key=None)
@@ -641,6 +701,8 @@ class TestAuth(unittest.TestCase):
         req.remote_addr = '127.0.0.1'
         resp = req.get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_cfa"')
 
     def test_sync_request_fail_no_timestamp(self):
         self.test_auth.app = FakeApp(iter([('204 No Content', {}, '')]),
@@ -652,6 +714,8 @@ class TestAuth(unittest.TestCase):
         req.remote_addr = '127.0.0.1'
         resp = req.get_response(self.test_auth)
         self.assertEquals(resp.status_int, 401)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="AUTH_cfa"')
 
     def test_sync_request_success_lb_sync_host(self):
         self.test_auth.app = FakeApp(iter([('204 No Content', {}, '')]),
@@ -695,6 +759,15 @@ class TestAuth(unittest.TestCase):
         ath.users = {'test:tester': {'groups': []}}
         groups = ath._get_user_groups('test', 'test:tester', 'AUTH_test')
         self.assertEquals(groups, 'test,test:tester')
+
+    def test_auth_scheme(self):
+        req = self._make_request('/v1/BLAH_account',
+                                 headers={'X-Auth-Token': 'BLAH_t'})
+        resp = req.get_response(self.test_auth)
+        self.assertEquals(resp.status_int, 401)
+        self.assertTrue('Www-Authenticate' in resp.headers)
+        self.assertEquals(resp.headers.get('Www-Authenticate'),
+                          'Swift realm="BLAH_account"')
 
 
 class TestParseUserCreation(unittest.TestCase):

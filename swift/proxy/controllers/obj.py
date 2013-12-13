@@ -15,7 +15,7 @@
 
 # NOTE: swift_conn
 # You'll see swift_conn passed around a few places in this file. This is the
-# source httplib connection of whatever it is attached to.
+# source bufferedhttp connection of whatever it is attached to.
 #   It is used when early termination of reading from the connection should
 # happen, such as when a range request is satisfied but there's still more the
 # source connection would like to send. To prevent having to read all the data
@@ -41,7 +41,7 @@ from eventlet.timeout import Timeout
 from swift.common.utils import ContextPool, normalize_timestamp, \
     config_true_value, public, json, csv_append, GreenthreadSafeIterator, \
     quorum_size, split_path, override_bytes_from_content_type, \
-    get_valid_utf8_str
+    get_valid_utf8_str, GreenAsyncPile
 from swift.common.bufferedhttp import http_connect
 from swift.common.constraints import check_metadata, check_object_creation, \
     CONTAINER_LISTING_LIMIT, MAX_FILE_SIZE
@@ -158,8 +158,9 @@ class SegmentedIterable(object):
                 container, obj = self.container, self.segment_dict['name']
             partition = self.controller.app.object_ring.get_part(
                 self.controller.account_name, container, obj)
-            path = '/%s/%s/%s' % (self.controller.account_name, container, obj)
-            req = Request.blank(path)
+            path = '/%s/%s/%s' % (self.controller.account_name,
+                                  container, obj)
+            req = Request.blank('/v1' + path)
             if self.seek or (self.length and self.length > 0):
                 bytes_available = \
                     self.segment_dict['bytes'] - self.seek
@@ -375,14 +376,14 @@ class ObjectController(Controller):
             lreq = Request.blank('i will be overridden by env', environ=env)
             # Don't quote PATH_INFO, by WSGI spec
             lreq.environ['PATH_INFO'] = \
-                '/%s/%s' % (self.account_name, lcontainer)
+                '/v1/%s/%s' % (self.account_name, lcontainer)
             lreq.environ['REQUEST_METHOD'] = 'GET'
             lreq.environ['QUERY_STRING'] = \
                 'format=json&prefix=%s&marker=%s' % (quote(lprefix),
                                                      quote(marker))
             lresp = self.GETorHEAD_base(
                 lreq, _('Container'), self.app.container_ring, lpartition,
-                lreq.path_info)
+                lreq.swift_entity_path)
             if 'swift.authorize' in env:
                 lreq.acl = lresp.headers.get('x-container-read')
                 aresp = env['swift.authorize'](lreq)
@@ -417,7 +418,7 @@ class ObjectController(Controller):
             new_req = incoming_req.copy_get()
             new_req.method = 'GET'
             new_req.range = None
-            new_req.path_info = '/'.join(['', account, container, obj])
+            new_req.path_info = '/'.join(['/v1', account, container, obj])
             if partition is None:
                 try:
                     partition = self.app.object_ring.get_part(
@@ -428,7 +429,7 @@ class ObjectController(Controller):
                         new_req.path)
             valid_resp = self.GETorHEAD_base(
                 new_req, _('Object'), self.app.object_ring, partition,
-                new_req.path_info)
+                new_req.swift_entity_path)
 
         if 'swift.authorize' in incoming_req.environ:
             incoming_req.acl = valid_resp.headers.get('x-container-read')
@@ -504,7 +505,7 @@ class ObjectController(Controller):
         is_local = self.app.write_affinity_is_local_fn
 
         if is_local is None:
-            return self.iter_nodes(ring, partition)
+            return self.app.iter_nodes(ring, partition)
 
         all_nodes = itertools.chain(primary_nodes,
                                     ring.get_more_nodes(partition))
@@ -519,19 +520,8 @@ class ObjectController(Controller):
             itertools.ifilter(lambda node: node not in first_n_local_nodes,
                               all_nodes))
 
-        return self.iter_nodes(
+        return self.app.iter_nodes(
             ring, partition, node_iter=local_first_node_iter)
-
-    def is_good_source(self, src):
-        """
-        Indicates whether or not the request made to the backend found
-        what it was looking for.
-
-        In the case of an object, a 416 indicates that we found a
-        backend with the object.
-        """
-        return src.status == 416 or \
-            super(ObjectController, self).is_good_source(src)
 
     def GETorHEAD(self, req):
         """Handle HTTP GET or HEAD requests."""
@@ -546,7 +536,8 @@ class ObjectController(Controller):
         partition = self.app.object_ring.get_part(
             self.account_name, self.container_name, self.object_name)
         resp = self.GETorHEAD_base(
-            req, _('Object'), self.app.object_ring, partition, req.path_info)
+            req, _('Object'), self.app.object_ring, partition,
+            req.swift_entity_path)
 
         if ';' in resp.headers.get('content-type', ''):
             # strip off swift_bytes from content-type
@@ -617,26 +608,10 @@ class ObjectController(Controller):
             if len(listing_page1) >= CONTAINER_LISTING_LIMIT:
                 resp = Response(headers=resp.headers, request=req,
                                 conditional_response=True)
-                if req.method == 'HEAD':
-                    # These shenanigans are because swob translates the HEAD
-                    # request into a swob EmptyResponse for the body, which
-                    # has a len, which eventlet translates as needing a
-                    # content-length header added. So we call the original
-                    # swob resp for the headers but return an empty iterator
-                    # for the body.
-
-                    def head_response(environ, start_response):
-                        resp(environ, start_response)
-                        return iter([])
-
-                    head_response.status_int = resp.status_int
-                    return head_response
-                else:
-                    resp.app_iter = SegmentedIterable(
-                        self, lcontainer, listing, resp,
-                        is_slo=(large_object == 'SLO'),
-                        max_lo_time=self.app.max_large_object_get_time)
-
+                resp.app_iter = SegmentedIterable(
+                    self, lcontainer, listing, resp,
+                    is_slo=(large_object == 'SLO'),
+                    max_lo_time=self.app.max_large_object_get_time)
             else:
                 # For objects with a reasonable number of segments, we'll serve
                 # them with a set content-length and computed etag.
@@ -704,7 +679,7 @@ class ObjectController(Controller):
             req.headers['x-delete-at'] = '%d' % (time.time() + x_delete_after)
         if self.app.object_post_as_copy:
             req.method = 'PUT'
-            req.path_info = '/%s/%s/%s' % (
+            req.path_info = '/v1/%s/%s/%s' % (
                 self.account_name, self.container_name, self.object_name)
             req.headers['Content-Length'] = 0
             req.headers['X-Copy-From'] = quote('/%s/%s' % (self.container_name,
@@ -768,7 +743,7 @@ class ObjectController(Controller):
                 delete_at_container, delete_at_part, delete_at_nodes)
 
             resp = self.make_requests(req, self.app.object_ring, partition,
-                                      'POST', req.path_info, headers)
+                                      'POST', req.swift_entity_path, headers)
             return resp
 
     def _backend_requests(self, req, n_outgoing,
@@ -816,8 +791,9 @@ class ObjectController(Controller):
                         conn.send(chunk)
                 except (Exception, ChunkWriteTimeout):
                     conn.failed = True
-                    self.exception_occurred(conn.node, _('Object'),
-                                            _('Trying to write to %s') % path)
+                    self.app.exception_occurred(
+                        conn.node, _('Object'),
+                        _('Trying to write to %s') % path)
             conn.queue.task_done()
 
     def _connect_put_node(self, nodes, part, path, headers,
@@ -843,10 +819,55 @@ class ObjectController(Controller):
                     conn.node = node
                     return conn
                 elif resp.status == HTTP_INSUFFICIENT_STORAGE:
-                    self.error_limit(node, _('ERROR Insufficient Storage'))
+                    self.app.error_limit(node, _('ERROR Insufficient Storage'))
             except (Exception, Timeout):
-                self.exception_occurred(node, _('Object'),
-                                        _('Expect: 100-continue on %s') % path)
+                self.app.exception_occurred(
+                    node, _('Object'),
+                    _('Expect: 100-continue on %s') % path)
+
+    def _get_put_responses(self, req, conns, nodes):
+        statuses = []
+        reasons = []
+        bodies = []
+        etags = set()
+
+        def get_conn_response(conn):
+            try:
+                with Timeout(self.app.node_timeout):
+                    if conn.resp:
+                        return conn.resp
+                    else:
+                        return conn.getresponse()
+            except (Exception, Timeout):
+                self.app.exception_occurred(
+                    conn.node, _('Object'),
+                    _('Trying to get final status of PUT to %s') % req.path)
+        pile = GreenAsyncPile(len(conns))
+        for conn in conns:
+            pile.spawn(get_conn_response, conn)
+        for response in pile:
+            if response:
+                statuses.append(response.status)
+                reasons.append(response.reason)
+                bodies.append(response.read())
+                if response.status >= HTTP_INTERNAL_SERVER_ERROR:
+                    self.app.error_occurred(
+                        conn.node,
+                        _('ERROR %(status)d %(body)s From Object Server '
+                          're: %(path)s') %
+                        {'status': response.status,
+                         'body': bodies[-1][:1024], 'path': req.path})
+                elif is_success(response.status):
+                    etags.add(response.getheader('etag').strip('"'))
+                if self.have_quorum(statuses, len(nodes)):
+                    break
+        # give any pending requests *some* chance to finish
+        pile.waitall(self.app.post_quorum_timeout)
+        while len(statuses) < len(nodes):
+            statuses.append(HTTP_SERVICE_UNAVAILABLE)
+            reasons.append('')
+            bodies.append('')
+        return statuses, reasons, bodies, etags
 
     @public
     @cors_validation
@@ -894,7 +915,7 @@ class ObjectController(Controller):
                                  environ={'REQUEST_METHOD': 'HEAD'})
             hresp = self.GETorHEAD_base(
                 hreq, _('Object'), self.app.object_ring, partition,
-                hreq.path_info)
+                hreq.swift_entity_path)
         # Used by container sync feature
         if 'x-timestamp' in req.headers:
             try:
@@ -970,15 +991,15 @@ class ObjectController(Controller):
                 req.environ.setdefault('swift.log_info', []).append(
                     'x-copy-from:%s' % source_header)
             source_header = unquote(source_header)
-            acct = req.path_info.split('/', 2)[1]
+            acct = req.swift_entity_path.split('/', 2)[1]
             if isinstance(acct, unicode):
                 acct = acct.encode('utf-8')
             if not source_header.startswith('/'):
                 source_header = '/' + source_header
-            source_header = '/' + acct + source_header
+            source_header = '/v1/' + acct + source_header
             try:
                 src_container_name, src_obj_name = \
-                    source_header.split('/', 3)[2:]
+                    source_header.split('/', 4)[3:]
             except ValueError:
                 return HTTPPreconditionFailed(
                     request=req,
@@ -1063,7 +1084,8 @@ class ObjectController(Controller):
             if (req.content_length > 0) or chunked:
                 nheaders['Expect'] = '100-continue'
             pile.spawn(self._connect_put_node, node_iter, partition,
-                       req.path_info, nheaders, self.app.logger.thread_locals)
+                       req.swift_entity_path, nheaders,
+                       self.app.logger.thread_locals)
 
         conns = [conn for conn in pile if conn]
         min_conns = quorum_size(len(nodes))
@@ -1124,47 +1146,20 @@ class ObjectController(Controller):
                 _('Client disconnected without sending enough data'))
             self.app.logger.increment('client_disconnects')
             return HTTPClientDisconnect(request=req)
-        statuses = []
-        reasons = []
-        bodies = []
-        etags = set()
-        for conn in conns:
-            try:
-                with Timeout(self.app.node_timeout):
-                    if conn.resp:
-                        response = conn.resp
-                    else:
-                        response = conn.getresponse()
-                    statuses.append(response.status)
-                    reasons.append(response.reason)
-                    bodies.append(response.read())
-                    if response.status >= HTTP_INTERNAL_SERVER_ERROR:
-                        self.error_occurred(
-                            conn.node,
-                            _('ERROR %(status)d %(body)s From Object Server '
-                              're: %(path)s') %
-                            {'status': response.status,
-                             'body': bodies[-1][:1024], 'path': req.path})
-                    elif is_success(response.status):
-                        etags.add(response.getheader('etag').strip('"'))
-            except (Exception, Timeout):
-                self.exception_occurred(
-                    conn.node, _('Object'),
-                    _('Trying to get final status of PUT to %s') % req.path)
+
+        statuses, reasons, bodies, etags = self._get_put_responses(req, conns,
+                                                                   nodes)
+
         if len(etags) > 1:
             self.app.logger.error(
                 _('Object servers returned %s mismatched etags'), len(etags))
             return HTTPServerError(request=req)
         etag = etags.pop() if len(etags) else None
-        while len(statuses) < len(nodes):
-            statuses.append(HTTP_SERVICE_UNAVAILABLE)
-            reasons.append('')
-            bodies.append('')
         resp = self.best_response(req, statuses, reasons, bodies,
                                   _('Object PUT'), etag=etag)
         if source_header:
             resp.headers['X-Copied-From'] = quote(
-                source_header.split('/', 2)[2])
+                source_header.split('/', 3)[3])
             if 'last-modified' in source_resp.headers:
                 resp.headers['X-Copied-From-Last-Modified'] = \
                     source_resp.headers['last-modified']
@@ -1209,7 +1204,7 @@ class ObjectController(Controller):
                 orig_obj = self.object_name
                 self.container_name = lcontainer
                 self.object_name = last_item['name'].encode('utf-8')
-                copy_path = '/' + self.account_name + '/' + \
+                copy_path = '/v1/' + self.account_name + '/' + \
                             self.container_name + '/' + self.object_name
                 copy_headers = {'X-Newest': 'True',
                                 'Destination': orig_container + '/' + orig_obj
@@ -1264,7 +1259,8 @@ class ObjectController(Controller):
         headers = self._backend_requests(
             req, len(nodes), container_partition, containers)
         resp = self.make_requests(req, self.app.object_ring,
-                                  partition, 'DELETE', req.path_info, headers)
+                                  partition, 'DELETE', req.swift_entity_path,
+                                  headers)
         return resp
 
     @public
@@ -1292,7 +1288,7 @@ class ObjectController(Controller):
         # re-write the existing request as a PUT instead of creating a new one
         # since this one is already attached to the posthooklogger
         req.method = 'PUT'
-        req.path_info = '/' + self.account_name + dest
+        req.path_info = '/v1/' + self.account_name + dest
         req.headers['Content-Length'] = 0
         req.headers['X-Copy-From'] = quote(source)
         del req.headers['Destination']

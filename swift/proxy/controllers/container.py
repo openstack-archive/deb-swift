@@ -13,17 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# NOTE: swift_conn
-# You'll see swift_conn passed around a few places in this file. This is the
-# source httplib connection of whatever it is attached to.
-#   It is used when early termination of reading from the connection should
-# happen, such as when a range request is satisfied but there's still more the
-# source connection would like to send. To prevent having to read all the data
-# that could be left, the source connection can be .close() and then reads
-# commence to empty out any buffers.
-#   These shenanigans are to ensure all related objects can be garbage
-# collected. We've seen objects hang around forever otherwise.
-
 from swift import gettext_ as _
 from urllib import unquote
 
@@ -75,7 +64,8 @@ class ContainerController(Controller):
         part = self.app.container_ring.get_part(
             self.account_name, self.container_name)
         resp = self.GETorHEAD_base(
-            req, _('Container'), self.app.container_ring, part, req.path_info)
+            req, _('Container'), self.app.container_ring, part,
+            req.swift_entity_path)
         if 'swift.authorize' in req.environ:
             req.acl = resp.headers.get('x-container-read')
             aresp = req.environ['swift.authorize'](req)
@@ -137,7 +127,7 @@ class ContainerController(Controller):
                          self.account_name, self.container_name)
         resp = self.make_requests(
             req, self.app.container_ring,
-            container_partition, 'PUT', req.path_info, headers)
+            container_partition, 'PUT', req.swift_entity_path, headers)
         return resp
 
     @public
@@ -159,7 +149,7 @@ class ContainerController(Controller):
                          self.account_name, self.container_name)
         resp = self.make_requests(
             req, self.app.container_ring, container_partition, 'POST',
-            req.path_info, [headers] * len(containers))
+            req.swift_entity_path, [headers] * len(containers))
         return resp
 
     @public
@@ -178,7 +168,7 @@ class ContainerController(Controller):
                          self.account_name, self.container_name)
         resp = self.make_requests(
             req, self.app.container_ring, container_partition, 'DELETE',
-            req.path_info, headers)
+            req.swift_entity_path, headers)
         # Indicates no server had the container
         if resp.status_int == HTTP_ACCEPTED:
             return HTTPNotFound(request=req)

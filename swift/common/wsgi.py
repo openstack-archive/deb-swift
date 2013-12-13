@@ -21,7 +21,6 @@ import signal
 import time
 import mimetools
 from swift import gettext_ as _
-from itertools import chain
 from StringIO import StringIO
 
 import eventlet
@@ -35,7 +34,8 @@ from swift.common import utils
 from swift.common.swob import Request
 from swift.common.utils import capture_stdio, disable_fallocate, \
     drop_privileges, get_logger, NullLogger, config_true_value, \
-    validate_configuration, get_hub, config_auto_int_value
+    validate_configuration, get_hub, config_auto_int_value, \
+    CloseableChain
 
 try:
     import multiprocessing
@@ -169,6 +169,7 @@ def get_socket(conf, default_port=8080):
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     # in my experience, sockets can hang around forever without keepalive
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     if hasattr(socket, 'TCP_KEEPIDLE'):
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 600)
     if warn_ssl:
@@ -196,7 +197,7 @@ class RestrictedGreenPool(GreenPool):
             self.waitall()
 
 
-def run_server(conf, logger, sock):
+def run_server(conf, logger, sock, global_conf=None):
     # Ensure TZ environment variable exists to avoid stat('/etc/localtime') on
     # some platforms. This locks in reported times to the timezone in which
     # the server first starts running in locations that periodically change
@@ -216,11 +217,13 @@ def run_server(conf, logger, sock):
     eventlet_debug = config_true_value(conf.get('eventlet_debug', 'no'))
     eventlet.debug.hub_exceptions(eventlet_debug)
     # utils.LogAdapter stashes name in server; fallback on unadapted loggers
-    if hasattr(logger, 'server'):
-        log_name = logger.server
-    else:
-        log_name = logger.name
-    app = loadapp(conf['__file__'], global_conf={'log_name': log_name})
+    if not global_conf:
+        if hasattr(logger, 'server'):
+            log_name = logger.server
+        else:
+            log_name = logger.name
+        global_conf = {'log_name': log_name}
+    app = loadapp(conf['__file__'], global_conf=global_conf)
     max_clients = int(conf.get('max_clients', '1024'))
     pool = RestrictedGreenPool(size=max_clients)
     try:
@@ -252,8 +255,11 @@ def run_wsgi(conf_path, app_section, *args, **kwargs):
     # remaining tasks should not require elevated privileges
     drop_privileges(conf.get('user', 'swift'))
 
-    # Ensure the application can be loaded before proceeding.
-    loadapp(conf_path, global_conf={'log_name': log_name})
+    # Ensure the configuration and application can be loaded before proceeding.
+    global_conf = {'log_name': log_name}
+    if 'global_conf_callback' in kwargs:
+        kwargs['global_conf_callback'](conf, global_conf)
+    loadapp(conf_path, global_conf=global_conf)
 
     # set utils.FALLOCATE_RESERVE if desired
     reserve = int(conf.get('fallocate_reserve', 0))
@@ -266,7 +272,7 @@ def run_wsgi(conf_path, app_section, *args, **kwargs):
 
     # Useful for profiling [no forks].
     if worker_count == 0:
-        run_server(conf, logger, sock)
+        run_server(conf, logger, sock, global_conf=global_conf)
         return
 
     def kill_children(*args):
@@ -395,7 +401,7 @@ class WSGIContext(object):
         except StopIteration:
             return iter([])
         else:  # We got a first_chunk
-            return chain([first_chunk], resp)
+            return CloseableChain([first_chunk], resp)
 
     def _get_status_int(self):
         """
@@ -485,7 +491,7 @@ def make_pre_authed_env(env, method=None, path=None, agent='Swift',
     newenv = {}
     for name in ('eventlet.posthooks', 'HTTP_USER_AGENT', 'HTTP_HOST',
                  'PATH_INFO', 'QUERY_STRING', 'REMOTE_USER', 'REQUEST_METHOD',
-                 'SCRIPT_NAME', 'SERVER_NAME', 'SERVER_PORT',
+                 'SCRIPT_NAME', 'SERVER_NAME', 'SERVER_PORT', 'HTTP_ORIGIN',
                  'SERVER_PROTOCOL', 'swift.cache', 'swift.source',
                  'swift.trans_id'):
         if name in env:

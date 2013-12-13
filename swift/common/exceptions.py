@@ -30,15 +30,15 @@ class SwiftException(Exception):
     pass
 
 
-class AuditException(SwiftException):
-    pass
-
-
 class DiskFileError(SwiftException):
     pass
 
 
-class DiskFileNotOpenError(DiskFileError):
+class DiskFileNotOpen(DiskFileError):
+    pass
+
+
+class DiskFileQuarantined(DiskFileError):
     pass
 
 
@@ -47,6 +47,17 @@ class DiskFileCollision(DiskFileError):
 
 
 class DiskFileNotExist(DiskFileError):
+    pass
+
+
+class DiskFileDeleted(DiskFileNotExist):
+
+    def __init__(self, metadata=None):
+        self.metadata = metadata or {}
+        self.timestamp = self.metadata.get('X-Timestamp', 0)
+
+
+class DiskFileExpired(DiskFileDeleted):
     pass
 
 
@@ -113,4 +124,12 @@ class ListingIterNotAuthorized(ListingIterError):
 
 
 class SegmentError(SwiftException):
+    pass
+
+
+class ReplicationException(Exception):
+    pass
+
+
+class ReplicationLockTimeout(LockTimeout):
     pass

@@ -19,6 +19,7 @@ import unittest
 from swift.common.swob import Request
 from swift.proxy import server as proxy_server
 from swift.proxy.controllers.base import headers_to_account_info
+from swift.common.constraints import MAX_ACCOUNT_NAME_LENGTH as MAX_ANAME_LEN
 from test.unit import fake_http_connect, FakeRing, FakeMemcache
 
 
@@ -32,8 +33,8 @@ class TestAccountController(unittest.TestCase):
     def test_account_info_in_response_env(self):
         controller = proxy_server.AccountController(self.app, 'AUTH_bob')
         with mock.patch('swift.proxy.controllers.base.http_connect',
-                        fake_http_connect(200, 200, body='')):
-            req = Request.blank('/AUTH_bob', {'PATH_INFO': '/AUTH_bob'})
+                        fake_http_connect(200, body='')):
+            req = Request.blank('/v1/AUTH_bob', {'PATH_INFO': '/v1/AUTH_bob'})
             resp = controller.HEAD(req)
         self.assertEqual(2, resp.status_int // 100)
         self.assertTrue('swift.account/AUTH_bob' in resp.environ)
@@ -46,21 +47,53 @@ class TestAccountController(unittest.TestCase):
             'x-account-meta-temp-url-key-2': 'value'}
         controller = proxy_server.AccountController(self.app, 'a')
 
-        req = Request.blank('/a')
+        req = Request.blank('/v1/a')
         with mock.patch('swift.proxy.controllers.base.http_connect',
-                        fake_http_connect(200, 200, headers=owner_headers)):
+                        fake_http_connect(200, headers=owner_headers)):
             resp = controller.HEAD(req)
         self.assertEquals(2, resp.status_int // 100)
         for key in owner_headers:
             self.assertTrue(key not in resp.headers)
 
-        req = Request.blank('/a', environ={'swift_owner': True})
+        req = Request.blank('/v1/a', environ={'swift_owner': True})
         with mock.patch('swift.proxy.controllers.base.http_connect',
-                        fake_http_connect(200, 200, headers=owner_headers)):
+                        fake_http_connect(200, headers=owner_headers)):
             resp = controller.HEAD(req)
         self.assertEquals(2, resp.status_int // 100)
         for key in owner_headers:
             self.assertTrue(key in resp.headers)
+
+    def test_get_deleted_account(self):
+        resp_headers = {
+            'x-account-status': 'deleted',
+        }
+        controller = proxy_server.AccountController(self.app, 'a')
+
+        req = Request.blank('/v1/a')
+        with mock.patch('swift.proxy.controllers.base.http_connect',
+                        fake_http_connect(404, headers=resp_headers)):
+            resp = controller.HEAD(req)
+        self.assertEquals(410, resp.status_int)
+
+    def test_long_acct_names(self):
+        long_acct_name = '%sLongAccountName' % ('Very' * (MAX_ANAME_LEN // 4))
+        controller = proxy_server.AccountController(self.app, long_acct_name)
+
+        req = Request.blank('/v1/%s' % long_acct_name)
+        with mock.patch('swift.proxy.controllers.base.http_connect',
+                        fake_http_connect(200)):
+            resp = controller.HEAD(req)
+        self.assertEquals(400, resp.status_int)
+
+        with mock.patch('swift.proxy.controllers.base.http_connect',
+                        fake_http_connect(200)):
+            resp = controller.GET(req)
+        self.assertEquals(400, resp.status_int)
+
+        with mock.patch('swift.proxy.controllers.base.http_connect',
+                        fake_http_connect(200)):
+            resp = controller.POST(req)
+        self.assertEquals(400, resp.status_int)
 
 
 if __name__ == '__main__':

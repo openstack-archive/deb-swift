@@ -134,17 +134,17 @@ class TestContainerSync(unittest.TestCase):
 
         orig_time = sync.time
         orig_sleep = sync.sleep
-        orig_audit_location_generator = sync.audit_location_generator
         orig_ContainerBroker = sync.ContainerBroker
+        orig_audit_location_generator = sync.audit_location_generator
         try:
             sync.ContainerBroker = lambda p: FakeContainerBroker(
                 p, info={'account': 'a', 'container': 'c'})
             sync.time = fake_time
             sync.sleep = fake_sleep
-            sync.audit_location_generator = fake_audit_location_generator
             cs = sync.ContainerSync({}, container_ring=FakeRing(),
                                     object_ring=FakeRing())
-            cs.run_forever()
+            sync.audit_location_generator = fake_audit_location_generator
+            cs.run_forever(1, 2, a=3, b=4, verbose=True)
         except Exception as err:
             if str(err) != 'we are now done':
                 raise
@@ -196,10 +196,10 @@ class TestContainerSync(unittest.TestCase):
             sync.ContainerBroker = lambda p: FakeContainerBroker(
                 p, info={'account': 'a', 'container': 'c'})
             sync.time = fake_time
-            sync.audit_location_generator = fake_audit_location_generator
             cs = sync.ContainerSync({}, container_ring=FakeRing(),
                                     object_ring=FakeRing())
-            cs.run_once()
+            sync.audit_location_generator = fake_audit_location_generator
+            cs.run_once(1, 2, a=3, b=4, verbose=True)
             self.assertEquals(time_calls, [6])
             self.assertEquals(audit_location_generator_calls, [1])
             self.assertEquals(cs.reported, 3602)
