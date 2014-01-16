@@ -1,1 +1,2 @@
 fix-doc-no-network.patch
+CVE-2014-0006_constant-time-comparison-when-evaluating-tempURL.patch
