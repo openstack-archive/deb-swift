@@ -2,6 +2,7 @@ swift (1.11.0-2) unstable; urgency=high
 
   * CVE-2014-0006: Use constant time comparison in tempURL. Applied upstream
     patch (Closes: #735582).
+  * Fix sphinx doc building.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 17 Jan 2014 00:31:56 +0800
 

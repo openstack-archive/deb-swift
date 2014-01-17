@@ -6,20 +6,20 @@ include /usr/share/openstack-pkg-tools/pkgos.make
 export OSLO_PACKAGE_VERSION=$(VERSION)
 
 %:
-	dh $@ --with python2,sphinxdoc
+	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc
 
 # clean sphinx build output
 override_dh_clean:
 	dh_clean
 	rm -f debian/*.upstart
 	rm -rf swift.egg-info
-	rm -rf doc/build/* swift.egg-info/SOURCES.txt
 
 # build with sphinx documentation
-override_dh_auto_build:
+override_dh_sphinxdoc:
 	dh_auto_build
-	mkdir -p doc/build
-	python setup.py build_sphinx
+	PYTHONPATH=. sphinx-build doc/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/html
+	#python setup.py build_sphinx
+	dh_sphinxdoc -O--buildsystem=python_distutils
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
