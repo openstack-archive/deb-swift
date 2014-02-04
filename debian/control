@@ -13,6 +13,7 @@ Build-Depends: debhelper (>= 9),
                python-pbr,
                python-setuptools
 Build-Depends-Indep: python-coverage,
+                     python-dnspython,
                      python-eventlet (>= 0.9.15),
                      python-greenlet (>= 0.3.1),
                      python-mock,
@@ -38,6 +39,7 @@ Architecture: all
 Section: python
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
+         python-dnspython,
          python-eventlet (>= 0.9.15),
          python-greenlet (>= 0.3.1),
          python-netifaces,
