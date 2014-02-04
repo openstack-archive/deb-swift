@@ -48,6 +48,8 @@ from swift.common.http import is_informational, is_success, is_redirection, \
     HTTP_INSUFFICIENT_STORAGE, HTTP_UNAUTHORIZED
 from swift.common.swob import Request, Response, HeaderKeyDict, Range, \
     HTTPException, HTTPRequestedRangeNotSatisfiable
+from swift.common.request_helpers import strip_sys_meta_prefix, \
+    strip_user_meta_prefix, is_user_meta, is_sys_meta, is_sys_or_user_meta
 
 
 def update_headers(response, headers):
@@ -106,11 +108,32 @@ def get_container_memcache_key(account, container):
     return cache_key
 
 
+def _prep_headers_to_info(headers, server_type):
+    """
+    Helper method that iterates once over a dict of headers,
+    converting all keys to lower case and separating
+    into subsets containing user metadata, system metadata
+    and other headers.
+    """
+    meta = {}
+    sysmeta = {}
+    other = {}
+    for key, val in dict(headers).iteritems():
+        lkey = key.lower()
+        if is_user_meta(server_type, lkey):
+            meta[strip_user_meta_prefix(server_type, lkey)] = val
+        elif is_sys_meta(server_type, lkey):
+            sysmeta[strip_sys_meta_prefix(server_type, lkey)] = val
+        else:
+            other[lkey] = val
+    return other, meta, sysmeta
+
+
 def headers_to_account_info(headers, status_int=HTTP_OK):
     """
     Construct a cacheable dict of account info based on response headers.
     """
-    headers = dict((k.lower(), v) for k, v in dict(headers).iteritems())
+    headers, meta, sysmeta = _prep_headers_to_info(headers, 'account')
     return {
         'status': status_int,
         # 'container_count' anomaly:
@@ -120,9 +143,8 @@ def headers_to_account_info(headers, status_int=HTTP_OK):
         'container_count': headers.get('x-account-container-count'),
         'total_object_count': headers.get('x-account-object-count'),
         'bytes': headers.get('x-account-bytes-used'),
-        'meta': dict((key[15:], value)
-                     for key, value in headers.iteritems()
-                     if key.startswith('x-account-meta-'))
+        'meta': meta,
+        'sysmeta': sysmeta
     }
 
 
@@ -130,7 +152,7 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
     """
     Construct a cacheable dict of container info based on response headers.
     """
-    headers = dict((k.lower(), v) for k, v in dict(headers).iteritems())
+    headers, meta, sysmeta = _prep_headers_to_info(headers, 'container')
     return {
         'status': status_int,
         'read_acl': headers.get('x-container-read'),
@@ -140,16 +162,12 @@ def headers_to_container_info(headers, status_int=HTTP_OK):
         'bytes': headers.get('x-container-bytes-used'),
         'versions': headers.get('x-versions-location'),
         'cors': {
-            'allow_origin': headers.get(
-                'x-container-meta-access-control-allow-origin'),
-            'expose_headers': headers.get(
-                'x-container-meta-access-control-expose-headers'),
-            'max_age': headers.get(
-                'x-container-meta-access-control-max-age')
+            'allow_origin': meta.get('access-control-allow-origin'),
+            'expose_headers': meta.get('access-control-expose-headers'),
+            'max_age': meta.get('access-control-max-age')
         },
-        'meta': dict((key[17:], value)
-                     for key, value in headers.iteritems()
-                     if key.startswith('x-container-meta-'))
+        'meta': meta,
+        'sysmeta': sysmeta
     }
 
 
@@ -157,14 +175,12 @@ def headers_to_object_info(headers, status_int=HTTP_OK):
     """
     Construct a cacheable dict of object info based on response headers.
     """
-    headers = dict((k.lower(), v) for k, v in dict(headers).iteritems())
+    headers, meta, sysmeta = _prep_headers_to_info(headers, 'object')
     info = {'status': status_int,
             'length': headers.get('content-length'),
             'type': headers.get('content-type'),
             'etag': headers.get('etag'),
-            'meta': dict((key[14:], value)
-                         for key, value in headers.iteritems()
-                         if key.startswith('x-object-meta-'))
+            'meta': meta
             }
     return info
 
@@ -420,6 +436,9 @@ def _get_info_cache(app, env, account, container=None):
     if memcache:
         info = memcache.get(cache_key)
         if info:
+            for key in info:
+                if isinstance(info[key], unicode):
+                    info[key] = info[key].encode("utf-8")
             env[env_key] = info
         return info
     return None
@@ -437,6 +456,9 @@ def _prepare_pre_auth_info_request(env, path, swift_source):
     # Set the env for the pre_authed call without a query string
     newenv = make_pre_authed_env(env, 'HEAD', path, agent='Swift',
                                  query_string='', swift_source=swift_source)
+    # This is a sub request for container metadata- drop the Origin header from
+    # the request so the it is not treated as a CORS request.
+    newenv.pop('HTTP_ORIGIN', None)
     # Note that Request.blank expects quoted path
     return Request.blank(quote(path), environ=newenv)
 
@@ -607,12 +629,13 @@ class GetOrHeadHandler(object):
             return True
         return is_success(src.status) or is_redirection(src.status)
 
-    def _make_app_iter(self, node, source):
+    def _make_app_iter(self, req, node, source):
         """
         Returns an iterator over the contents of the source (via its read
         func).  There is also quite a bit of cleanup to ensure garbage
         collection works and the underlying socket of the source is closed.
 
+        :param req: incoming request object
         :param source: The httplib.Response object this iterator should read
                        from.
         :param node: The node the source is reading from, for logging purposes.
@@ -628,7 +651,7 @@ class GetOrHeadHandler(object):
                         bytes_read_from_source += len(chunk)
                 except ChunkReadTimeout:
                     exc_type, exc_value, exc_traceback = exc_info()
-                    if self.newest:
+                    if self.newest or self.server_type != 'Object':
                         raise exc_type, exc_value, exc_traceback
                     try:
                         self.fast_forward(bytes_read_from_source)
@@ -679,7 +702,8 @@ class GetOrHeadHandler(object):
                 self.app.client_timeout)
             self.app.logger.increment('client_timeouts')
         except GeneratorExit:
-            self.app.logger.warn(_('Client disconnected on read'))
+            if not req.environ.get('swift.non_client_disconnect'):
+                self.app.logger.warn(_('Client disconnected on read'))
         except Exception:
             self.app.logger.exception(_('Trying to send to client'))
             raise
@@ -782,7 +806,7 @@ class GetOrHeadHandler(object):
             res = Response(request=req)
             if req.method == 'GET' and \
                     source.status in (HTTP_OK, HTTP_PARTIAL_CONTENT):
-                res.app_iter = self._make_app_iter(node, source)
+                res.app_iter = self._make_app_iter(req, node, source)
                 # See NOTE: swift_conn at top of file about this.
                 res.swift_conn = source.swift_conn
             res.status = source.status
@@ -851,11 +875,10 @@ class Controller(object):
                            if k.lower().startswith(x_remove) or
                            k.lower() in self._x_remove_headers())
 
-        x_meta = 'x-%s-meta-' % st
         dst_headers.update((k.lower(), v)
                            for k, v in src_headers.iteritems()
                            if k.lower() in self.pass_through_headers or
-                           k.lower().startswith(x_meta))
+                           is_sys_or_user_meta(st, k))
 
     def generate_request_headers(self, orig_req=None, additional=None,
                                  transfer=False):

@@ -25,8 +25,9 @@ from eventlet import Timeout
 import swift.common.db
 from swift.container.backend import ContainerBroker
 from swift.common.db import DatabaseAlreadyExists
+from swift.common.container_sync_realms import ContainerSyncRealms
 from swift.common.request_helpers import get_param, get_listing_content_type, \
-    split_and_validate_path
+    split_and_validate_path, is_sys_or_user_meta
 from swift.common.utils import get_logger, hash_path, public, \
     normalize_timestamp, storage_directory, validate_sync_to, \
     config_true_value, json, timing_stats, replication, \
@@ -54,7 +55,7 @@ class ContainerController(object):
 
     def __init__(self, conf, logger=None):
         self.logger = logger or get_logger(conf, log_route='container-server')
-        self.root = conf.get('devices', '/srv/node/')
+        self.root = conf.get('devices', '/srv/node')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
         self.node_timeout = int(conf.get('node_timeout', 3))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
@@ -62,6 +63,14 @@ class ContainerController(object):
         if replication_server is not None:
             replication_server = config_true_value(replication_server)
         self.replication_server = replication_server
+        #: ContainerSyncCluster instance for validating sync-to values.
+        self.realms_conf = ContainerSyncRealms(
+            os.path.join(
+                conf.get('swift_dir', '/etc/swift'),
+                'container-sync-realms.conf'),
+            self.logger)
+        #: The list of hosts we're allowed to send syncs to. This can be
+        #: overridden by data in self.realms_conf
         self.allowed_sync_hosts = [
             h.strip()
             for h in conf.get('allowed_sync_hosts', '127.0.0.1').split(',')
@@ -228,8 +237,9 @@ class ContainerController(object):
             return HTTPBadRequest(body='Missing timestamp', request=req,
                                   content_type='text/plain')
         if 'x-container-sync-to' in req.headers:
-            err = validate_sync_to(req.headers['x-container-sync-to'],
-                                   self.allowed_sync_hosts)
+            err, sync_to, realm, realm_key = validate_sync_to(
+                req.headers['x-container-sync-to'], self.allowed_sync_hosts,
+                self.realms_conf)
             if err:
                 return HTTPBadRequest(err)
         if self.mount_check and not check_mount(self.root, drive):
@@ -266,7 +276,7 @@ class ContainerController(object):
                 (key, (value, timestamp))
                 for key, value in req.headers.iteritems()
                 if key.lower() in self.save_headers or
-                key.lower().startswith('x-container-meta-'))
+                is_sys_or_user_meta('container', key))
             if metadata:
                 if 'X-Container-Sync-To' in metadata:
                     if 'X-Container-Sync-To' not in broker.metadata or \
@@ -307,7 +317,7 @@ class ContainerController(object):
             (key, value)
             for key, (value, timestamp) in broker.metadata.iteritems()
             if value != '' and (key.lower() in self.save_headers or
-                                key.lower().startswith('x-container-meta-')))
+                                is_sys_or_user_meta('container', key)))
         headers['Content-Type'] = out_content_type
         return HTTPNoContent(request=req, headers=headers, charset='utf-8')
 
@@ -374,7 +384,7 @@ class ContainerController(object):
         }
         for key, (value, timestamp) in broker.metadata.iteritems():
             if value and (key.lower() in self.save_headers or
-                          key.lower().startswith('x-container-meta-')):
+                          is_sys_or_user_meta('container', key)):
                 resp_headers[key] = value
         ret = Response(request=req, headers=resp_headers,
                        content_type=out_content_type, charset='utf-8')
@@ -438,8 +448,9 @@ class ContainerController(object):
             return HTTPBadRequest(body='Missing or bad timestamp',
                                   request=req, content_type='text/plain')
         if 'x-container-sync-to' in req.headers:
-            err = validate_sync_to(req.headers['x-container-sync-to'],
-                                   self.allowed_sync_hosts)
+            err, sync_to, realm, realm_key = validate_sync_to(
+                req.headers['x-container-sync-to'], self.allowed_sync_hosts,
+                self.realms_conf)
             if err:
                 return HTTPBadRequest(err)
         if self.mount_check and not check_mount(self.root, drive):
@@ -452,7 +463,7 @@ class ContainerController(object):
         metadata.update(
             (key, (value, timestamp)) for key, value in req.headers.iteritems()
             if key.lower() in self.save_headers or
-            key.lower().startswith('x-container-meta-'))
+            is_sys_or_user_meta('container', key))
         if metadata:
             if 'X-Container-Sync-To' in metadata:
                 if 'X-Container-Sync-To' not in broker.metadata or \

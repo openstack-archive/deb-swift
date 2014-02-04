@@ -1672,8 +1672,14 @@ class TestFileComparisonEnv:
             file_item.write_random(cls.file_size)
             cls.files.append(file_item)
 
-        cls.time_old = time.asctime(time.localtime(time.time() - 86400))
-        cls.time_new = time.asctime(time.localtime(time.time() + 86400))
+        cls.time_old_f1 = time.strftime("%a, %d %b %Y %H:%M:%S GMT",
+                                        time.gmtime(time.time() - 86400))
+        cls.time_old_f2 = time.strftime("%A, %d-%b-%y %H:%M:%S GMT",
+                                        time.gmtime(time.time() - 86400))
+        cls.time_old_f3 = time.strftime("%a %b %d %H:%M:%S %Y",
+                                        time.gmtime(time.time() - 86400))
+        cls.time_new = time.strftime("%a, %d %b %Y %H:%M:%S GMT",
+                                     time.gmtime(time.time() + 86400))
 
 
 class TestFileComparison(Base):
@@ -1700,7 +1706,7 @@ class TestFileComparison(Base):
 
     def testIfModifiedSince(self):
         for file_item in self.env.files:
-            hdrs = {'If-Modified-Since': self.env.time_old}
+            hdrs = {'If-Modified-Since': self.env.time_old_f1}
             self.assert_(file_item.read(hdrs=hdrs))
 
             hdrs = {'If-Modified-Since': self.env.time_new}
@@ -1712,7 +1718,7 @@ class TestFileComparison(Base):
             hdrs = {'If-Unmodified-Since': self.env.time_new}
             self.assert_(file_item.read(hdrs=hdrs))
 
-            hdrs = {'If-Unmodified-Since': self.env.time_old}
+            hdrs = {'If-Unmodified-Since': self.env.time_old_f2}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(412)
 
@@ -1728,9 +1734,31 @@ class TestFileComparison(Base):
             self.assert_status(412)
 
             hdrs = {'If-Match': file_item.md5,
-                    'If-Unmodified-Since': self.env.time_old}
+                    'If-Unmodified-Since': self.env.time_old_f3}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(412)
+
+    def testLastModified(self):
+        file_name = Utils.create_name()
+        content_type = Utils.create_name()
+
+        file = self.env.container.file(file_name)
+        file.content_type = content_type
+        resp = file.write_random_return_resp(self.env.file_size)
+        put_last_modified = resp.getheader('last-modified')
+
+        file = self.env.container.file(file_name)
+        info = file.info()
+        self.assert_('last_modified' in info)
+        last_modified = info['last_modified']
+        self.assertEqual(put_last_modified, info['last_modified'])
+
+        hdrs = {'If-Modified-Since': last_modified}
+        self.assertRaises(ResponseError, file.read, hdrs=hdrs)
+        self.assert_status(304)
+
+        hdrs = {'If-Unmodified-Since': last_modified}
+        self.assert_(file.read(hdrs=hdrs))
 
 
 class TestFileComparisonUTF8(Base2, TestFileComparison):
@@ -1744,6 +1772,24 @@ class TestSloEnv(object):
     def setUp(cls):
         cls.conn = Connection(config)
         cls.conn.authenticate()
+
+        if cls.slo_enabled is None:
+            status = cls.conn.make_request('GET', '/info',
+                                           cfg={'verbatim_path': True})
+            if not (200 <= status <= 299):
+                # Can't tell if SLO is enabled or not since we're running
+                # against an old cluster, so let's skip the tests instead of
+                # possibly having spurious failures.
+                cls.slo_enabled = False
+            else:
+                # Don't bother looking for ValueError here. If something is
+                # responding to a GET /info request with invalid JSON, then
+                # the cluster is broken and a test failure will let us know.
+                cluster_info = json.loads(cls.conn.response.read())
+                cls.slo_enabled = 'slo' in cluster_info
+            if not cls.slo_enabled:
+                return
+
         cls.account = Account(cls.conn, config.get('account',
                                                    config['username']))
         cls.account.delete_containers()
@@ -1752,28 +1798,6 @@ class TestSloEnv(object):
 
         if not cls.container.create():
             raise ResponseError(cls.conn.response)
-
-        # TODO(seriously, anyone can do this): make this use the /info API once
-        # it lands, both for detection of SLO and for minimum segment size
-        if cls.slo_enabled is None:
-            test_file = cls.container.file(".test-slo")
-            try:
-                # If SLO is enabled, this'll raise an error since
-                # X-Static-Large-Object is a reserved header.
-                #
-                # If SLO is not enabled, then this will get the usual 2xx
-                # response.
-                test_file.write(
-                    "some contents",
-                    hdrs={'X-Static-Large-Object': 'true'})
-            except ResponseError as err:
-                if err.status == 400:
-                    cls.slo_enabled = True
-                else:
-                    raise
-            else:
-                cls.slo_enabled = False
-                return
 
         seg_info = {}
         for letter, size in (('a', 1024 * 1024),
@@ -1944,15 +1968,33 @@ class TestSlo(Base):
 
     def test_slo_copy_the_manifest(self):
         file_item = self.env.container.file("manifest-abcde")
-        file_item.copy(self.env.container.name, "copied-abcde",
+        file_item.copy(self.env.container.name, "copied-abcde-manifest-only",
                        parms={'multipart-manifest': 'get'})
 
-        copied = self.env.container.file("copied-abcde")
+        copied = self.env.container.file("copied-abcde-manifest-only")
         copied_contents = copied.read(parms={'multipart-manifest': 'get'})
         try:
             json.loads(copied_contents)
         except ValueError:
             self.fail("COPY didn't copy the manifest (invalid json on GET)")
+
+    def test_slo_get_the_manifest(self):
+        manifest = self.env.container.file("manifest-abcde")
+        got_body = manifest.read(parms={'multipart-manifest': 'get'})
+
+        self.assertEqual('application/json; charset=utf-8',
+                         manifest.content_type)
+        try:
+            json.loads(got_body)
+        except ValueError:
+            self.fail("GET with multipart-manifest=get got invalid json")
+
+    def test_slo_head_the_manifest(self):
+        manifest = self.env.container.file("manifest-abcde")
+        got_info = manifest.info(parms={'multipart-manifest': 'get'})
+
+        self.assertEqual('application/json; charset=utf-8',
+                         got_info['content_type'])
 
 
 class TestSloUTF8(Base2, TestSlo):

@@ -85,20 +85,44 @@ FALLOCATE_RESERVE = 0
 # Used by hash_path to offer a bit more security when generating hashes for
 # paths. It simply appends this value to all paths; guessing the hash a path
 # will end up with would also require knowing this suffix.
-hash_conf = ConfigParser()
 HASH_PATH_SUFFIX = ''
 HASH_PATH_PREFIX = ''
-if hash_conf.read('/etc/swift/swift.conf'):
-    try:
-        HASH_PATH_SUFFIX = hash_conf.get('swift-hash',
-                                         'swift_hash_path_suffix')
-    except (NoSectionError, NoOptionError):
-        pass
-    try:
-        HASH_PATH_PREFIX = hash_conf.get('swift-hash',
-                                         'swift_hash_path_prefix')
-    except (NoSectionError, NoOptionError):
-        pass
+
+SWIFT_CONF_FILE = '/etc/swift/swift.conf'
+
+
+class InvalidHashPathConfigError(ValueError):
+
+    def __str__(self):
+        return "[swift-hash]: both swift_hash_path_suffix and " \
+            "swift_hash_path_prefix are missing from %s" % SWIFT_CONF_FILE
+
+
+def validate_hash_conf():
+    global HASH_PATH_SUFFIX
+    global HASH_PATH_PREFIX
+    if not HASH_PATH_SUFFIX and not HASH_PATH_PREFIX:
+        hash_conf = ConfigParser()
+        if hash_conf.read(SWIFT_CONF_FILE):
+            try:
+                HASH_PATH_SUFFIX = hash_conf.get('swift-hash',
+                                                 'swift_hash_path_suffix')
+            except (NoSectionError, NoOptionError):
+                pass
+            try:
+                HASH_PATH_PREFIX = hash_conf.get('swift-hash',
+                                                 'swift_hash_path_prefix')
+            except (NoSectionError, NoOptionError):
+                pass
+        if not HASH_PATH_SUFFIX and not HASH_PATH_PREFIX:
+            raise InvalidHashPathConfigError()
+
+
+try:
+    validate_hash_conf()
+except InvalidHashPathConfigError:
+    # could get monkey patched or lazy loaded
+    pass
 
 
 def get_hmac(request_method, path, expires, key):
@@ -239,10 +263,10 @@ def noop_libc_function(*args):
 
 
 def validate_configuration():
-    if not HASH_PATH_SUFFIX and not HASH_PATH_PREFIX:
-        sys.exit("Error: [swift-hash]: both swift_hash_path_suffix "
-                 "and swift_hash_path_prefix are missing "
-                 "from /etc/swift/swift.conf")
+    try:
+        validate_hash_conf()
+    except InvalidHashPathConfigError as e:
+        sys.exit("Error: %s" % e)
 
 
 def load_libc_function(func_name, log_error=True):
@@ -511,6 +535,29 @@ def normalize_timestamp(timestamp):
     return "%016.05f" % (float(timestamp))
 
 
+def normalize_delete_at_timestamp(timestamp):
+    """
+    Format a timestamp (string or numeric) into a standardized
+    xxxxxxxxxx (10) format.
+
+    Note that timestamps less than 0000000000 are raised to
+    0000000000 and values greater than November 20th, 2286 at
+    17:46:39 UTC will be capped at that date and time, resulting in
+    no return value exceeding 9999999999.
+
+    This cap is because the expirer is already working through a
+    sorted list of strings that were all a length of 10. Adding
+    another digit would mess up the sort and cause the expirer to
+    break from processing early. By 2286, this problem will need to
+    be fixed, probably by creating an additional .expiring_objects
+    account to work from with 11 (or more) digit container names.
+
+    :param timestamp: unix timestamp
+    :returns: normalized timestamp as a string
+    """
+    return '%010d' % min(max(0, float(timestamp)), 9999999999)
+
+
 def mkdirs(path):
     """
     Ensures the path is a directory or makes it if not. Errors if the path
@@ -609,6 +656,34 @@ def validate_device_partition(device, partition):
         raise ValueError('Invalid device: %s' % quote(device or ''))
     elif invalid_partition:
         raise ValueError('Invalid partition: %s' % quote(partition or ''))
+
+
+class RateLimitedIterator(object):
+    """
+    Wrap an iterator to only yield elements at a rate of N per second.
+
+    :param iterable: iterable to wrap
+    :param elements_per_second: the rate at which to yield elements
+    :param limit_after: rate limiting kicks in only after yielding
+                        this many elements; default is 0 (rate limit
+                        immediately)
+    """
+    def __init__(self, iterable, elements_per_second, limit_after=0):
+        self.iterator = iter(iterable)
+        self.elements_per_second = elements_per_second
+        self.limit_after = limit_after
+        self.running_time = 0
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        if self.limit_after > 0:
+            self.limit_after -= 1
+        else:
+            self.running_time = ratelimit_sleep(self.running_time,
+                                                self.elements_per_second)
+        return self.iterator.next()
 
 
 class GreenthreadSafeIterator(object):
@@ -1765,21 +1840,66 @@ def urlparse(url):
     return ModifiedParseResult(*stdlib_urlparse(url))
 
 
-def validate_sync_to(value, allowed_sync_hosts):
+def validate_sync_to(value, allowed_sync_hosts, realms_conf):
+    """
+    Validates an X-Container-Sync-To header value, returning the
+    validated endpoint, realm, and realm_key, or an error string.
+
+    :param value: The X-Container-Sync-To header value to validate.
+    :param allowed_sync_hosts: A list of allowed hosts in endpoints,
+        if realms_conf does not apply.
+    :param realms_conf: A instance of
+        swift.common.container_sync_realms.ContainerSyncRealms to
+        validate against.
+    :returns: A tuple of (error_string, validated_endpoint, realm,
+        realm_key). The error_string will None if the rest of the
+        values have been validated. The validated_endpoint will be
+        the validated endpoint to sync to. The realm and realm_key
+        will be set if validation was done through realms_conf.
+    """
+    orig_value = value
+    value = value.rstrip('/')
     if not value:
-        return None
+        return (None, None, None, None)
+    if value.startswith('//'):
+        if not realms_conf:
+            return (None, None, None, None)
+        data = value[2:].split('/')
+        if len(data) != 4:
+            return (
+                _('Invalid X-Container-Sync-To format %r') % orig_value,
+                None, None, None)
+        realm, cluster, account, container = data
+        realm_key = realms_conf.key(realm)
+        if not realm_key:
+            return (_('No realm key for %r') % realm, None, None, None)
+        endpoint = realms_conf.endpoint(realm, cluster)
+        if not endpoint:
+            return (
+                _('No cluster endpoint for %r %r') % (realm, cluster),
+                None, None, None)
+        return (
+            None,
+            '%s/%s/%s' % (endpoint.rstrip('/'), account, container),
+            realm.upper(), realm_key)
     p = urlparse(value)
     if p.scheme not in ('http', 'https'):
-        return _('Invalid scheme %r in X-Container-Sync-To, must be "http" '
-                 'or "https".') % p.scheme
+        return (
+            _('Invalid scheme %r in X-Container-Sync-To, must be "//", '
+              '"http", or "https".') % p.scheme,
+            None, None, None)
     if not p.path:
-        return _('Path required in X-Container-Sync-To')
+        return (_('Path required in X-Container-Sync-To'), None, None, None)
     if p.params or p.query or p.fragment:
-        return _('Params, queries, and fragments not allowed in '
-                 'X-Container-Sync-To')
+        return (
+            _('Params, queries, and fragments not allowed in '
+              'X-Container-Sync-To'),
+            None, None, None)
     if p.hostname not in allowed_sync_hosts:
-        return _('Invalid host %r in X-Container-Sync-To') % p.hostname
-    return None
+        return (
+            _('Invalid host %r in X-Container-Sync-To') % p.hostname,
+            None, None, None)
+    return (None, value, None, None)
 
 
 def affinity_key_function(affinity_str):
@@ -1796,8 +1916,7 @@ def affinity_key_function(affinity_str):
     priority values are what comes after the equals sign.
 
     If affinity_str is empty or all whitespace, then the resulting function
-    will not alter the ordering of the nodes. However, if affinity_str
-    contains an invalid value, then None is returned.
+    will not alter the ordering of the nodes.
 
     :param affinity_str: affinity config value, e.g. "r1z2=3"
                          or "r1=1, r2z1=2, r2z2=2"
@@ -2233,8 +2352,8 @@ class ThreadPool(object):
             try:
                 result = func(*args, **kwargs)
                 result_queue.put((ev, True, result))
-            except BaseException as err:
-                result_queue.put((ev, False, err))
+            except BaseException:
+                result_queue.put((ev, False, sys.exc_info()))
             finally:
                 work_queue.task_done()
                 os.write(self.wpipe, self.BYTE)
@@ -2264,7 +2383,7 @@ class ThreadPool(object):
                     if success:
                         ev.send(result)
                     else:
-                        ev.send_exception(result)
+                        ev.send_exception(*result)
                 finally:
                     queue.task_done()
 

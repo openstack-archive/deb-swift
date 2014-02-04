@@ -52,7 +52,7 @@ from swift.common.constraints import check_mount
 from swift.common.utils import mkdirs, normalize_timestamp, \
     storage_directory, hash_path, renamer, fallocate, fsync, \
     fdatasync, drop_buffer_cache, ThreadPool, lock_path, write_pickle, \
-    config_true_value, listdir, split_path, ismount
+    config_true_value, listdir, split_path, ismount, remove_file
 from swift.common.exceptions import DiskFileQuarantined, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
     DiskFileDeleted, DiskFileError, DiskFileNotOpen, PathNotDir, \
@@ -130,6 +130,53 @@ def quarantine_renamer(device_path, corrupted_file_path):
     return to_dir
 
 
+def get_ondisk_files(files, datadir):
+    """
+    Given a simple list of files names, determine the files to use.
+
+    :params files: simple set of files as a python list
+    :params datadir: directory name files are from for convenience
+    :returns: a tuple of data, meta and ts (tombstone) files, in one of
+              two states:
+
+    * ts_file is not None, data_file is None, meta_file is None
+
+      object is considered deleted
+
+    * data_file is not None, ts_file is None
+
+      object exists, and optionally has fast-POST metadata
+    """
+    files.sort(reverse=True)
+    data_file = meta_file = ts_file = None
+    for afile in files:
+        assert ts_file is None, "On-disk file search loop" \
+            " continuing after tombstone, %s, encountered" % ts_file
+        assert data_file is None, "On-disk file search loop" \
+            " continuing after data file, %s, encountered" % data_file
+        if afile.endswith('.ts'):
+            meta_file = None
+            ts_file = join(datadir, afile)
+            break
+        if afile.endswith('.meta') and not meta_file:
+            meta_file = join(datadir, afile)
+            # NOTE: this does not exit this loop, since a fast-POST
+            # operation just updates metadata, writing one or more
+            # .meta files, the data file will have an older timestamp,
+            # so we keep looking.
+            continue
+        if afile.endswith('.data'):
+            data_file = join(datadir, afile)
+            break
+    assert ((data_file is None and meta_file is None and ts_file is None)
+            or (ts_file is not None and data_file is None
+                and meta_file is None)
+            or (data_file is not None and ts_file is None)), \
+        "On-disk file search algorithm contract is broken: data_file:" \
+        " %s, meta_file: %s, ts_file: %s" % (data_file, meta_file, ts_file)
+    return data_file, meta_file, ts_file
+
+
 def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
     """
     List contents of a hash directory and clean up any old files.
@@ -138,29 +185,24 @@ def hash_cleanup_listdir(hsh_path, reclaim_age=ONE_WEEK):
     :param reclaim_age: age in seconds at which to remove tombstones
     :returns: list of files remaining in the directory, reverse sorted
     """
-    files = os.listdir(hsh_path)
+    files = listdir(hsh_path)
     if len(files) == 1:
         if files[0].endswith('.ts'):
             # remove tombstones older than reclaim_age
             ts = files[0].rsplit('.', 1)[0]
             if (time.time() - float(ts)) > reclaim_age:
-                os.unlink(join(hsh_path, files[0]))
+                remove_file(join(hsh_path, files[0]))
                 files.remove(files[0])
     elif files:
         files.sort(reverse=True)
-        meta = data = tomb = None
+        data_file, meta_file, ts_file = get_ondisk_files(files, '')
+        newest_file = data_file or ts_file
         for filename in list(files):
-            if not meta and filename.endswith('.meta'):
-                meta = filename
-            if not data and filename.endswith('.data'):
-                data = filename
-            if not tomb and filename.endswith('.ts'):
-                tomb = filename
-            if (filename < tomb or       # any file older than tomb
-                filename < data or       # any file older than data
-                (filename.endswith('.meta') and
-                 filename < meta)):      # old meta
-                os.unlink(join(hsh_path, filename))
+            if ((filename < newest_file)
+                    or (meta_file
+                        and filename.endswith('.meta')
+                        and filename < meta_file)):
+                remove_file(join(hsh_path, filename))
                 files.remove(filename)
     return files
 
@@ -196,7 +238,10 @@ def hash_suffix(path, reclaim_age):
                 continue
             raise
         if not files:
-            os.rmdir(hsh_path)
+            try:
+                os.rmdir(hsh_path)
+            except OSError:
+                pass
         for filename in files:
             md5.update(filename)
     try:
@@ -376,7 +421,7 @@ class DiskFileManager(object):
     """
     def __init__(self, conf, logger):
         self.logger = logger
-        self.devices = conf.get('devices', '/srv/node/')
+        self.devices = conf.get('devices', '/srv/node')
         self.disk_chunk_size = int(conf.get('disk_chunk_size', 65536))
         self.keep_cache_size = int(conf.get('keep_cache_size', 5242880))
         self.bytes_per_sync = int(conf.get('mb_per_sync', 512)) * 1024 * 1024
@@ -679,8 +724,6 @@ class DiskFileWriter(object):
         :param metadata: dictionary of metadata to be associated with the
                          object
         """
-        if not self._tmppath:
-            raise ValueError("tmppath is unusable.")
         timestamp = normalize_timestamp(metadata['X-Timestamp'])
         metadata['name'] = self._name
         target_path = join(self._datadir, timestamp + self._extension)
@@ -811,10 +854,7 @@ class DiskFileReader(object):
                     yield chunk
             finally:
                 self._suppress_file_closing = False
-                try:
-                    self.close()
-                except DiskFileQuarantined:
-                    pass
+                self.close()
 
     def _drop_cache(self, fd, offset, length):
         """Method for no-oping buffer cache drop method."""
@@ -824,6 +864,8 @@ class DiskFileReader(object):
     def _quarantine(self, msg):
         self._quarantined_dir = self._threadpool.run_in_thread(
             quarantine_renamer, self._device_path, self._data_file)
+        self._logger.warn("Quarantined object %s: %s" % (
+            self._data_file, msg))
         self._logger.increment('quarantines')
         self._quarantine_hook(msg)
 
@@ -1019,6 +1061,8 @@ class DiskFile(object):
         """
         self._quarantined_dir = self._threadpool.run_in_thread(
             quarantine_renamer, self._device_path, data_file)
+        self._logger.warn("Quarantined object %s: %s" % (
+            data_file, msg))
         self._logger.increment('quarantines')
         return DiskFileQuarantined(msg)
 
@@ -1043,9 +1087,8 @@ class DiskFile(object):
 
           object exists, and optionally has fast-POST metadata
         """
-        data_file = meta_file = ts_file = None
         try:
-            files = sorted(os.listdir(self._datadir), reverse=True)
+            files = os.listdir(self._datadir)
         except OSError as err:
             if err.errno == errno.ENOTDIR:
                 # If there's a file here instead of a directory, quarantine
@@ -1060,33 +1103,10 @@ class DiskFile(object):
                 raise DiskFileError(
                     "Error listing directory %s: %s" % (self._datadir, err))
             # The data directory does not exist, so the object cannot exist.
+            fileset = (None, None, None)
         else:
-            for afile in files:
-                assert ts_file is None, "On-disk file search loop" \
-                    " continuing after tombstone, %s, encountered" % ts_file
-                assert data_file is None, "On-disk file search loop" \
-                    " continuing after data file, %s, encountered" % data_file
-                if afile.endswith('.ts'):
-                    meta_file = None
-                    ts_file = join(self._datadir, afile)
-                    break
-                if afile.endswith('.meta') and not meta_file:
-                    meta_file = join(self._datadir, afile)
-                    # NOTE: this does not exit this loop, since a fast-POST
-                    # operation just updates metadata, writing one or more
-                    # .meta files, the data file will have an older timestamp,
-                    # so we keep looking.
-                    continue
-                if afile.endswith('.data'):
-                    data_file = join(self._datadir, afile)
-                    break
-        assert ((data_file is None and meta_file is None and ts_file is None)
-                or (ts_file is not None and data_file is None
-                    and meta_file is None)
-                or (data_file is not None and ts_file is None)), \
-            "On-disk file search algorithm contract is broken: data_file:" \
-            " %s, meta_file: %s, ts_file: %s" % (data_file, meta_file, ts_file)
-        return data_file, meta_file, ts_file
+            fileset = get_ondisk_files(files, self._datadir)
+        return fileset
 
     def _construct_exception_from_ts_file(self, ts_file):
         """

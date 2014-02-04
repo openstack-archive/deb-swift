@@ -33,6 +33,7 @@ from textwrap import dedent
 import tempfile
 import threading
 import time
+import traceback
 import unittest
 import fcntl
 import shutil
@@ -51,6 +52,7 @@ from swift.common.exceptions import (Timeout, MessageTimeout,
                                      ConnectionTimeout, LockTimeout,
                                      ReplicationLockTimeout)
 from swift.common import utils
+from swift.common.container_sync_realms import ContainerSyncRealms
 from swift.common.swob import Response
 from test.unit import FakeLogger
 
@@ -205,6 +207,46 @@ class TestUtils(unittest.TestCase):
                           "1253327593.00000")
         self.assertEquals(utils.normalize_timestamp(1253327593),
                           "1253327593.00000")
+        self.assertRaises(ValueError, utils.normalize_timestamp, '')
+        self.assertRaises(ValueError, utils.normalize_timestamp, 'abc')
+
+    def test_normalize_delete_at_timestamp(self):
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp(1253327593),
+            '1253327593')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp(1253327593.67890),
+            '1253327593')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp('1253327593'),
+            '1253327593')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp('1253327593.67890'),
+            '1253327593')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp(-1253327593),
+            '0000000000')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp(-1253327593.67890),
+            '0000000000')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp('-1253327593'),
+            '0000000000')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp('-1253327593.67890'),
+            '0000000000')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp(71253327593),
+            '9999999999')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp(71253327593.67890),
+            '9999999999')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp('71253327593'),
+            '9999999999')
+        self.assertEquals(
+            utils.normalize_delete_at_timestamp('71253327593.67890'),
+            '9999999999')
         self.assertRaises(ValueError, utils.normalize_timestamp, '')
         self.assertRaises(ValueError, utils.normalize_timestamp, 'abc')
 
@@ -1183,25 +1225,108 @@ log_name = %(yarr)s'''
                           '1024Yi')
 
     def test_validate_sync_to(self):
-        for goodurl in ('http://1.1.1.1/v1/a/c/o',
-                        'http://1.1.1.1:8080/a/c/o',
-                        'http://2.2.2.2/a/c/o',
-                        'https://1.1.1.1/v1/a/c/o',
-                        ''):
-            self.assertEquals(utils.validate_sync_to(goodurl,
-                                                     ['1.1.1.1', '2.2.2.2']),
-                              None)
-        for badurl in ('http://1.1.1.1',
-                       'httpq://1.1.1.1/v1/a/c/o',
-                       'http://1.1.1.1/v1/a/c/o?query',
-                       'http://1.1.1.1/v1/a/c/o#frag',
-                       'http://1.1.1.1/v1/a/c/o?query#frag',
-                       'http://1.1.1.1/v1/a/c/o?query=param',
-                       'http://1.1.1.1/v1/a/c/o?query=param#frag',
-                       'http://1.1.1.2/v1/a/c/o'):
-            self.assertNotEquals(
-                utils.validate_sync_to(badurl, ['1.1.1.1', '2.2.2.2']),
-                None)
+        fname = 'container-sync-realms.conf'
+        fcontents = '''
+[US]
+key = 9ff3b71c849749dbaec4ccdd3cbab62b
+cluster_dfw1 = http://dfw1.host/v1/
+'''
+        with temptree([fname], [fcontents]) as tempdir:
+            logger = FakeLogger()
+            fpath = os.path.join(tempdir, fname)
+            csr = ContainerSyncRealms(fpath, logger)
+            for realms_conf in (None, csr):
+                for goodurl, result in (
+                        ('http://1.1.1.1/v1/a/c',
+                         (None, 'http://1.1.1.1/v1/a/c', None, None)),
+                        ('http://1.1.1.1:8080/a/c',
+                         (None, 'http://1.1.1.1:8080/a/c', None, None)),
+                        ('http://2.2.2.2/a/c',
+                         (None, 'http://2.2.2.2/a/c', None, None)),
+                        ('https://1.1.1.1/v1/a/c',
+                         (None, 'https://1.1.1.1/v1/a/c', None, None)),
+                        ('//US/DFW1/a/c',
+                         (None, 'http://dfw1.host/v1/a/c', 'US',
+                          '9ff3b71c849749dbaec4ccdd3cbab62b')),
+                        ('//us/DFW1/a/c',
+                         (None, 'http://dfw1.host/v1/a/c', 'US',
+                          '9ff3b71c849749dbaec4ccdd3cbab62b')),
+                        ('//us/dfw1/a/c',
+                         (None, 'http://dfw1.host/v1/a/c', 'US',
+                          '9ff3b71c849749dbaec4ccdd3cbab62b')),
+                        ('//',
+                         (None, None, None, None)),
+                        ('',
+                         (None, None, None, None))):
+                    if goodurl.startswith('//') and not realms_conf:
+                        self.assertEquals(
+                            utils.validate_sync_to(
+                                goodurl, ['1.1.1.1', '2.2.2.2'], realms_conf),
+                            (None, None, None, None))
+                    else:
+                        self.assertEquals(
+                            utils.validate_sync_to(
+                                goodurl, ['1.1.1.1', '2.2.2.2'], realms_conf),
+                            result)
+                for badurl, result in (
+                        ('http://1.1.1.1',
+                         ('Path required in X-Container-Sync-To', None, None,
+                          None)),
+                        ('httpq://1.1.1.1/v1/a/c',
+                         ('Invalid scheme \'httpq\' in X-Container-Sync-To, '
+                          'must be "//", "http", or "https".', None, None,
+                          None)),
+                        ('http://1.1.1.1/v1/a/c?query',
+                         ('Params, queries, and fragments not allowed in '
+                          'X-Container-Sync-To', None, None, None)),
+                        ('http://1.1.1.1/v1/a/c#frag',
+                         ('Params, queries, and fragments not allowed in '
+                          'X-Container-Sync-To', None, None, None)),
+                        ('http://1.1.1.1/v1/a/c?query#frag',
+                         ('Params, queries, and fragments not allowed in '
+                          'X-Container-Sync-To', None, None, None)),
+                        ('http://1.1.1.1/v1/a/c?query=param',
+                         ('Params, queries, and fragments not allowed in '
+                          'X-Container-Sync-To', None, None, None)),
+                        ('http://1.1.1.1/v1/a/c?query=param#frag',
+                         ('Params, queries, and fragments not allowed in '
+                          'X-Container-Sync-To', None, None, None)),
+                        ('http://1.1.1.2/v1/a/c',
+                         ("Invalid host '1.1.1.2' in X-Container-Sync-To",
+                          None, None, None)),
+                        ('//us/invalid/a/c',
+                         ("No cluster endpoint for 'us' 'invalid'", None,
+                          None, None)),
+                        ('//invalid/dfw1/a/c',
+                         ("No realm key for 'invalid'", None, None, None)),
+                        ('//us/invalid1/a/',
+                         ("Invalid X-Container-Sync-To format "
+                          "'//us/invalid1/a/'", None, None, None)),
+                        ('//us/invalid1/a',
+                         ("Invalid X-Container-Sync-To format "
+                          "'//us/invalid1/a'", None, None, None)),
+                        ('//us/invalid1/',
+                         ("Invalid X-Container-Sync-To format "
+                          "'//us/invalid1/'", None, None, None)),
+                        ('//us/invalid1',
+                         ("Invalid X-Container-Sync-To format "
+                          "'//us/invalid1'", None, None, None)),
+                        ('//us/',
+                         ("Invalid X-Container-Sync-To format "
+                          "'//us/'", None, None, None)),
+                        ('//us',
+                         ("Invalid X-Container-Sync-To format "
+                          "'//us'", None, None, None))):
+                    if badurl.startswith('//') and not realms_conf:
+                        self.assertEquals(
+                            utils.validate_sync_to(
+                                badurl, ['1.1.1.1', '2.2.2.2'], realms_conf),
+                            (None, None, None, None))
+                    else:
+                        self.assertEquals(
+                            utils.validate_sync_to(
+                                badurl, ['1.1.1.1', '2.2.2.2'], realms_conf),
+                            result)
 
     def test_TRUE_VALUES(self):
         for v in utils.TRUE_VALUES:
@@ -2198,6 +2323,36 @@ class TestAffinityLocalityPredicate(unittest.TestCase):
                           utils.affinity_locality_predicate, 'r1z1=1')
 
 
+class TestRateLimitedIterator(unittest.TestCase):
+    def test_rate_limiting(self):
+        limited_iterator = utils.RateLimitedIterator(xrange(9999), 100)
+        got = []
+        started_at = time.time()
+        try:
+            while time.time() - started_at < 0.1:
+                got.append(limited_iterator.next())
+        except StopIteration:
+            pass
+        # it's 11, not 10, because ratelimiting doesn't apply to the very
+        # first element.
+        #
+        # Ideally this'd be == 11, but that might fail on slow machines, and
+        # the last thing we need is another flaky test.
+        self.assertTrue(len(got) <= 11)
+
+    def test_limit_after(self):
+        limited_iterator = utils.RateLimitedIterator(xrange(9999), 100,
+                                                     limit_after=5)
+        got = []
+        started_at = time.time()
+        try:
+            while time.time() - started_at < 0.1:
+                got.append(limited_iterator.next())
+        except StopIteration:
+            pass
+        self.assertTrue(len(got) <= 16)
+
+
 class TestGreenthreadSafeIterator(unittest.TestCase):
 
     def increment(self, iterable):
@@ -2578,13 +2733,8 @@ class TestThreadpool(unittest.TestCase):
         result = tp.force_run_in_thread(self._capture_args, 1, 2, bert='ernie')
         self.assertEquals(result, {'args': (1, 2),
                                    'kwargs': {'bert': 'ernie'}})
-
-        caught = False
-        try:
-            tp.force_run_in_thread(self._raise_valueerror)
-        except ValueError:
-            caught = True
-        self.assertTrue(caught)
+        self.assertRaises(ValueError, tp.force_run_in_thread,
+                          self._raise_valueerror)
 
     def test_run_in_thread_without_threads(self):
         # with zero threads, run_in_thread doesn't actually do so
@@ -2597,13 +2747,8 @@ class TestThreadpool(unittest.TestCase):
         result = tp.run_in_thread(self._capture_args, 1, 2, bert='ernie')
         self.assertEquals(result, {'args': (1, 2),
                                    'kwargs': {'bert': 'ernie'}})
-
-        caught = False
-        try:
-            tp.run_in_thread(self._raise_valueerror)
-        except ValueError:
-            caught = True
-        self.assertTrue(caught)
+        self.assertRaises(ValueError, tp.run_in_thread,
+                          self._raise_valueerror)
 
     def test_force_run_in_thread_without_threads(self):
         # with zero threads, force_run_in_thread uses eventlet.tpool
@@ -2616,12 +2761,36 @@ class TestThreadpool(unittest.TestCase):
         result = tp.force_run_in_thread(self._capture_args, 1, 2, bert='ernie')
         self.assertEquals(result, {'args': (1, 2),
                                    'kwargs': {'bert': 'ernie'}})
-        caught = False
+        self.assertRaises(ValueError, tp.force_run_in_thread,
+                          self._raise_valueerror)
+
+    def test_preserving_stack_trace_from_thread(self):
+        def gamma():
+            return 1 / 0  # ZeroDivisionError
+
+        def beta():
+            return gamma()
+
+        def alpha():
+            return beta()
+
+        tp = utils.ThreadPool(1)
         try:
-            tp.force_run_in_thread(self._raise_valueerror)
-        except ValueError:
-            caught = True
-        self.assertTrue(caught)
+            tp.run_in_thread(alpha)
+        except ZeroDivisionError:
+            # NB: format is (filename, line number, function name, text)
+            tb_func = [elem[2] for elem
+                       in traceback.extract_tb(sys.exc_traceback)]
+        else:
+            self.fail("Expected ZeroDivisionError")
+
+        self.assertEqual(tb_func[-1], "gamma")
+        self.assertEqual(tb_func[-2], "beta")
+        self.assertEqual(tb_func[-3], "alpha")
+        # omit the middle; what's important is that the start and end are
+        # included, not the exact names of helper methods
+        self.assertEqual(tb_func[1], "run_in_thread")
+        self.assertEqual(tb_func[0], "test_preserving_stack_trace_from_thread")
 
 
 class TestAuditLocationGenerator(unittest.TestCase):

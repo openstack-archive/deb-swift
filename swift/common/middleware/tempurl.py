@@ -80,6 +80,15 @@ above example::
     https://swift-cluster.example.com/v1/AUTH_account/container/object?
     temp_url_sig=da39a3ee5e6b4b0d3255bfef95601890afd80709&
     temp_url_expires=1323479485&filename=My+Test+File.pdf
+
+If you do not want the object to be downloaded, you can cause
+"Content-Disposition: inline" to be set on the response by adding the "inline"
+parameter to the query string, like so::
+
+    https://swift-cluster.example.com/v1/AUTH_account/container/object?
+    temp_url_sig=da39a3ee5e6b4b0d3255bfef95601890afd80709&
+    temp_url_expires=1323479485&inline
+
 """
 
 __all__ = ['TempURL', 'filter_factory',
@@ -97,7 +106,7 @@ from urlparse import parse_qs
 from swift.proxy.controllers.base import get_account_info
 from swift.common.swob import HeaderKeyDict, HTTPUnauthorized
 from swift.common.utils import split_path, get_valid_utf8_str, \
-    register_swift_info, get_hmac
+    register_swift_info, get_hmac, streq_const_time
 
 
 #: Default headers to remove from incoming requests. Simply a whitespace
@@ -183,14 +192,14 @@ class TempURL(object):
     :param conf: The configuration dict for the middleware.
     """
 
-    def __init__(self, app, conf):
+    def __init__(self, app, conf, methods=('GET', 'HEAD', 'PUT')):
         #: The next WSGI application/filter in the paste.deploy pipeline.
         self.app = app
         #: The filter configuration dict.
         self.conf = conf
 
         #: The methods allowed with Temp URLs.
-        self.methods = conf.get('methods', 'GET HEAD PUT').split()
+        self.methods = methods
 
         headers = DEFAULT_INCOMING_REMOVE_HEADERS
         if 'incoming_remove_headers' in conf:
@@ -275,7 +284,13 @@ class TempURL(object):
                                 request_method='PUT'))
         else:
             hmac_vals = self._get_hmacs(env, temp_url_expires, keys)
-        if temp_url_sig not in hmac_vals:
+
+        # While it's true that any() will short-circuit, this doesn't affect
+        # the timing-attack resistance since the only way this will
+        # short-circuit is when a valid signature is passed in.
+        is_valid_hmac = any(streq_const_time(temp_url_sig, hmac)
+                            for hmac in hmac_vals)
+        if not is_valid_hmac:
             return self._invalid(env, start_response)
         self._clean_incoming_headers(env)
         env['swift.authorize'] = lambda req: None
@@ -474,5 +489,8 @@ def filter_factory(global_conf, **local_conf):
     """Returns the WSGI filter for use with paste.deploy."""
     conf = global_conf.copy()
     conf.update(local_conf)
-    register_swift_info('tempurl')
-    return lambda app: TempURL(app, conf)
+
+    methods = conf.get('methods', 'GET HEAD PUT').split()
+    register_swift_info('tempurl', methods=methods)
+
+    return lambda app: TempURL(app, conf, methods=methods)
