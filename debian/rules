@@ -24,7 +24,7 @@ override_dh_sphinxdoc:
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
 	echo "[unit_test]\nfake_syslog = True" > $(CURDIR)/swift-test.conf
-	SWIFT_TEST_CONFIG_FILE=$(CURDIR)/swift-test.conf nosetests test/unit || true
+	SWIFT_TEST_CONFIG_FILE=$(CURDIR)/swift-test.conf PYTHONPATH=. nosetests test/unit || true
 	rm -f $(CURDIR)/swift-test.conf
 endif
 
