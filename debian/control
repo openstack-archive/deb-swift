@@ -9,7 +9,6 @@ Uploaders: Julien Danjou <acid@debian.org>,
 Build-Depends: debhelper (>= 9),
                openstack-pkg-tools,
                python-all (>=2.6.6-3~),
-               python-d2to1,
                python-pbr,
                python-setuptools
 Build-Depends-Indep: python-coverage,
