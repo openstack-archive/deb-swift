@@ -33,6 +33,7 @@
 # key_file = /etc/swift/proxy.key
 #
 # expiring_objects_container_divisor = 86400
+# expiring_objects_account_name = expiring_objects
 #
 # You can specify default log routing here if you want:
 # log_name = swift
@@ -69,7 +70,7 @@
 # eventlet_debug = false
 
 [pipeline:main]
-pipeline = catch_errors gatekeeper healthcheck proxy-logging cache container_sync bulk slo ratelimit tempauth container-quotas account-quotas proxy-logging proxy-server
+pipeline = catch_errors gatekeeper healthcheck proxy-logging cache container_sync bulk slo dlo ratelimit tempauth container-quotas account-quotas proxy-logging proxy-server
 
 [app:proxy-server]
 use = egg:swift#proxy
@@ -84,7 +85,20 @@ use = egg:swift#proxy
 # recheck_container_existence = 60
 # object_chunk_size = 8192
 # client_chunk_size = 8192
+#
+# How long the proxy server will wait on responses from the a/c/o servers.
 # node_timeout = 10
+#
+# How long the proxy server will wait for an initial response and to read a
+# chunk of data from the object servers while serving GET / HEAD requests.
+# Timeouts from these requests can be recovered from so setting this to
+# something lower than node_timeout would provide quicker error recovery
+# while allowing for a longer timeout for non-recoverable requests (PUTs).
+# Defaults to node_timeout, should be overriden if node_timeout is set to a
+# high number to prevent client timeouts from firing before the proxy server
+# has a chance to retry.
+# recoverable_node_timeout = node_timeout
+#
 # conn_timeout = 0.5
 #
 # How long to wait for requests to finish after a quorum has been established.
@@ -129,14 +143,6 @@ use = egg:swift#proxy
 #
 # Depth of the proxy put queue.
 # put_queue_depth = 10
-#
-# Start rate-limiting object segment serving after the Nth segment of a
-# segmented object.
-# rate_limit_after_segment = 10
-#
-# Once segment rate-limiting kicks in for an object, limit segments served
-# to N per second.
-# rate_limit_segments_per_sec = 1
 #
 # Storage nodes can be chosen at random (shuffle), by using timing
 # measurements (timing), or by using an explicit match (affinity).
@@ -191,7 +197,7 @@ use = egg:swift#proxy
 # These are the headers whose values will only be shown to swift_owners. The
 # exact definition of a swift_owner is up to the auth system in use, but
 # usually indicates administrative responsibilities.
-# swift_owner_headers = x-container-read, x-container-write, x-container-sync-key, x-container-sync-to, x-account-meta-temp-url-key, x-account-meta-temp-url-key-2
+# swift_owner_headers = x-container-read, x-container-write, x-container-sync-key, x-container-sync-to, x-account-meta-temp-url-key, x-account-meta-temp-url-key-2, x-account-access-control
 
 
 [filter:tempauth]
@@ -390,7 +396,10 @@ use = egg:swift#cname_lookup
 # set log_headers = false
 # set log_address = /dev/log
 #
+# Specify the storage_domain that match your cloud, multiple domains
+# can be specified separated by a comma
 # storage_domain = example.com
+#
 # lookup_depth = 1
 
 # Note: Put staticweb just after your auth filter(s) in the pipeline
@@ -460,6 +469,11 @@ use = egg:swift#proxy_logging
 # access_log_statsd_metric_prefix =
 # access_log_headers = false
 #
+# If access_log_headers is True and access_log_headers_only is set only
+# these headers are logged. Multiple headers can be defined as comma separated
+# list like this: access_log_headers_only = Host, X-Object-Meta-Mtime
+# access_log_headers_only =
+#
 # By default, the X-Auth-Token is logged. To obscure the value,
 # set reveal_sensitive_prefix to the number of characters to log.
 # For example, if set to 12, only the first 12 characters of the
@@ -520,6 +534,22 @@ use = egg:swift#slo
 # Once segment rate-limiting kicks in for an object, limit segments served
 # to N per second. 0 means no rate-limiting.
 # rate_limit_segments_per_sec = 0
+#
+# Time limit on GET requests (seconds)
+# max_get_time = 86400
+
+# Note: Put before both ratelimit and auth in the pipeline, but after
+# gatekeeper, catch_errors, and proxy_logging (the first instance).
+# If you don't put it in the pipeline, it will be inserted for you.
+[filter:dlo]
+use = egg:swift#dlo
+# Start rate-limiting DLO segment serving after the Nth segment of a
+# segmented object.
+# rate_limit_after_segment = 10
+#
+# Once segment rate-limiting kicks in for an object, limit segments served
+# to N per second. 0 means no rate-limiting.
+# rate_limit_segments_per_sec = 1
 #
 # Time limit on GET requests (seconds)
 # max_get_time = 86400

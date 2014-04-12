@@ -118,7 +118,7 @@ def timeout(seconds, method, *args, **kwargs):
     return False
 
 
-class Utils:
+class Utils(object):
     @classmethod
     def create_ascii_name(cls, length=None):
         return uuid.uuid4().hex
@@ -170,7 +170,7 @@ class Base2(object):
         Utils.create_name = Utils.create_ascii_name
 
 
-class TestAccountEnv:
+class TestAccountEnv(object):
     @classmethod
     def setUp(cls):
         cls.conn = Connection(config)
@@ -357,7 +357,7 @@ class TestAccountUTF8(Base2, TestAccount):
     set_up = False
 
 
-class TestAccountNoContainersEnv:
+class TestAccountNoContainersEnv(object):
     @classmethod
     def setUp(cls):
         cls.conn = Connection(config)
@@ -386,7 +386,7 @@ class TestAccountNoContainersUTF8(Base2, TestAccountNoContainers):
     set_up = False
 
 
-class TestContainerEnv:
+class TestContainerEnv(object):
     @classmethod
     def setUp(cls):
         cls.conn = Connection(config)
@@ -677,7 +677,7 @@ class TestContainerUTF8(Base2, TestContainer):
     set_up = False
 
 
-class TestContainerPathsEnv:
+class TestContainerPathsEnv(object):
     @classmethod
     def setUp(cls):
         cls.conn = Connection(config)
@@ -856,7 +856,7 @@ class TestContainerPaths(Base):
                        ['dir1/subdir with spaces/file B'])
 
 
-class TestFileEnv:
+class TestFileEnv(object):
     @classmethod
     def setUp(cls):
         cls.conn = Connection(config)
@@ -1645,12 +1645,56 @@ class TestDlo(Base):
             file_contents,
             "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffff")
 
+    def test_dlo_if_match_get(self):
+        manifest = self.env.container.file("man1")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.read,
+                          hdrs={'If-Match': 'not-%s' % etag})
+        self.assert_status(412)
+
+        manifest.read(hdrs={'If-Match': etag})
+        self.assert_status(200)
+
+    def test_dlo_if_none_match_get(self):
+        manifest = self.env.container.file("man1")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.read,
+                          hdrs={'If-None-Match': etag})
+        self.assert_status(304)
+
+        manifest.read(hdrs={'If-None-Match': "not-%s" % etag})
+        self.assert_status(200)
+
+    def test_dlo_if_match_head(self):
+        manifest = self.env.container.file("man1")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.info,
+                          hdrs={'If-Match': 'not-%s' % etag})
+        self.assert_status(412)
+
+        manifest.info(hdrs={'If-Match': etag})
+        self.assert_status(200)
+
+    def test_dlo_if_none_match_head(self):
+        manifest = self.env.container.file("man1")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.info,
+                          hdrs={'If-None-Match': etag})
+        self.assert_status(304)
+
+        manifest.info(hdrs={'If-None-Match': "not-%s" % etag})
+        self.assert_status(200)
+
 
 class TestDloUTF8(Base2, TestDlo):
     set_up = False
 
 
-class TestFileComparisonEnv:
+class TestFileComparisonEnv(object):
     @classmethod
     def setUp(cls):
         cls.conn = Connection(config)
@@ -1996,8 +2040,131 @@ class TestSlo(Base):
         self.assertEqual('application/json; charset=utf-8',
                          got_info['content_type'])
 
+    def test_slo_if_match_get(self):
+        manifest = self.env.container.file("manifest-abcde")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.read,
+                          hdrs={'If-Match': 'not-%s' % etag})
+        self.assert_status(412)
+
+        manifest.read(hdrs={'If-Match': etag})
+        self.assert_status(200)
+
+    def test_slo_if_none_match_get(self):
+        manifest = self.env.container.file("manifest-abcde")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.read,
+                          hdrs={'If-None-Match': etag})
+        self.assert_status(304)
+
+        manifest.read(hdrs={'If-None-Match': "not-%s" % etag})
+        self.assert_status(200)
+
+    def test_slo_if_match_head(self):
+        manifest = self.env.container.file("manifest-abcde")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.info,
+                          hdrs={'If-Match': 'not-%s' % etag})
+        self.assert_status(412)
+
+        manifest.info(hdrs={'If-Match': etag})
+        self.assert_status(200)
+
+    def test_slo_if_none_match_head(self):
+        manifest = self.env.container.file("manifest-abcde")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.info,
+                          hdrs={'If-None-Match': etag})
+        self.assert_status(304)
+
+        manifest.info(hdrs={'If-None-Match': "not-%s" % etag})
+        self.assert_status(200)
+
 
 class TestSloUTF8(Base2, TestSlo):
+    set_up = False
+
+
+class TestObjectVersioningEnv(object):
+    versioning_enabled = None  # tri-state: None initially, then True/False
+
+    @classmethod
+    def setUp(cls):
+        cls.conn = Connection(config)
+        cls.conn.authenticate()
+
+        cls.account = Account(cls.conn, config.get('account',
+                                                   config['username']))
+
+        # avoid getting a prefix that stops halfway through an encoded
+        # character
+        prefix = Utils.create_name().decode("utf-8")[:10].encode("utf-8")
+
+        cls.versions_container = cls.account.container(prefix + "-versions")
+        if not cls.versions_container.create():
+            raise ResponseError(cls.conn.response)
+
+        cls.container = cls.account.container(prefix + "-objs")
+        if not cls.container.create(
+                hdrs={'X-Versions-Location': cls.versions_container.name}):
+            raise ResponseError(cls.conn.response)
+
+        container_info = cls.container.info()
+        # if versioning is off, then X-Versions-Location won't persist
+        cls.versioning_enabled = 'versions' in container_info
+
+
+class TestObjectVersioning(Base):
+    env = TestObjectVersioningEnv
+    set_up = False
+
+    def setUp(self):
+        super(TestObjectVersioning, self).setUp()
+        if self.env.versioning_enabled is False:
+            raise SkipTest("Object versioning not enabled")
+        elif self.env.versioning_enabled is not True:
+            # just some sanity checking
+            raise Exception(
+                "Expected versioning_enabled to be True/False, got %r" %
+                (self.env.versioning_enabled,))
+
+    def test_overwriting(self):
+        container = self.env.container
+        versions_container = self.env.versions_container
+        obj_name = Utils.create_name()
+
+        versioned_obj = container.file(obj_name)
+        versioned_obj.write("aaaaa")
+
+        self.assertEqual(0, versions_container.info()['object_count'])
+
+        versioned_obj.write("bbbbb")
+
+        # the old version got saved off
+        self.assertEqual(1, versions_container.info()['object_count'])
+        versioned_obj_name = versions_container.files()[0]
+        self.assertEqual(
+            "aaaaa", versions_container.file(versioned_obj_name).read())
+
+        # if we overwrite it again, there are two versions
+        versioned_obj.write("ccccc")
+        self.assertEqual(2, versions_container.info()['object_count'])
+
+        # as we delete things, the old contents return
+        self.assertEqual("ccccc", versioned_obj.read())
+        versioned_obj.delete()
+        self.assertEqual("bbbbb", versioned_obj.read())
+        versioned_obj.delete()
+        self.assertEqual("aaaaa", versioned_obj.read())
+        versioned_obj.delete()
+        self.assertRaises(ResponseError, versioned_obj.read)
+
+
+class TestObjectVersioningUTF8(Base2, TestObjectVersioning):
     set_up = False
 
 

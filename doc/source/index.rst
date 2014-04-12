@@ -66,6 +66,7 @@ Developer Documentation
     development_guidelines
     development_saio
     development_auth
+    development_middleware
     development_ondisk_backends
 
 Administrator Documentation
@@ -79,6 +80,7 @@ Administrator Documentation
     apache_deployment_guide
     admin_guide
     replication_network
+    logs
 
 Source Documentation
 ====================
@@ -93,6 +95,7 @@ Source Documentation
     db
     object
     misc
+    middleware
 
 
 Indices and tables

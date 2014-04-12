@@ -92,7 +92,7 @@ class ObjectController(object):
                 self.allowed_headers.add(header)
         self.expiring_objects_account = \
             (conf.get('auto_create_account_prefix') or '.') + \
-            'expiring_objects'
+            (conf.get('expiring_objects_account_name') or 'expiring_objects')
         self.expiring_objects_container_divisor = \
             int(conf.get('expiring_objects_container_divisor') or 86400)
         # Initialization was successful, so now apply the network chunk size
@@ -254,6 +254,9 @@ class ObjectController(object):
         :param request: the original request driving the update
         :param objdevice: device name that the object is in
         """
+        if config_true_value(
+                request.headers.get('x-backend-replication', 'f')):
+            return
         delete_at = normalize_delete_at_timestamp(delete_at)
         updates = [(None, None)]
 
@@ -468,14 +471,6 @@ class ObjectController(object):
             with disk_file.open():
                 metadata = disk_file.get_metadata()
                 obj_size = int(metadata['Content-Length'])
-                if request.headers.get('if-match') not in (None, '*') and \
-                        metadata['ETag'] not in request.if_match:
-                    return HTTPPreconditionFailed(request=request)
-                if request.headers.get('if-none-match') is not None:
-                    if metadata['ETag'] in request.if_none_match:
-                        resp = HTTPNotModified(request=request)
-                        resp.etag = metadata['ETag']
-                        return resp
                 file_x_ts = metadata['X-Timestamp']
                 file_x_ts_flt = float(file_x_ts)
                 try:
@@ -515,13 +510,8 @@ class ObjectController(object):
                     pass
                 response.headers['X-Timestamp'] = file_x_ts
                 resp = request.get_response(response)
-        except DiskFileNotExist:
-            if request.headers.get('if-match') == '*':
-                resp = HTTPPreconditionFailed(request=request)
-            else:
-                resp = HTTPNotFound(request=request)
-        except DiskFileQuarantined:
-            resp = HTTPNotFound(request=request)
+        except (DiskFileNotExist, DiskFileQuarantined):
+            resp = HTTPNotFound(request=request, conditional_response=True)
         return resp
 
     @public
@@ -538,7 +528,7 @@ class ObjectController(object):
         try:
             metadata = disk_file.read_metadata()
         except (DiskFileNotExist, DiskFileQuarantined):
-            return HTTPNotFound(request=request)
+            return HTTPNotFound(request=request, conditional_response=True)
         response = Response(request=request, conditional_response=True)
         response.headers['Content-Type'] = metadata.get(
             'Content-Type', 'application/octet-stream')

@@ -24,6 +24,7 @@ The logging format implemented below is as follows:
 client_ip remote_addr datetime request_method request_path protocol
     status_int referer user_agent auth_token bytes_recvd bytes_sent
     client_etag transaction_id headers request_time source log_info
+    request_start_time request_end_time
 
 These values are space-separated, and each is url-encoded, so that they can
 be separated with a simple .split()
@@ -76,7 +77,7 @@ from urllib import quote, unquote
 from swift.common.swob import Request
 from swift.common.utils import (get_logger, get_remote_client,
                                 get_valid_utf8_str, config_true_value,
-                                InputProxy)
+                                InputProxy, list_from_csv)
 from swift.common.constraints import MAX_HEADER_SIZE
 
 QUOTE_SAFE = '/:'
@@ -92,6 +93,10 @@ class ProxyLoggingMiddleware(object):
         self.log_hdrs = config_true_value(conf.get(
             'access_log_headers',
             conf.get('log_headers', 'no')))
+        log_hdrs_only = list_from_csv(conf.get(
+            'access_log_headers_only', ''))
+        self.log_hdrs_only = [x.title() for x in log_hdrs_only]
+
         # The leading access_* check is in case someone assumes that
         # log_statsd_valid_http_methods behaves like the other log_statsd_*
         # settings.
@@ -150,8 +155,14 @@ class ProxyLoggingMiddleware(object):
             the_request = the_request + '?' + req.query_string
         logged_headers = None
         if self.log_hdrs:
-            logged_headers = '\n'.join('%s: %s' % (k, v)
-                                       for k, v in req.headers.items())
+            if self.log_hdrs_only:
+                logged_headers = '\n'.join('%s: %s' % (k, v)
+                                           for k, v in req.headers.items()
+                                           if k in self.log_hdrs_only)
+            else:
+                logged_headers = '\n'.join('%s: %s' % (k, v)
+                                           for k, v in req.headers.items())
+
         method = self.method_from_req(req)
         end_gmtime_str = time.strftime('%d/%b/%Y/%H/%M/%S',
                                        time.gmtime(end_time))

@@ -21,6 +21,7 @@ import ctypes
 import errno
 import eventlet
 import eventlet.event
+import grp
 import logging
 import os
 import random
@@ -281,31 +282,30 @@ class TestUtils(unittest.TestCase):
             self.assertEquals([], list(utils.backward(f)))
 
     def test_mkdirs(self):
-        testroot = os.path.join(os.path.dirname(__file__), 'mkdirs')
+        testdir_base = mkdtemp()
+        testroot = os.path.join(testdir_base, 'mkdirs')
         try:
+            self.assert_(not os.path.exists(testroot))
+            utils.mkdirs(testroot)
+            self.assert_(os.path.exists(testroot))
+            utils.mkdirs(testroot)
+            self.assert_(os.path.exists(testroot))
+            rmtree(testroot, ignore_errors=1)
+
+            testdir = os.path.join(testroot, 'one/two/three')
+            self.assert_(not os.path.exists(testdir))
+            utils.mkdirs(testdir)
+            self.assert_(os.path.exists(testdir))
+            utils.mkdirs(testdir)
+            self.assert_(os.path.exists(testdir))
+            rmtree(testroot, ignore_errors=1)
+
+            open(testroot, 'wb').close()
+            self.assert_(not os.path.exists(testdir))
+            self.assertRaises(OSError, utils.mkdirs, testdir)
             os.unlink(testroot)
-        except Exception:
-            pass
-        rmtree(testroot, ignore_errors=1)
-        self.assert_(not os.path.exists(testroot))
-        utils.mkdirs(testroot)
-        self.assert_(os.path.exists(testroot))
-        utils.mkdirs(testroot)
-        self.assert_(os.path.exists(testroot))
-        rmtree(testroot, ignore_errors=1)
-
-        testdir = os.path.join(testroot, 'one/two/three')
-        self.assert_(not os.path.exists(testdir))
-        utils.mkdirs(testdir)
-        self.assert_(os.path.exists(testdir))
-        utils.mkdirs(testdir)
-        self.assert_(os.path.exists(testdir))
-        rmtree(testroot, ignore_errors=1)
-
-        open(testroot, 'wb').close()
-        self.assert_(not os.path.exists(testdir))
-        self.assertRaises(OSError, utils.mkdirs, testdir)
-        os.unlink(testroot)
+        finally:
+            rmtree(testdir_base)
 
     def test_split_path(self):
         # Test swift.common.utils.split_account_path
@@ -959,6 +959,10 @@ log_name = %(yarr)s'''
             self.assert_(utils.os.called_funcs[func])
         import pwd
         self.assertEquals(pwd.getpwnam(user)[5], utils.os.environ['HOME'])
+
+        groups = [g.gr_gid for g in grp.getgrall() if user in g.gr_mem]
+        groups.append(pwd.getpwnam(user).pw_gid)
+        self.assertEquals(set(groups), set(os.getgroups()))
 
         # reset; test same args, OSError trying to get session leader
         utils.os = MockOs(called_funcs=required_func_calls,
@@ -1645,7 +1649,20 @@ cluster_dfw1 = http://dfw1.host/v1/
         tmpdir = mkdtemp()
         try:
             with patch("os.lstat", _mock_os_lstat):
-                self.assertRaises(OSError, utils.ismount, tmpdir)
+                # Raises exception with _raw -- see next test.
+                utils.ismount(tmpdir)
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_ismount_raw_path_error(self):
+
+        def _mock_os_lstat(path):
+            raise OSError(13, "foo")
+
+        tmpdir = mkdtemp()
+        try:
+            with patch("os.lstat", _mock_os_lstat):
+                self.assertRaises(OSError, utils.ismount_raw, tmpdir)
         finally:
             shutil.rmtree(tmpdir)
 
@@ -1674,7 +1691,25 @@ cluster_dfw1 = http://dfw1.host/v1/
         tmpdir = mkdtemp()
         try:
             with patch("os.lstat", _mock_os_lstat):
-                self.assertRaises(OSError, utils.ismount, tmpdir)
+                # Raises exception with _raw -- see next test.
+                utils.ismount(tmpdir)
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_ismount_raw_parent_path_error(self):
+
+        _os_lstat = os.lstat
+
+        def _mock_os_lstat(path):
+            if path.endswith(".."):
+                raise OSError(13, "foo")
+            else:
+                return _os_lstat(path)
+
+        tmpdir = mkdtemp()
+        try:
+            with patch("os.lstat", _mock_os_lstat):
+                self.assertRaises(OSError, utils.ismount_raw, tmpdir)
         finally:
             shutil.rmtree(tmpdir)
 

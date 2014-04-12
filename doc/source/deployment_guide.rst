@@ -478,7 +478,7 @@ handoffs_first      false              If set to True, partitions that are
                                        extreme situations.
 handoff_delete      auto               By default handoff partitions will be
                                        removed when it has successfully
-                                       replicated to all the cannonical nodes.
+                                       replicated to all the canonical nodes.
                                        If set to an integer n, it will remove
                                        the partition if it is successfully
                                        replicated to n nodes.  The default
@@ -771,6 +771,8 @@ delay_reaping       0                Normally, the reaper begins deleting
                                      2592000 = 30 days, for example.
 ==================  ===============  =========================================
 
+.. _proxy-server-config:
+
 --------------------------
 Proxy Server Configuration
 --------------------------
@@ -828,6 +830,15 @@ log_custom_handlers           None             Comma separated list of functions
                                                handlers.
 eventlet_debug                false            If true, turn on debug logging
                                                for eventlet
+
+expose_info                   true             Enables exposing configuration
+                                               settings via HTTP GET /info.
+
+admin_key                                      Key to use for admin calls that
+                                               are HMAC signed.  Default
+                                               is empty, which will
+                                               disable admin calls to
+                                               /info.
 ============================  ===============  =============================
 
 [proxy-server]
@@ -864,6 +875,10 @@ memcache_max_connections      2                Max number of connections to
                                                worker
 node_timeout                  10               Request timeout to external
                                                services
+recoverable_node_timeout      node_timeout     Request timeout to external
+                                               services for requests that, on
+                                               failure, can be recovered
+                                               from. For example, object GET.
 client_timeout                60               Timeout to read one chunk
                                                from a client
 conn_timeout                  0.5              Connection timeout to

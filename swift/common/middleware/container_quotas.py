@@ -41,7 +41,7 @@ set:
 |                                             | container.                    |
 +---------------------------------------------+-------------------------------+
 """
-
+from swift.common.constraints import check_copy_from_header
 from swift.common.http import is_success
 from swift.common.swob import Response, HTTPBadRequest, wsgify
 from swift.common.utils import register_swift_info
@@ -79,9 +79,21 @@ class ContainerQuotaMiddleware(object):
                 return HTTPBadRequest(body='Invalid count quota.')
 
         # check user uploads against quotas
-        elif obj and req.method == 'PUT':
-            container_info = get_container_info(
-                req.environ, self.app, swift_source='CQ')
+        elif obj and req.method in ('PUT', 'COPY'):
+            container_info = None
+            if req.method == 'PUT':
+                container_info = get_container_info(
+                    req.environ, self.app, swift_source='CQ')
+            if req.method == 'COPY' and 'Destination' in req.headers:
+                dest = req.headers.get('Destination').lstrip('/')
+                path_info = req.environ['PATH_INFO']
+                req.environ['PATH_INFO'] = "/%s/%s/%s" % (
+                    version, account, dest)
+                try:
+                    container_info = get_container_info(
+                        req.environ, self.app, swift_source='CQ')
+                finally:
+                    req.environ['PATH_INFO'] = path_info
             if not container_info or not is_success(container_info['status']):
                 # this will hopefully 404 later
                 return self.app
@@ -90,10 +102,11 @@ class ContainerQuotaMiddleware(object):
                     'bytes' in container_info and \
                     container_info['meta']['quota-bytes'].isdigit():
                 content_length = (req.content_length or 0)
-                copy_from = req.headers.get('X-Copy-From')
-                if copy_from:
-                    path = '/%s/%s/%s' % (version, account,
-                                          copy_from.lstrip('/'))
+                if 'x-copy-from' in req.headers or req.method == 'COPY':
+                    if 'x-copy-from' in req.headers:
+                        container, obj = check_copy_from_header(req)
+                    path = '/%s/%s/%s/%s' % (version, account,
+                                             container, obj)
                     object_info = get_object_info(req.environ, self.app, path)
                     if not object_info or not object_info['length']:
                         content_length = 0

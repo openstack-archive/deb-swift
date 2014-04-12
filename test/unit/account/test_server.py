@@ -17,8 +17,10 @@ import errno
 import os
 import mock
 import unittest
+from tempfile import mkdtemp
 from shutil import rmtree
 from StringIO import StringIO
+from test.unit import FakeLogger
 
 import simplejson
 import xml.dom.minidom
@@ -33,15 +35,15 @@ class TestAccountController(unittest.TestCase):
     """Test swift.account.server.AccountController"""
     def setUp(self):
         """Set up for testing swift.account.server.AccountController"""
-        self.testdir = os.path.join(os.path.dirname(__file__),
-                                    'account_server')
+        self.testdir_base = mkdtemp()
+        self.testdir = os.path.join(self.testdir_base, 'account_server')
         self.controller = AccountController(
             {'devices': self.testdir, 'mount_check': 'false'})
 
     def tearDown(self):
         """Tear down for testing swift.account.server.AccountController"""
         try:
-            rmtree(self.testdir)
+            rmtree(self.testdir_base)
         except OSError as err:
             if err.errno != errno.ENOENT:
                 raise
@@ -1632,6 +1634,24 @@ class TestAccountController(unittest.TestCase):
             mock_method.replication = True
             response = self.controller.__call__(env, start_response)
             self.assertEqual(response, answer)
+
+    def test_GET_log_requests_true(self):
+        self.controller.logger = FakeLogger()
+        self.controller.log_requests = True
+
+        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.controller)
+        self.assertEqual(resp.status_int, 404)
+        self.assertTrue(self.controller.logger.log_dict['info'])
+
+    def test_GET_log_requests_false(self):
+        self.controller.logger = FakeLogger()
+        self.controller.log_requests = False
+        req = Request.blank('/sda1/p/a', environ={'REQUEST_METHOD': 'GET'})
+        resp = req.get_response(self.controller)
+        self.assertEqual(resp.status_int, 404)
+        self.assertFalse(self.controller.logger.log_dict['info'])
+
 
 if __name__ == '__main__':
     unittest.main()

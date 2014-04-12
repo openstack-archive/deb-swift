@@ -1,3 +1,5 @@
+.. _large-objects:
+
 ====================
 Large Object Support
 ====================
@@ -12,6 +14,8 @@ the concept of segmentation. Segments of the larger object are uploaded and a
 special manifest file is created that, when downloaded, sends all the segments
 concatenated as a single object. This also offers much greater upload speed
 with the possibility of parallel uploads of the segments.
+
+.. _dynamic-large-objects:
 
 ---------------------
 Dynamic Large Objects
@@ -99,6 +103,8 @@ Here's an example using ``curl`` with tiny 1-byte segments::
     # And now we can download the segments as a single object
     curl -H 'X-Auth-Token: <token>' \
         http://<storage_url>/container/myobject
+
+.. _static-large-objects:
 
 --------------------
 Static Large Objects

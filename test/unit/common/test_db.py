@@ -17,6 +17,7 @@
 
 import os
 import unittest
+from tempfile import mkdtemp
 from shutil import rmtree, copy
 from uuid import uuid4
 
@@ -30,7 +31,7 @@ import swift.common.db
 from swift.common.db import chexor, dict_factory, get_db_connection, \
     DatabaseBroker, DatabaseConnectionError, DatabaseAlreadyExists, \
     GreenDBConnection
-from swift.common.utils import normalize_timestamp
+from swift.common.utils import normalize_timestamp, mkdirs
 from swift.common.exceptions import LockTimeout
 
 
@@ -85,7 +86,7 @@ class TestChexor(unittest.TestCase):
 class TestGreenDBConnection(unittest.TestCase):
 
     def test_execute_when_locked(self):
-        # This test is dependant on the code under test calling execute and
+        # This test is dependent on the code under test calling execute and
         # commit as sqlite3.Cursor.execute in a subclass.
         class InterceptCursor(sqlite3.Cursor):
             pass
@@ -101,7 +102,7 @@ class TestGreenDBConnection(unittest.TestCase):
                                   InterceptCursor.execute.call_count))
 
     def text_commit_when_locked(self):
-        # This test is dependant on the code under test calling commit and
+        # This test is dependent on the code under test calling commit and
         # commit as sqlite3.Connection.commit in a subclass.
         class InterceptConnection(sqlite3.Connection):
             pass
@@ -128,7 +129,7 @@ class TestGetDBConnection(unittest.TestCase):
                           'invalid database path / name')
 
     def test_locked_db(self):
-        # This test is dependant on the code under test calling execute and
+        # This test is dependent on the code under test calling execute and
         # commit as sqlite3.Cursor.execute in a subclass.
         class InterceptCursor(sqlite3.Cursor):
             pass
@@ -149,9 +150,7 @@ class TestGetDBConnection(unittest.TestCase):
 class TestDatabaseBroker(unittest.TestCase):
 
     def setUp(self):
-        self.testdir = os.path.join(os.path.dirname(__file__), 'db')
-        rmtree(self.testdir, ignore_errors=1)
-        os.mkdir(self.testdir)
+        self.testdir = mkdtemp()
 
     def tearDown(self):
         rmtree(self.testdir, ignore_errors=1)
@@ -303,18 +302,16 @@ class TestDatabaseBroker(unittest.TestCase):
         with broker.get() as conn:
             self.assertEquals(
                 [r[0] for r in conn.execute('SELECT * FROM test')], ['1'])
+
+        dbpath = os.path.join(self.testdir, 'dev', 'dbs', 'par', 'pre', 'db')
+        mkdirs(dbpath)
+        qpath = os.path.join(self.testdir, 'dev', 'quarantined', 'tests', 'db')
         with patch('swift.common.db.renamer', lambda a, b: b):
-            qpath = os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.dirname(self.testdir))))
-            if qpath:
-                qpath += '/quarantined/tests/db'
-            else:
-                qpath = 'quarantined/tests/db'
             # Test malformed database
             copy(os.path.join(os.path.dirname(__file__),
                               'malformed_example.db'),
-                 os.path.join(self.testdir, '1.db'))
-            broker = DatabaseBroker(os.path.join(self.testdir, '1.db'))
+                 os.path.join(dbpath, '1.db'))
+            broker = DatabaseBroker(os.path.join(dbpath, '1.db'))
             broker.db_type = 'test'
             exc = None
             try:
@@ -325,12 +322,12 @@ class TestDatabaseBroker(unittest.TestCase):
             self.assertEquals(
                 str(exc),
                 'Quarantined %s to %s due to malformed database' %
-                (self.testdir, qpath))
+                (dbpath, qpath))
             # Test corrupted database
             copy(os.path.join(os.path.dirname(__file__),
                               'corrupted_example.db'),
-                 os.path.join(self.testdir, '1.db'))
-            broker = DatabaseBroker(os.path.join(self.testdir, '1.db'))
+                 os.path.join(dbpath, '1.db'))
+            broker = DatabaseBroker(os.path.join(dbpath, '1.db'))
             broker.db_type = 'test'
             exc = None
             try:
@@ -341,7 +338,7 @@ class TestDatabaseBroker(unittest.TestCase):
             self.assertEquals(
                 str(exc),
                 'Quarantined %s to %s due to corrupted database' %
-                (self.testdir, qpath))
+                (dbpath, qpath))
 
     def test_lock(self):
         broker = DatabaseBroker(os.path.join(self.testdir, '1.db'), timeout=.1)

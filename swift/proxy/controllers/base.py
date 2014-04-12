@@ -250,8 +250,11 @@ def get_object_info(env, app, path=None, swift_source=None):
     """
     Get the info structure for an object, based on env and app.
     This is useful to middlewares.
-    Note: This call bypasses auth. Success does not imply that the
-          request has authorization to the object.
+
+    .. note::
+
+        This call bypasses auth. Success does not imply that the request has
+        authorization to the object.
     """
     (version, account, container, obj) = \
         split_path(path or env['PATH_INFO'], 4, 4, True)
@@ -266,8 +269,11 @@ def get_container_info(env, app, swift_source=None):
     """
     Get the info structure for a container, based on env and app.
     This is useful to middlewares.
-    Note: This call bypasses auth. Success does not imply that the
-          request has authorization to the account.
+
+    .. note::
+
+        This call bypasses auth. Success does not imply that the request has
+        authorization to the container.
     """
     (version, account, container, unused) = \
         split_path(env['PATH_INFO'], 3, 4, True)
@@ -282,8 +288,11 @@ def get_account_info(env, app, swift_source=None):
     """
     Get the info structure for an account, based on env and app.
     This is useful to middlewares.
-    Note: This call bypasses auth. Success does not imply that the
-          request has authorization to the container.
+
+    .. note::
+
+        This call bypasses auth. Success does not imply that the request has
+        authorization to the account.
     """
     (version, account, _junk, _junk) = \
         split_path(env['PATH_INFO'], 2, 4, True)
@@ -591,9 +600,11 @@ class GetOrHeadHandler(object):
     def fast_forward(self, num_bytes):
         """
         Will skip num_bytes into the current ranges.
+
         :params num_bytes: the number of bytes that have already been read on
                            this request. This will change the Range header
                            so that the next req will start where it left off.
+
         :raises NotImplementedError: if this is a multirange request
         :raises ValueError: if invalid range header
         :raises HTTPRequestedRangeNotSatisfiable: if begin + num_bytes
@@ -643,9 +654,12 @@ class GetOrHeadHandler(object):
         try:
             nchunks = 0
             bytes_read_from_source = 0
+            node_timeout = self.app.node_timeout
+            if self.server_type == 'Object':
+                node_timeout = self.app.recoverable_node_timeout
             while True:
                 try:
-                    with ChunkReadTimeout(self.app.node_timeout):
+                    with ChunkReadTimeout(node_timeout):
                         chunk = source.read(self.app.object_chunk_size)
                         nchunks += 1
                         bytes_read_from_source += len(chunk)
@@ -713,13 +727,15 @@ class GetOrHeadHandler(object):
                 close_swift_conn(source)
 
     def _get_source_and_node(self):
-
         self.statuses = []
         self.reasons = []
         self.bodies = []
         self.source_headers = []
         sources = []
 
+        node_timeout = self.app.node_timeout
+        if self.server_type == 'Object' and not self.newest:
+            node_timeout = self.app.recoverable_node_timeout
         for node in self.app.iter_nodes(self.ring, self.partition):
             if node in self.used_nodes:
                 continue
@@ -733,7 +749,7 @@ class GetOrHeadHandler(object):
                         query_string=self.req_query_string)
                 self.app.set_node_timing(node, time.time() - start_node_timing)
 
-                with Timeout(self.app.node_timeout):
+                with Timeout(node_timeout):
                     possible_source = conn.getresponse()
                     # See NOTE: swift_conn at top of file about this.
                     possible_source.swift_conn = conn
@@ -1144,7 +1160,7 @@ class Controller(object):
         Base handler for HTTP GET or HEAD requests.
 
         :param req: swob.Request object
-        :param server_type: server type
+        :param server_type: server type used in logging
         :param ring: the ring to obtain nodes from
         :param partition: partition
         :param path: path for the request
@@ -1153,7 +1169,7 @@ class Controller(object):
         backend_headers = self.generate_request_headers(
             req, additional=req.headers)
 
-        handler = GetOrHeadHandler(self.app, req, server_type, ring,
+        handler = GetOrHeadHandler(self.app, req, self.server_type, ring,
                                    partition, path, backend_headers)
         res = handler.get_working_response(req)
 

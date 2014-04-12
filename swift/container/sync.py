@@ -17,22 +17,22 @@ import os
 import uuid
 from swift import gettext_ as _
 from time import ctime, time
-from random import random, shuffle
+from random import choice, random, shuffle
 from struct import unpack_from
 
 from eventlet import sleep, Timeout
 
 import swift.common.db
 from swift.container import server as container_server
-from swiftclient import delete_object, put_object, quote
 from swift.container.backend import ContainerBroker
 from swift.common.container_sync_realms import ContainerSyncRealms
 from swift.common.direct_client import direct_get_object
+from swift.common.internal_client import delete_object, put_object
 from swift.common.exceptions import ClientException
 from swift.common.ring import Ring
 from swift.common.utils import audit_location_generator, get_logger, \
     hash_path, config_true_value, validate_sync_to, whataremyips, \
-    FileLikeIter, urlparse
+    FileLikeIter, urlparse, quote
 from swift.common.daemon import Daemon
 from swift.common.http import HTTP_UNAUTHORIZED, HTTP_NOT_FOUND
 
@@ -133,7 +133,10 @@ class ContainerSync(Daemon):
             h.strip()
             for h in conf.get('allowed_sync_hosts', '127.0.0.1').split(',')
             if h.strip()]
-        self.proxy = conf.get('sync_proxy')
+        self.http_proxies = [
+            a.strip()
+            for a in conf.get('sync_proxy', '').split(',')
+            if a.strip()]
         #: Number of containers with sync turned on that were successfully
         #: synced.
         self.container_syncs = 0
@@ -352,7 +355,7 @@ class ContainerSync(Daemon):
                     else:
                         headers['x-container-sync-key'] = user_key
                     delete_object(sync_to, name=row['name'], headers=headers,
-                                  proxy=self.proxy)
+                                  proxy=self.select_http_proxy())
                 except ClientException as err:
                     if err.http_status != HTTP_NOT_FOUND:
                         raise
@@ -415,7 +418,7 @@ class ContainerSync(Daemon):
                     headers['x-container-sync-key'] = user_key
                 put_object(sync_to, name=row['name'], headers=headers,
                            contents=FileLikeIter(body),
-                           proxy=self.proxy)
+                           proxy=self.select_http_proxy())
                 self.container_puts += 1
                 self.logger.increment('puts')
                 self.logger.timing_since('puts.timing', start_time)
@@ -448,3 +451,6 @@ class ContainerSync(Daemon):
             self.logger.increment('failures')
             return False
         return True
+
+    def select_http_proxy(self):
+        return choice(self.http_proxies) if self.http_proxies else None

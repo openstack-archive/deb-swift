@@ -17,6 +17,7 @@
 
 import errno
 import fcntl
+import grp
 import hmac
 import operator
 import os
@@ -1164,9 +1165,10 @@ def drop_privileges(user):
 
     :param user: User name to change privileges to
     """
-    user = pwd.getpwnam(user)
     if os.geteuid() == 0:
-        os.setgroups([])
+        groups = [g.gr_gid for g in grp.getgrall() if user in g.gr_mem]
+        os.setgroups(groups)
+    user = pwd.getpwnam(user)
     os.setgid(user[3])
     os.setuid(user[2])
     os.environ['HOME'] = user[5]
@@ -2454,7 +2456,21 @@ class ThreadPool(object):
 
 def ismount(path):
     """
-    Test whether a path is a mount point.
+    Test whether a path is a mount point. This will catch any
+    exceptions and translate them into a False return value
+    Use ismount_raw to have the exceptions raised instead.
+    """
+    try:
+        return ismount_raw(path)
+    except OSError:
+        return False
+
+
+def ismount_raw(path):
+    """
+    Test whether a path is a mount point. Whereas ismount will catch
+    any exceptions and just return False, this raw version will not
+    catch exceptions.
 
     This is code hijacked from C Python 2.6.8, adapted to remove the extra
     lstat() system call.
