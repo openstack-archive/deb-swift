@@ -1,6 +1,9 @@
-swift (1.13.1-1) unstable; urgency=low
+swift (1.13.1-1) unstable; urgency=high
 
   * New upstream release.
+  * CVE-2014-3497: XSS in Swift requests through WWW-Authenticate header.
+    Appilied upstream patch properly_quote_www-authenticate_header_value.patch
+    (Closes: #752087).
 
  -- Thomas Goirand <zigo@debian.org>  Sat, 12 Apr 2014 11:19:56 +0800
 
