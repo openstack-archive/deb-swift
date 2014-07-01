@@ -22,81 +22,18 @@ import locale
 import random
 import StringIO
 import time
-import threading
 import unittest
 import urllib
 import uuid
+import eventlet
 from nose import SkipTest
 
-from test import get_config
+from swift.common.storage_policy import POLICY
+
+from test.functional import normalized_urls, load_constraint, cluster_info
+import test.functional as tf
 from test.functional.swift_test_client import Account, Connection, File, \
     ResponseError
-from swift.common import constraints
-
-
-config = get_config('func_test')
-for k in constraints.DEFAULT_CONSTRAINTS:
-    if k in config:
-        # prefer what's in test.conf
-        config[k] = int(config[k])
-    elif constraints.SWIFT_CONSTRAINTS_LOADED:
-        # swift.conf exists, so use what's defined there (or swift defaults)
-        # This normally happens when the test is running locally to the cluster
-        # as in a SAIO.
-        config[k] = constraints.EFFECTIVE_CONSTRAINTS[k]
-    else:
-        # .functests don't know what the constraints of the tested cluster are,
-        # so the tests can't reliably pass or fail. Therefore, skip those
-        # tests.
-        config[k] = '%s constraint is not defined' % k
-
-web_front_end = config.get('web_front_end', 'integral')
-normalized_urls = config.get('normalized_urls', False)
-
-
-def load_constraint(name):
-    c = config[name]
-    if not isinstance(c, int):
-        raise SkipTest(c)
-    return c
-
-locale.setlocale(locale.LC_COLLATE, config.get('collate', 'C'))
-
-
-def chunks(s, length=3):
-    i, j = 0, length
-    while i < len(s):
-        yield s[i:j]
-        i, j = j, j + length
-
-
-def timeout(seconds, method, *args, **kwargs):
-    class TimeoutThread(threading.Thread):
-        def __init__(self, method, *args, **kwargs):
-            threading.Thread.__init__(self)
-
-            self.method = method
-            self.args = args
-            self.kwargs = kwargs
-            self.exception = None
-
-        def run(self):
-            try:
-                self.method(*self.args, **self.kwargs)
-            except Exception as e:
-                self.exception = e
-
-    t = TimeoutThread(method, *args, **kwargs)
-    t.start()
-    t.join(seconds)
-
-    if t.exception:
-        raise t.exception
-
-    if t.isAlive():
-        t._Thread__stop()
-        return True
-    return False
 
 
 class Utils(object):
@@ -154,10 +91,10 @@ class Base2(object):
 class TestAccountEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.containers = []
@@ -333,6 +270,19 @@ class TestAccount(Base):
             self.assertEqual(sorted(containers, cmp=locale.strcoll),
                              containers)
 
+    def testQuotedWWWAuthenticateHeader(self):
+        conn = Connection(tf.config)
+        conn.authenticate()
+        inserted_html = '<b>Hello World'
+        hax = 'AUTH_haxx"\nContent-Length: %d\n\n%s' % (len(inserted_html),
+                                                        inserted_html)
+        quoted_hax = urllib.quote(hax)
+        conn.connection.request('GET', '/v1/' + quoted_hax, None, {})
+        resp = conn.connection.getresponse()
+        resp_headers = resp.getheaders()
+        expected = ('www-authenticate', 'Swift realm="%s"' % quoted_hax)
+        self.assert_(expected in resp_headers)
+
 
 class TestAccountUTF8(Base2, TestAccount):
     set_up = False
@@ -341,10 +291,10 @@ class TestAccountUTF8(Base2, TestAccount):
 class TestAccountNoContainersEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
 
@@ -370,10 +320,10 @@ class TestAccountNoContainersUTF8(Base2, TestAccountNoContainers):
 class TestContainerEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
@@ -661,10 +611,10 @@ class TestContainerUTF8(Base2, TestContainer):
 class TestContainerPathsEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.file_size = 8
@@ -840,10 +790,10 @@ class TestContainerPaths(Base):
 class TestFileEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
@@ -1191,6 +1141,15 @@ class TestFile(Base):
         limit = load_constraint('max_file_size')
         tsecs = 3
 
+        def timeout(seconds, method, *args, **kwargs):
+            try:
+                with eventlet.Timeout(seconds):
+                    method(*args, **kwargs)
+            except eventlet.Timeout:
+                return True
+            else:
+                return False
+
         for i in (limit - 100, limit - 10, limit - 1, limit, limit + 1,
                   limit + 10, limit + 100):
 
@@ -1499,8 +1458,16 @@ class TestFile(Base):
         self.assertEqual(etag, header_etag)
 
     def testChunkedPut(self):
-        if (web_front_end == 'apache2'):
-            raise SkipTest()
+        if (tf.web_front_end == 'apache2'):
+            raise SkipTest("Chunked PUT can only be tested with apache2 web"
+                           " front end")
+
+        def chunks(s, length=3):
+            i, j = 0, length
+            while i < len(s):
+                yield s[i:j]
+                i, j = j, j + length
+
         data = File.random_data(10000)
         etag = File.compute_md5sum(data)
 
@@ -1524,10 +1491,10 @@ class TestFileUTF8(Base2, TestFile):
 class TestDloEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
@@ -1697,10 +1664,10 @@ class TestDloUTF8(Base2, TestDlo):
 class TestFileComparisonEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
@@ -1752,18 +1719,24 @@ class TestFileComparison(Base):
         for file_item in self.env.files:
             hdrs = {'If-Modified-Since': self.env.time_old_f1}
             self.assert_(file_item.read(hdrs=hdrs))
+            self.assert_(file_item.info(hdrs=hdrs))
 
             hdrs = {'If-Modified-Since': self.env.time_new}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
+            self.assert_status(304)
+            self.assertRaises(ResponseError, file_item.info, hdrs=hdrs)
             self.assert_status(304)
 
     def testIfUnmodifiedSince(self):
         for file_item in self.env.files:
             hdrs = {'If-Unmodified-Since': self.env.time_new}
             self.assert_(file_item.read(hdrs=hdrs))
+            self.assert_(file_item.info(hdrs=hdrs))
 
             hdrs = {'If-Unmodified-Since': self.env.time_old_f2}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
+            self.assert_status(412)
+            self.assertRaises(ResponseError, file_item.info, hdrs=hdrs)
             self.assert_status(412)
 
     def testIfMatchAndUnmodified(self):
@@ -1814,17 +1787,16 @@ class TestSloEnv(object):
 
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
 
         if cls.slo_enabled is None:
-            cluster_info = cls.conn.cluster_info()
             cls.slo_enabled = 'slo' in cluster_info
             if not cls.slo_enabled:
                 return
 
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
@@ -2083,11 +2055,11 @@ class TestObjectVersioningEnv(object):
 
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
 
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
 
         # avoid getting a prefix that stops halfway through an encoded
         # character
@@ -2100,6 +2072,61 @@ class TestObjectVersioningEnv(object):
         cls.container = cls.account.container(prefix + "-objs")
         if not cls.container.create(
                 hdrs={'X-Versions-Location': cls.versions_container.name}):
+            raise ResponseError(cls.conn.response)
+
+        container_info = cls.container.info()
+        # if versioning is off, then X-Versions-Location won't persist
+        cls.versioning_enabled = 'versions' in container_info
+
+
+class TestCrossPolicyObjectVersioningEnv(object):
+    # tri-state: None initially, then True/False
+    versioning_enabled = None
+    multiple_policies_enabled = None
+    policies = None
+
+    @classmethod
+    def setUp(cls):
+        cls.conn = Connection(tf.config)
+        cls.conn.authenticate()
+
+        if cls.multiple_policies_enabled is None:
+            try:
+                cls.policies = tf.FunctionalStoragePolicyCollection.from_info()
+            except AssertionError:
+                pass
+
+        if cls.policies and len(cls.policies) > 1:
+            cls.multiple_policies_enabled = True
+        else:
+            cls.multiple_policies_enabled = False
+            # We have to lie here that versioning is enabled. We actually
+            # don't know, but it does not matter. We know these tests cannot
+            # run without multiple policies present. If multiple policies are
+            # present, we won't be setting this field to any value, so it
+            # should all still work.
+            cls.versioning_enabled = True
+            return
+
+        policy = cls.policies.select()
+        version_policy = cls.policies.exclude(name=policy['name']).select()
+
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
+
+        # avoid getting a prefix that stops halfway through an encoded
+        # character
+        prefix = Utils.create_name().decode("utf-8")[:10].encode("utf-8")
+
+        cls.versions_container = cls.account.container(prefix + "-versions")
+        if not cls.versions_container.create(
+                {POLICY: policy['name']}):
+            raise ResponseError(cls.conn.response)
+
+        cls.container = cls.account.container(prefix + "-objs")
+        if not cls.container.create(
+                hdrs={'X-Versions-Location': cls.versions_container.name,
+                      POLICY: version_policy['name']}):
             raise ResponseError(cls.conn.response)
 
         container_info = cls.container.info()
@@ -2157,26 +2184,39 @@ class TestObjectVersioningUTF8(Base2, TestObjectVersioning):
     set_up = False
 
 
+class TestCrossPolicyObjectVersioning(TestObjectVersioning):
+    env = TestCrossPolicyObjectVersioningEnv
+    set_up = False
+
+    def setUp(self):
+        super(TestCrossPolicyObjectVersioning, self).setUp()
+        if self.env.multiple_policies_enabled is False:
+            raise SkipTest('Cross policy test requires multiple policies')
+        elif self.env.multiple_policies_enabled is not True:
+            # just some sanity checking
+            raise Exception("Expected multiple_policies_enabled "
+                            "to be True/False, got %r" % (
+                                self.env.versioning_enabled,))
+
+
 class TestTempurlEnv(object):
     tempurl_enabled = None  # tri-state: None initially, then True/False
 
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
 
         if cls.tempurl_enabled is None:
-            cluster_info = cls.conn.cluster_info()
             cls.tempurl_enabled = 'tempurl' in cluster_info
             if not cls.tempurl_enabled:
                 return
-            cls.tempurl_methods = cluster_info['tempurl']['methods']
 
         cls.tempurl_key = Utils.create_name()
         cls.tempurl_key2 = Utils.create_name()
 
         cls.account = Account(
-            cls.conn, config.get('account', config['username']))
+            cls.conn, tf.config.get('account', tf.config['username']))
         cls.account.delete_containers()
         cls.account.update_metadata({
             'temp-url-key': cls.tempurl_key,
@@ -2337,17 +2377,16 @@ class TestSloTempurlEnv(object):
 
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
 
         if cls.enabled is None:
-            cluster_info = cls.conn.cluster_info()
             cls.enabled = 'tempurl' in cluster_info and 'slo' in cluster_info
 
         cls.tempurl_key = Utils.create_name()
 
         cls.account = Account(
-            cls.conn, config.get('account', config['username']))
+            cls.conn, tf.config.get('account', tf.config['username']))
         cls.account.delete_containers()
         cls.account.update_metadata({'temp-url-key': cls.tempurl_key})
 

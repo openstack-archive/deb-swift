@@ -8,6 +8,18 @@ overview, Swift's logs are sent to syslog and organized by log level and
 syslog facility. All log lines related to the same request have the same
 transaction id. This page documents the log formats used in the system.
 
+.. note::
+
+    By default, Swift will log full log lines. However, with the
+    ``log_max_line_length`` setting and depending on your logging server
+    software, lines may be truncated or shortened. With ``log_max_line_length <
+    7``, the log line will be truncated. With ``log_max_line_length >= 7``, the
+    log line will be "shortened": about half the max length followed by " ... "
+    followed by the other half the max length. Unless you use exceptionally
+    short values, you are unlikely to run across this with the following
+    documented log lines, but you may see it with debugging and error log
+    lines.
+
 ----------
 Proxy Logs
 ----------
@@ -100,6 +112,7 @@ these log lines is::
 
     remote_addr - - [datetime] "request_method request_path" status_int
         content_length "referer" "transaction_id" "user_agent" request_time
+        additional_info
 
 =================== ==========================================================
 **Log Field**       **Value**
@@ -117,4 +130,5 @@ user_agent          The value of the HTTP User-Agent header. Swift's proxy
                     server sets its user-agent to
                     ``"proxy-server <pid of the proxy>".``
 request_time        The duration of the request.
+additional_info     Additional useful information.
 =================== ==========================================================

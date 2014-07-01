@@ -78,7 +78,6 @@ from swift.common.swob import Request
 from swift.common.utils import (get_logger, get_remote_client,
                                 get_valid_utf8_str, config_true_value,
                                 InputProxy, list_from_csv)
-from swift.common.constraints import MAX_HEADER_SIZE
 
 QUOTE_SAFE = '/:'
 
@@ -118,8 +117,8 @@ class ProxyLoggingMiddleware(object):
         self.access_logger = logger or get_logger(access_log_conf,
                                                   log_route='proxy-access')
         self.access_logger.set_statsd_prefix('proxy-server')
-        self.reveal_sensitive_prefix = int(conf.get('reveal_sensitive_prefix',
-                                                    MAX_HEADER_SIZE))
+        self.reveal_sensitive_prefix = int(
+            conf.get('reveal_sensitive_prefix', 16))
 
     def method_from_req(self, req):
         return req.environ.get('swift.orig_req_method', req.method)
@@ -191,7 +190,7 @@ class ProxyLoggingMiddleware(object):
                 start_time_str,
                 end_time_str
             )))
-        # Log timing and bytes-transfered data to StatsD
+        # Log timing and bytes-transferred data to StatsD
         metric_name = self.statsd_metric_name(req, status_int, method)
         # Only log data for valid controllers (or SOS) to keep the metric count
         # down (egregious errors will get logged by the proxy server itself).

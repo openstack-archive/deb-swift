@@ -18,7 +18,7 @@ import urllib
 from urllib import unquote
 from ConfigParser import ConfigParser, NoSectionError, NoOptionError
 
-from swift.common.utils import ismount, split_path, SWIFT_CONF_FILE
+from swift.common import utils, exceptions
 from swift.common.swob import HTTPBadRequest, HTTPLengthRequired, \
     HTTPRequestEntityTooLarge, HTTPPreconditionFailed
 
@@ -34,6 +34,10 @@ ACCOUNT_LISTING_LIMIT = 10000
 MAX_ACCOUNT_NAME_LENGTH = 256
 MAX_CONTAINER_NAME_LENGTH = 256
 
+# If adding an entry to DEFAULT_CONSTRAINTS, note that
+# these constraints are automatically published by the
+# proxy server in responses to /info requests, with values
+# updated by reload_constraints()
 DEFAULT_CONSTRAINTS = {
     'max_file_size': MAX_FILE_SIZE,
     'max_meta_name_length': MAX_META_NAME_LENGTH,
@@ -62,13 +66,16 @@ def reload_constraints():
     SWIFT_CONSTRAINTS_LOADED = False
     OVERRIDE_CONSTRAINTS = {}
     constraints_conf = ConfigParser()
-    if constraints_conf.read(SWIFT_CONF_FILE):
+    if constraints_conf.read(utils.SWIFT_CONF_FILE):
         SWIFT_CONSTRAINTS_LOADED = True
         for name in DEFAULT_CONSTRAINTS:
             try:
                 value = int(constraints_conf.get('swift-constraints', name))
-            except (NoSectionError, NoOptionError):
+            except NoOptionError:
                 pass
+            except NoSectionError:
+                # We are never going to find the section for another option
+                break
             else:
                 OVERRIDE_CONSTRAINTS[name] = value
     for name, default in DEFAULT_CONSTRAINTS.items():
@@ -185,7 +192,7 @@ def check_mount(root, drive):
     if not (urllib.quote_plus(drive) == drive):
         return False
     path = os.path.join(root, drive)
-    return ismount(path)
+    return utils.ismount(path)
 
 
 def check_float(string):
@@ -200,6 +207,22 @@ def check_float(string):
         return True
     except ValueError:
         return False
+
+
+def valid_timestamp(request):
+    """
+    Helper function to extract a timestamp from requests that require one.
+
+    :param request: the swob request object
+
+    :returns: a valid Timestamp instance
+    :raises: HTTPBadRequest on missing or invalid X-Timestamp
+    """
+    try:
+        return request.timestamp
+    except exceptions.InvalidTimestamp as e:
+        raise HTTPBadRequest(body=str(e), request=request,
+                             content_type='text/plain')
 
 
 def check_utf8(string):
@@ -240,7 +263,7 @@ def check_copy_from_header(req):
     if not src_header.startswith('/'):
         src_header = '/' + src_header
     try:
-        return split_path(src_header, 2, 2, True)
+        return utils.split_path(src_header, 2, 2, True)
     except ValueError:
         raise HTTPPreconditionFailed(
             request=req,

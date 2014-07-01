@@ -18,6 +18,7 @@ import cPickle as pickle
 import os
 import sys
 import unittest
+import stat
 from contextlib import closing
 from gzip import GzipFile
 from tempfile import mkdtemp
@@ -25,6 +26,19 @@ from shutil import rmtree
 from time import sleep, time
 
 from swift.common import ring, utils
+
+
+class TestRingBase(unittest.TestCase):
+
+    def setUp(self):
+        self._orig_hash_suffix = utils.HASH_PATH_SUFFIX
+        self._orig_hash_prefix = utils.HASH_PATH_PREFIX
+        utils.HASH_PATH_SUFFIX = 'endcap'
+        utils.HASH_PATH_PREFIX = ''
+
+    def tearDown(self):
+        utils.HASH_PATH_SUFFIX = self._orig_hash_suffix
+        utils.HASH_PATH_PREFIX = self._orig_hash_prefix
 
 
 class TestRingData(unittest.TestCase):
@@ -98,12 +112,20 @@ class TestRingData(unittest.TestCase):
             with open(ring_fname2) as ring2:
                 self.assertEqual(ring1.read(), ring2.read())
 
+    def test_permissions(self):
+        ring_fname = os.path.join(self.testdir, 'stat.ring.gz')
+        rd = ring.RingData(
+            [array.array('H', [0, 1, 0, 1]), array.array('H', [0, 1, 0, 1])],
+            [{'id': 0, 'zone': 0}, {'id': 1, 'zone': 1}], 30)
+        rd.save(ring_fname)
+        self.assertEqual(oct(stat.S_IMODE(os.stat(ring_fname).st_mode)),
+                         '0644')
 
-class TestRing(unittest.TestCase):
+
+class TestRing(TestRingBase):
 
     def setUp(self):
-        utils.HASH_PATH_SUFFIX = 'endcap'
-        utils.HASH_PATH_PREFIX = ''
+        super(TestRing, self).setUp()
         self.testdir = mkdtemp()
         self.testgz = os.path.join(self.testdir, 'whatever.ring.gz')
         self.intended_replica2part2dev_id = [
@@ -137,6 +159,7 @@ class TestRing(unittest.TestCase):
             reload_time=self.intended_reload_time, ring_name='whatever')
 
     def tearDown(self):
+        super(TestRing, self).tearDown()
         rmtree(self.testdir, ignore_errors=1)
 
     def test_creation(self):

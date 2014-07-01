@@ -13,11 +13,13 @@
 # which will disable admin calls to /info.
 # admin_key = secret_admin_key
 #
-# Allows the ability to withhold sections from showing up in the public
-# calls to /info.  The following would cause the sections 'container_quotas'
-# and 'tempurl' to not be listed.  Default is empty, allowing all registered
-# fetures to be listed via HTTP GET /info.
-# disallowed_sections = container_quotas, tempurl
+# Allows the ability to withhold sections from showing up in the public calls
+# to /info.  You can withhold subsections by separating the dict level with a
+# ".".  The following would cause the sections 'container_quotas' and 'tempurl'
+# to not be listed, and the key max_failed_deletes would be removed from
+# bulk_delete.  Default is empty, allowing all registered fetures to be listed
+# via HTTP GET /info.
+# disallowed_sections = container_quotas, tempurl, bulk_delete.max_failed_deletes
 
 # Use an integer to override the number of pre-forked processes that will
 # accept connections.  Should default to the number of effective cpu
@@ -41,6 +43,9 @@
 # log_level = INFO
 # log_headers = false
 # log_address = /dev/log
+# The following caps the length of log lines to the value given; no limit if
+# set to 0, the default.
+# log_max_line_length = 0
 #
 # This optional suffix (default is empty) that would be appended to the swift transaction
 # id allows one to easily figure out from which cluster that X-Trans-Id belongs to.
@@ -70,7 +75,7 @@
 # eventlet_debug = false
 
 [pipeline:main]
-pipeline = catch_errors gatekeeper healthcheck proxy-logging cache container_sync bulk tempurl slo dlo ratelimit tempauth container-quotas account-quotas proxy-logging proxy-server
+pipeline = catch_errors gatekeeper healthcheck proxy-logging cache container_sync bulk tempurl ratelimit tempauth container-quotas account-quotas slo dlo proxy-logging proxy-server
 
 [app:proxy-server]
 use = egg:swift#proxy
@@ -484,7 +489,7 @@ use = egg:swift#proxy_logging
 # by '...' in the log).
 # Note: reveal_sensitive_prefix will not affect the value
 # logged with access_log_headers=True.
-# reveal_sensitive_prefix = 8192
+# reveal_sensitive_prefix = 16
 #
 # What HTTP methods are allowed for StatsD logging (comma-sep); request methods
 # not in this list will have "BAD_METHOD" for the <verb> portion of the metric.
@@ -521,7 +526,7 @@ use = egg:swift#bulk
 [filter:container-quotas]
 use = egg:swift#container_quotas
 
-# Note: Put before both ratelimit and auth in the pipeline.
+# Note: Put after auth and staticweb in the pipeline.
 [filter:slo]
 use = egg:swift#slo
 # max_manifest_segments = 1000
@@ -538,8 +543,7 @@ use = egg:swift#slo
 # Time limit on GET requests (seconds)
 # max_get_time = 86400
 
-# Note: Put before both ratelimit and auth in the pipeline, but after
-# gatekeeper, catch_errors, and proxy_logging (the first instance).
+# Note: Put after auth and staticweb in the pipeline.
 # If you don't put it in the pipeline, it will be inserted for you.
 [filter:dlo]
 use = egg:swift#dlo
@@ -574,3 +578,38 @@ use = egg:swift#container_sync
 # Updating those will have to be done manually, as knowing what the true realm
 # endpoint should be cannot always be guessed.
 # allow_full_urls = true
+# Set this to specify this clusters //realm/cluster as "current" in /info
+# current = //REALM/CLUSTER
+
+# Note: Put it at the beginning of the pipleline to profile all middleware. But
+# it is safer to put this after catch_errors, gatekeeper and healthcheck.
+[filter:xprofile]
+use = egg:swift#xprofile
+# This option enable you to switch profilers which should inherit from python
+# standard profiler. Currently the supported value can be 'cProfile',
+# 'eventlet.green.profile' etc.
+# profile_module = eventlet.green.profile
+#
+# This prefix will be used to combine process ID and timestamp to name the
+# profile data file.  Make sure the executing user has permission to write
+# into this path (missing path segments will be created, if necessary).
+# If you enable profiling in more than one type of daemon, you must override
+# it with an unique value like: /var/log/swift/profile/proxy.profile
+# log_filename_prefix = /tmp/log/swift/profile/default.profile
+#
+# the profile data will be dumped to local disk based on above naming rule
+# in this interval.
+# dump_interval = 5.0
+#
+# Be careful, this option will enable profiler to dump data into the file with
+# time stamp which means there will be lots of files piled up in the directory.
+# dump_timestamp = false
+#
+# This is the path of the URL to access the mini web UI.
+# path = /__profile__
+#
+# Clear the data when the wsgi server shutdown.
+# flush_at_shutdown = false
+#
+# unwind the iterator of applications
+# unwind = false

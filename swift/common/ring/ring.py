@@ -97,11 +97,13 @@ class RingData(object):
         for part2dev_id in ring['replica2part2dev_id']:
             file_obj.write(part2dev_id.tostring())
 
-    def save(self, filename):
+    def save(self, filename, mtime=1300507380.0):
         """
         Serialize this RingData instance to disk.
 
         :param filename: File into which this instance should be serialized.
+        :param mtime: time used to override mtime for gzip, default or None
+                      if the caller wants to include time
         """
         # Override the timestamp so that the same ring data creates
         # the same bytes on disk. This makes a checksum comparison a
@@ -112,7 +114,7 @@ class RingData(object):
         tempf = NamedTemporaryFile(dir=".", prefix=filename, delete=False)
         try:
             gz_file = GzipFile(filename, mode='wb', fileobj=tempf,
-                               mtime=1300507380.0)
+                               mtime=mtime)
         except TypeError:
             gz_file = GzipFile(filename, mode='wb', fileobj=tempf)
         self.serialize_v1(gz_file)
@@ -120,6 +122,7 @@ class RingData(object):
         tempf.flush()
         os.fsync(tempf.fileno())
         tempf.close()
+        os.chmod(tempf.name, 0o644)
         os.rename(tempf.name, filename)
 
     def to_dict(self):
@@ -171,7 +174,7 @@ class Ring(object):
             self._part_shift = ring_data._part_shift
             self._rebuild_tier_data()
 
-            # Do this now, when we know the data has changed, rather then
+            # Do this now, when we know the data has changed, rather than
             # doing it on every call to get_more_nodes().
             regions = set()
             zones = set()
@@ -238,7 +241,7 @@ class Ring(object):
                 dev_id = r2p2d[part]
                 if dev_id not in seen_ids:
                     part_nodes.append(self.devs[dev_id])
-                seen_ids.add(dev_id)
+                    seen_ids.add(dev_id)
         return part_nodes
 
     def get_part(self, account, container=None, obj=None):

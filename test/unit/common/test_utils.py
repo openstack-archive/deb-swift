@@ -24,11 +24,13 @@ import eventlet.event
 import grp
 import logging
 import os
+import mock
 import random
 import re
 import socket
 import sys
 import json
+import math
 
 from textwrap import dedent
 
@@ -55,13 +57,20 @@ from swift.common.exceptions import (Timeout, MessageTimeout,
                                      ReplicationLockTimeout)
 from swift.common import utils
 from swift.common.container_sync_realms import ContainerSyncRealms
-from swift.common.swob import Response
+from swift.common.swob import Request, Response
 from test.unit import FakeLogger
 
 
 class MockOs(object):
 
-    def __init__(self, pass_funcs=[], called_funcs=[], raise_funcs=[]):
+    def __init__(self, pass_funcs=None, called_funcs=None, raise_funcs=None):
+        if pass_funcs is None:
+            pass_funcs = []
+        if called_funcs is None:
+            called_funcs = []
+        if raise_funcs is None:
+            raise_funcs = []
+
         self.closed_fds = []
         for func in pass_funcs:
             setattr(self, func, self.pass_func)
@@ -137,6 +146,562 @@ def reset_loggers():
             logger.thread_locals = (None, None)
             logger.removeHandler(h)
         delattr(utils.get_logger, 'console_handler4logger')
+
+
+class TestTimestamp(unittest.TestCase):
+    """Tests for swift.common.utils.Timestamp"""
+
+    def test_invalid_input(self):
+        self.assertRaises(ValueError, utils.Timestamp, time.time(), offset=-1)
+
+    def test_invalid_string_conversion(self):
+        t = utils.Timestamp(time.time())
+        self.assertRaises(TypeError, str, t)
+
+    def test_normal_format_no_offset(self):
+        expected = '1402436408.91203'
+        test_values = (
+            '1402436408.91203',
+            '1402436408.91203_00000000',
+            '1402436408.912030000',
+            '1402436408.912030000_0000000000000',
+            '000001402436408.912030000',
+            '000001402436408.912030000_0000000000',
+            1402436408.91203,
+            1402436408.912029,
+            1402436408.9120300000000000,
+            1402436408.91202999999999999,
+            utils.Timestamp(1402436408.91203),
+            utils.Timestamp(1402436408.91203, offset=0),
+            utils.Timestamp(1402436408.912029),
+            utils.Timestamp(1402436408.912029, offset=0),
+            utils.Timestamp('1402436408.91203'),
+            utils.Timestamp('1402436408.91203', offset=0),
+            utils.Timestamp('1402436408.91203_00000000'),
+            utils.Timestamp('1402436408.91203_00000000', offset=0),
+        )
+        for value in test_values:
+            timestamp = utils.Timestamp(value)
+            self.assertEqual(timestamp.normal, expected)
+            # timestamp instance can also compare to string or float
+            self.assertEqual(timestamp, expected)
+            self.assertEqual(timestamp, float(expected))
+            self.assertEqual(timestamp, utils.normalize_timestamp(expected))
+
+    def test_isoformat(self):
+        expected = '2014-06-10T22:47:32.054580'
+        test_values = (
+            '1402440452.05458',
+            '1402440452.054579',
+            '1402440452.05458_00000000',
+            '1402440452.054579_00000000',
+            '1402440452.054580000',
+            '1402440452.054579999',
+            '1402440452.054580000_0000000000000',
+            '1402440452.054579999_0000ff00',
+            '000001402440452.054580000',
+            '000001402440452.0545799',
+            '000001402440452.054580000_0000000000',
+            '000001402440452.054579999999_00000fffff',
+            1402440452.05458,
+            1402440452.054579,
+            1402440452.0545800000000000,
+            1402440452.054579999,
+            utils.Timestamp(1402440452.05458),
+            utils.Timestamp(1402440452.0545799),
+            utils.Timestamp(1402440452.05458, offset=0),
+            utils.Timestamp(1402440452.05457999999, offset=0),
+            utils.Timestamp(1402440452.05458, offset=100),
+            utils.Timestamp(1402440452.054579, offset=100),
+            utils.Timestamp('1402440452.05458'),
+            utils.Timestamp('1402440452.054579999'),
+            utils.Timestamp('1402440452.05458', offset=0),
+            utils.Timestamp('1402440452.054579', offset=0),
+            utils.Timestamp('1402440452.05458', offset=300),
+            utils.Timestamp('1402440452.05457999', offset=300),
+            utils.Timestamp('1402440452.05458_00000000'),
+            utils.Timestamp('1402440452.05457999_00000000'),
+            utils.Timestamp('1402440452.05458_00000000', offset=0),
+            utils.Timestamp('1402440452.05457999_00000aaa', offset=0),
+            utils.Timestamp('1402440452.05458_00000000', offset=400),
+            utils.Timestamp('1402440452.054579_0a', offset=400),
+        )
+        for value in test_values:
+            self.assertEqual(utils.Timestamp(value).isoformat, expected)
+        expected = '1970-01-01T00:00:00.000000'
+        test_values = (
+            '0',
+            '0000000000.00000',
+            '0000000000.00000_ffffffffffff',
+            0,
+            0.0,
+        )
+        for value in test_values:
+            self.assertEqual(utils.Timestamp(value).isoformat, expected)
+
+    def test_not_equal(self):
+        ts = '1402436408.91203_0000000000000001'
+        test_values = (
+            utils.Timestamp('1402436408.91203_0000000000000002'),
+            utils.Timestamp('1402436408.91203'),
+            utils.Timestamp(1402436408.91203),
+            utils.Timestamp(1402436408.91204),
+            utils.Timestamp(1402436408.91203, offset=0),
+            utils.Timestamp(1402436408.91203, offset=2),
+        )
+        for value in test_values:
+            self.assertTrue(value != ts)
+
+    def test_no_force_internal_no_offset(self):
+        """Test that internal is the same as normal with no offset"""
+        with mock.patch('swift.common.utils.FORCE_INTERNAL', new=False):
+            self.assertEqual(utils.Timestamp(0).internal, '0000000000.00000')
+            self.assertEqual(utils.Timestamp(1402437380.58186).internal,
+                             '1402437380.58186')
+            self.assertEqual(utils.Timestamp(1402437380.581859).internal,
+                             '1402437380.58186')
+            self.assertEqual(utils.Timestamp(0).internal,
+                             utils.normalize_timestamp(0))
+
+    def test_no_force_internal_with_offset(self):
+        """Test that internal always includes the offset if significant"""
+        with mock.patch('swift.common.utils.FORCE_INTERNAL', new=False):
+            self.assertEqual(utils.Timestamp(0, offset=1).internal,
+                             '0000000000.00000_0000000000000001')
+            self.assertEqual(
+                utils.Timestamp(1402437380.58186, offset=16).internal,
+                '1402437380.58186_0000000000000010')
+            self.assertEqual(
+                utils.Timestamp(1402437380.581859, offset=240).internal,
+                '1402437380.58186_00000000000000f0')
+            self.assertEqual(
+                utils.Timestamp('1402437380.581859_00000001',
+                                offset=240).internal,
+                '1402437380.58186_00000000000000f1')
+
+    def test_force_internal(self):
+        """Test that internal always includes the offset if forced"""
+        with mock.patch('swift.common.utils.FORCE_INTERNAL', new=True):
+            self.assertEqual(utils.Timestamp(0).internal,
+                             '0000000000.00000_0000000000000000')
+            self.assertEqual(utils.Timestamp(1402437380.58186).internal,
+                             '1402437380.58186_0000000000000000')
+            self.assertEqual(utils.Timestamp(1402437380.581859).internal,
+                             '1402437380.58186_0000000000000000')
+            self.assertEqual(utils.Timestamp(0, offset=1).internal,
+                             '0000000000.00000_0000000000000001')
+            self.assertEqual(
+                utils.Timestamp(1402437380.58186, offset=16).internal,
+                '1402437380.58186_0000000000000010')
+            self.assertEqual(
+                utils.Timestamp(1402437380.581859, offset=16).internal,
+                '1402437380.58186_0000000000000010')
+
+    def test_internal_format_no_offset(self):
+        expected = '1402436408.91203_0000000000000000'
+        test_values = (
+            '1402436408.91203',
+            '1402436408.91203_00000000',
+            '1402436408.912030000',
+            '1402436408.912030000_0000000000000',
+            '000001402436408.912030000',
+            '000001402436408.912030000_0000000000',
+            1402436408.91203,
+            1402436408.9120300000000000,
+            1402436408.912029,
+            1402436408.912029999999999999,
+            utils.Timestamp(1402436408.91203),
+            utils.Timestamp(1402436408.91203, offset=0),
+            utils.Timestamp(1402436408.912029),
+            utils.Timestamp(1402436408.91202999999999999, offset=0),
+            utils.Timestamp('1402436408.91203'),
+            utils.Timestamp('1402436408.91203', offset=0),
+            utils.Timestamp('1402436408.912029'),
+            utils.Timestamp('1402436408.912029', offset=0),
+            utils.Timestamp('1402436408.912029999999999'),
+            utils.Timestamp('1402436408.912029999999999', offset=0),
+        )
+        for value in test_values:
+            # timestamp instance is always equivalent
+            self.assertEqual(utils.Timestamp(value), expected)
+            if utils.FORCE_INTERNAL:
+                # the FORCE_INTERNAL flag makes the internal format always
+                # include the offset portion of the timestamp even when it's
+                # not significant and would be bad during upgrades
+                self.assertEqual(utils.Timestamp(value).internal, expected)
+            else:
+                # unless we FORCE_INTERNAL, when there's no offset the
+                # internal format is equivalent to the normalized format
+                self.assertEqual(utils.Timestamp(value).internal,
+                                 '1402436408.91203')
+
+    def test_internal_format_with_offset(self):
+        expected = '1402436408.91203_00000000000000f0'
+        test_values = (
+            '1402436408.91203_000000f0',
+            '1402436408.912030000_0000000000f0',
+            '1402436408.912029_000000f0',
+            '1402436408.91202999999_0000000000f0',
+            '000001402436408.912030000_000000000f0',
+            '000001402436408.9120299999_000000000f0',
+            utils.Timestamp(1402436408.91203, offset=240),
+            utils.Timestamp(1402436408.912029, offset=240),
+            utils.Timestamp('1402436408.91203', offset=240),
+            utils.Timestamp('1402436408.91203_00000000', offset=240),
+            utils.Timestamp('1402436408.91203_0000000f', offset=225),
+            utils.Timestamp('1402436408.9120299999', offset=240),
+            utils.Timestamp('1402436408.9120299999_00000000', offset=240),
+            utils.Timestamp('1402436408.9120299999_00000010', offset=224),
+        )
+        for value in test_values:
+            timestamp = utils.Timestamp(value)
+            self.assertEqual(timestamp.internal, expected)
+            # can compare with offset if the string is internalized
+            self.assertEqual(timestamp, expected)
+            # if comparison value only includes the normalized portion and the
+            # timestamp includes an offset, it is considered greater
+            normal = utils.Timestamp(expected).normal
+            self.assertTrue(timestamp > normal,
+                            '%r is not bigger than %r given %r' % (
+                                timestamp, normal, value))
+            self.assertTrue(timestamp > float(normal),
+                            '%r is not bigger than %f given %r' % (
+                                timestamp, float(normal), value))
+
+    def test_int(self):
+        expected = 1402437965
+        test_values = (
+            '1402437965.91203',
+            '1402437965.91203_00000000',
+            '1402437965.912030000',
+            '1402437965.912030000_0000000000000',
+            '000001402437965.912030000',
+            '000001402437965.912030000_0000000000',
+            1402437965.91203,
+            1402437965.9120300000000000,
+            1402437965.912029,
+            1402437965.912029999999999999,
+            utils.Timestamp(1402437965.91203),
+            utils.Timestamp(1402437965.91203, offset=0),
+            utils.Timestamp(1402437965.91203, offset=500),
+            utils.Timestamp(1402437965.912029),
+            utils.Timestamp(1402437965.91202999999999999, offset=0),
+            utils.Timestamp(1402437965.91202999999999999, offset=300),
+            utils.Timestamp('1402437965.91203'),
+            utils.Timestamp('1402437965.91203', offset=0),
+            utils.Timestamp('1402437965.91203', offset=400),
+            utils.Timestamp('1402437965.912029'),
+            utils.Timestamp('1402437965.912029', offset=0),
+            utils.Timestamp('1402437965.912029', offset=200),
+            utils.Timestamp('1402437965.912029999999999'),
+            utils.Timestamp('1402437965.912029999999999', offset=0),
+            utils.Timestamp('1402437965.912029999999999', offset=100),
+        )
+        for value in test_values:
+            timestamp = utils.Timestamp(value)
+            self.assertEqual(int(timestamp), expected)
+            self.assertTrue(timestamp > expected)
+
+    def test_float(self):
+        expected = 1402438115.91203
+        test_values = (
+            '1402438115.91203',
+            '1402438115.91203_00000000',
+            '1402438115.912030000',
+            '1402438115.912030000_0000000000000',
+            '000001402438115.912030000',
+            '000001402438115.912030000_0000000000',
+            1402438115.91203,
+            1402438115.9120300000000000,
+            1402438115.912029,
+            1402438115.912029999999999999,
+            utils.Timestamp(1402438115.91203),
+            utils.Timestamp(1402438115.91203, offset=0),
+            utils.Timestamp(1402438115.91203, offset=500),
+            utils.Timestamp(1402438115.912029),
+            utils.Timestamp(1402438115.91202999999999999, offset=0),
+            utils.Timestamp(1402438115.91202999999999999, offset=300),
+            utils.Timestamp('1402438115.91203'),
+            utils.Timestamp('1402438115.91203', offset=0),
+            utils.Timestamp('1402438115.91203', offset=400),
+            utils.Timestamp('1402438115.912029'),
+            utils.Timestamp('1402438115.912029', offset=0),
+            utils.Timestamp('1402438115.912029', offset=200),
+            utils.Timestamp('1402438115.912029999999999'),
+            utils.Timestamp('1402438115.912029999999999', offset=0),
+            utils.Timestamp('1402438115.912029999999999', offset=100),
+        )
+        tolerance = 0.00001
+        minimum = expected - tolerance
+        maximum = expected + tolerance
+        for value in test_values:
+            timestamp = utils.Timestamp(value)
+            self.assertTrue(float(timestamp) > minimum,
+                            '%f is not bigger than %f given %r' % (
+                                timestamp, minimum, value))
+            self.assertTrue(float(timestamp) < maximum,
+                            '%f is not smaller than %f given %r' % (
+                                timestamp, maximum, value))
+            # direct comparision of timestamp works too
+            self.assertTrue(timestamp > minimum,
+                            '%s is not bigger than %f given %r' % (
+                                timestamp.normal, minimum, value))
+            self.assertTrue(timestamp < maximum,
+                            '%s is not smaller than %f given %r' % (
+                                timestamp.normal, maximum, value))
+            # ... even against strings
+            self.assertTrue(timestamp > '%f' % minimum,
+                            '%s is not bigger than %s given %r' % (
+                                timestamp.normal, minimum, value))
+            self.assertTrue(timestamp < '%f' % maximum,
+                            '%s is not smaller than %s given %r' % (
+                                timestamp.normal, maximum, value))
+
+    def test_false(self):
+        self.assertFalse(utils.Timestamp(0))
+        self.assertFalse(utils.Timestamp(0, offset=0))
+        self.assertFalse(utils.Timestamp('0'))
+        self.assertFalse(utils.Timestamp('0', offset=0))
+        self.assertFalse(utils.Timestamp(0.0))
+        self.assertFalse(utils.Timestamp(0.0, offset=0))
+        self.assertFalse(utils.Timestamp('0.0'))
+        self.assertFalse(utils.Timestamp('0.0', offset=0))
+        self.assertFalse(utils.Timestamp(00000000.00000000))
+        self.assertFalse(utils.Timestamp(00000000.00000000, offset=0))
+        self.assertFalse(utils.Timestamp('00000000.00000000'))
+        self.assertFalse(utils.Timestamp('00000000.00000000', offset=0))
+
+    def test_true(self):
+        self.assertTrue(utils.Timestamp(1))
+        self.assertTrue(utils.Timestamp(1, offset=1))
+        self.assertTrue(utils.Timestamp(0, offset=1))
+        self.assertTrue(utils.Timestamp('1'))
+        self.assertTrue(utils.Timestamp('1', offset=1))
+        self.assertTrue(utils.Timestamp('0', offset=1))
+        self.assertTrue(utils.Timestamp(1.1))
+        self.assertTrue(utils.Timestamp(1.1, offset=1))
+        self.assertTrue(utils.Timestamp(0.0, offset=1))
+        self.assertTrue(utils.Timestamp('1.1'))
+        self.assertTrue(utils.Timestamp('1.1', offset=1))
+        self.assertTrue(utils.Timestamp('0.0', offset=1))
+        self.assertTrue(utils.Timestamp(11111111.11111111))
+        self.assertTrue(utils.Timestamp(11111111.11111111, offset=1))
+        self.assertTrue(utils.Timestamp(00000000.00000000, offset=1))
+        self.assertTrue(utils.Timestamp('11111111.11111111'))
+        self.assertTrue(utils.Timestamp('11111111.11111111', offset=1))
+        self.assertTrue(utils.Timestamp('00000000.00000000', offset=1))
+
+    def test_greater_no_offset(self):
+        now = time.time()
+        older = now - 1
+        timestamp = utils.Timestamp(now)
+        test_values = (
+            0, '0', 0.0, '0.0', '0000.0000', '000.000_000',
+            1, '1', 1.1, '1.1', '1111.1111', '111.111_111',
+            1402443112.213252, '1402443112.213252', '1402443112.213252_ffff',
+            older, '%f' % older, '%f_0000ffff' % older,
+        )
+        for value in test_values:
+            other = utils.Timestamp(value)
+            self.assertNotEqual(timestamp, other)  # sanity
+            self.assertTrue(timestamp > value,
+                            '%r is not greater than %r given %r' % (
+                                timestamp, value, value))
+            self.assertTrue(timestamp > other,
+                            '%r is not greater than %r given %r' % (
+                                timestamp, other, value))
+            self.assertTrue(timestamp > other.normal,
+                            '%r is not greater than %r given %r' % (
+                                timestamp, other.normal, value))
+            self.assertTrue(timestamp > other.internal,
+                            '%r is not greater than %r given %r' % (
+                                timestamp, other.internal, value))
+            self.assertTrue(timestamp > float(other),
+                            '%r is not greater than %r given %r' % (
+                                timestamp, float(other), value))
+            self.assertTrue(timestamp > int(other),
+                            '%r is not greater than %r given %r' % (
+                                timestamp, int(other), value))
+
+    def test_greater_with_offset(self):
+        now = time.time()
+        older = now - 1
+        test_values = (
+            0, '0', 0.0, '0.0', '0000.0000', '000.000_000',
+            1, '1', 1.1, '1.1', '1111.1111', '111.111_111',
+            1402443346.935174, '1402443346.93517', '1402443346.935169_ffff',
+            older, '%f' % older, '%f_0000ffff' % older,
+            now, '%f' % now, '%f_00000000' % now,
+        )
+        for offset in range(1, 1000, 100):
+            timestamp = utils.Timestamp(now, offset=offset)
+            for value in test_values:
+                other = utils.Timestamp(value)
+                self.assertNotEqual(timestamp, other)  # sanity
+                self.assertTrue(timestamp > value,
+                                '%r is not greater than %r given %r' % (
+                                    timestamp, value, value))
+                self.assertTrue(timestamp > other,
+                                '%r is not greater than %r given %r' % (
+                                    timestamp, other, value))
+                self.assertTrue(timestamp > other.normal,
+                                '%r is not greater than %r given %r' % (
+                                    timestamp, other.normal, value))
+                self.assertTrue(timestamp > other.internal,
+                                '%r is not greater than %r given %r' % (
+                                    timestamp, other.internal, value))
+                self.assertTrue(timestamp > float(other),
+                                '%r is not greater than %r given %r' % (
+                                    timestamp, float(other), value))
+                self.assertTrue(timestamp > int(other),
+                                '%r is not greater than %r given %r' % (
+                                    timestamp, int(other), value))
+
+    def test_smaller_no_offset(self):
+        now = time.time()
+        newer = now + 1
+        timestamp = utils.Timestamp(now)
+        test_values = (
+            9999999999.99999, '9999999999.99999', '9999999999.99999_ffff',
+            newer, '%f' % newer, '%f_0000ffff' % newer,
+        )
+        for value in test_values:
+            other = utils.Timestamp(value)
+            self.assertNotEqual(timestamp, other)  # sanity
+            self.assertTrue(timestamp < value,
+                            '%r is not smaller than %r given %r' % (
+                                timestamp, value, value))
+            self.assertTrue(timestamp < other,
+                            '%r is not smaller than %r given %r' % (
+                                timestamp, other, value))
+            self.assertTrue(timestamp < other.normal,
+                            '%r is not smaller than %r given %r' % (
+                                timestamp, other.normal, value))
+            self.assertTrue(timestamp < other.internal,
+                            '%r is not smaller than %r given %r' % (
+                                timestamp, other.internal, value))
+            self.assertTrue(timestamp < float(other),
+                            '%r is not smaller than %r given %r' % (
+                                timestamp, float(other), value))
+            self.assertTrue(timestamp < int(other),
+                            '%r is not smaller than %r given %r' % (
+                                timestamp, int(other), value))
+
+    def test_smaller_with_offset(self):
+        now = time.time()
+        newer = now + 1
+        test_values = (
+            9999999999.99999, '9999999999.99999', '9999999999.99999_ffff',
+            newer, '%f' % newer, '%f_0000ffff' % newer,
+        )
+        for offset in range(1, 1000, 100):
+            timestamp = utils.Timestamp(now, offset=offset)
+            for value in test_values:
+                other = utils.Timestamp(value)
+                self.assertNotEqual(timestamp, other)  # sanity
+                self.assertTrue(timestamp < value,
+                                '%r is not smaller than %r given %r' % (
+                                    timestamp, value, value))
+                self.assertTrue(timestamp < other,
+                                '%r is not smaller than %r given %r' % (
+                                    timestamp, other, value))
+                self.assertTrue(timestamp < other.normal,
+                                '%r is not smaller than %r given %r' % (
+                                    timestamp, other.normal, value))
+                self.assertTrue(timestamp < other.internal,
+                                '%r is not smaller than %r given %r' % (
+                                    timestamp, other.internal, value))
+                self.assertTrue(timestamp < float(other),
+                                '%r is not smaller than %r given %r' % (
+                                    timestamp, float(other), value))
+                self.assertTrue(timestamp < int(other),
+                                '%r is not smaller than %r given %r' % (
+                                    timestamp, int(other), value))
+
+    def test_ordering(self):
+        given = [
+            '1402444820.62590_000000000000000a',
+            '1402444820.62589_0000000000000001',
+            '1402444821.52589_0000000000000004',
+            '1402444920.62589_0000000000000004',
+            '1402444821.62589_000000000000000a',
+            '1402444821.72589_000000000000000a',
+            '1402444920.62589_0000000000000002',
+            '1402444820.62589_0000000000000002',
+            '1402444820.62589_000000000000000a',
+            '1402444820.62590_0000000000000004',
+            '1402444920.62589_000000000000000a',
+            '1402444820.62590_0000000000000002',
+            '1402444821.52589_0000000000000002',
+            '1402444821.52589_0000000000000000',
+            '1402444920.62589',
+            '1402444821.62589_0000000000000004',
+            '1402444821.72589_0000000000000001',
+            '1402444820.62590',
+            '1402444820.62590_0000000000000001',
+            '1402444820.62589_0000000000000004',
+            '1402444821.72589_0000000000000000',
+            '1402444821.52589_000000000000000a',
+            '1402444821.72589_0000000000000004',
+            '1402444821.62589',
+            '1402444821.52589_0000000000000001',
+            '1402444821.62589_0000000000000001',
+            '1402444821.62589_0000000000000002',
+            '1402444821.72589_0000000000000002',
+            '1402444820.62589',
+            '1402444920.62589_0000000000000001']
+        expected = [
+            '1402444820.62589',
+            '1402444820.62589_0000000000000001',
+            '1402444820.62589_0000000000000002',
+            '1402444820.62589_0000000000000004',
+            '1402444820.62589_000000000000000a',
+            '1402444820.62590',
+            '1402444820.62590_0000000000000001',
+            '1402444820.62590_0000000000000002',
+            '1402444820.62590_0000000000000004',
+            '1402444820.62590_000000000000000a',
+            '1402444821.52589',
+            '1402444821.52589_0000000000000001',
+            '1402444821.52589_0000000000000002',
+            '1402444821.52589_0000000000000004',
+            '1402444821.52589_000000000000000a',
+            '1402444821.62589',
+            '1402444821.62589_0000000000000001',
+            '1402444821.62589_0000000000000002',
+            '1402444821.62589_0000000000000004',
+            '1402444821.62589_000000000000000a',
+            '1402444821.72589',
+            '1402444821.72589_0000000000000001',
+            '1402444821.72589_0000000000000002',
+            '1402444821.72589_0000000000000004',
+            '1402444821.72589_000000000000000a',
+            '1402444920.62589',
+            '1402444920.62589_0000000000000001',
+            '1402444920.62589_0000000000000002',
+            '1402444920.62589_0000000000000004',
+            '1402444920.62589_000000000000000a',
+        ]
+        # less visual version
+        """
+        now = time.time()
+        given = [
+            utils.Timestamp(now + i, offset=offset).internal
+            for i in (0, 0.00001, 0.9, 1.0, 1.1, 100.0)
+            for offset in (0, 1, 2, 4, 10)
+        ]
+        expected = [t for t in given]
+        random.shuffle(given)
+        """
+        self.assertEqual(len(given), len(expected))  # sanity
+        timestamps = [utils.Timestamp(t) for t in given]
+        # our expected values don't include insignificant offsets
+        with mock.patch('swift.common.utils.FORCE_INTERNAL', new=False):
+            self.assertEqual(
+                [t.internal for t in sorted(timestamps)], expected)
+            # string sorting works as well
+            self.assertEqual(
+                sorted([t.internal for t in timestamps]), expected)
 
 
 class TestUtils(unittest.TestCase):
@@ -255,6 +820,16 @@ class TestUtils(unittest.TestCase):
             '9999999999')
         self.assertRaises(ValueError, utils.normalize_timestamp, '')
         self.assertRaises(ValueError, utils.normalize_timestamp, 'abc')
+
+    def test_last_modified_date_to_timestamp(self):
+        expectations = {
+            '1970-01-01T00:00:00.000000': 0.0,
+            '2014-02-28T23:22:36.698390': 1393629756.698390,
+            '2011-03-19T04:03:00.604554': 1300507380.604554,
+        }
+        for last_modified, ts in expectations.items():
+            real = utils.last_modified_date_to_timestamp(last_modified)
+            self.assertEqual(real, ts, "failed for %s" % last_modified)
 
     def test_backwards(self):
         # Test swift.common.utils.backward
@@ -690,6 +1265,61 @@ class TestUtils(unittest.TestCase):
             self.assert_('Traceback' in log_msg)
             self.assert_('my error message' in log_msg)
 
+        finally:
+            logger.logger.removeHandler(handler)
+            reset_loggers()
+
+    def test_swift_log_formatter_max_line_length(self):
+        # setup stream logging
+        sio = StringIO()
+        logger = utils.get_logger(None)
+        handler = logging.StreamHandler(sio)
+        formatter = utils.SwiftLogFormatter(max_line_length=10)
+        handler.setFormatter(formatter)
+        logger.logger.addHandler(handler)
+
+        def strip_value(sio):
+            v = sio.getvalue()
+            sio.truncate(0)
+            return v
+
+        try:
+            logger.info('12345')
+            self.assertEqual(strip_value(sio), '12345\n')
+            logger.info('1234567890')
+            self.assertEqual(strip_value(sio), '1234567890\n')
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '12 ... de\n')
+            formatter.max_line_length = 11
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '123 ... cde\n')
+            formatter.max_line_length = 0
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '1234567890abcde\n')
+            formatter.max_line_length = 1
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '1\n')
+            formatter.max_line_length = 2
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '12\n')
+            formatter.max_line_length = 3
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '123\n')
+            formatter.max_line_length = 4
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '1234\n')
+            formatter.max_line_length = 5
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '12345\n')
+            formatter.max_line_length = 6
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '123456\n')
+            formatter.max_line_length = 7
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '1 ... e\n')
+            formatter.max_line_length = -10
+            logger.info('1234567890abcde')
+            self.assertEqual(strip_value(sio), '1234567890abcde\n')
         finally:
             logger.logger.removeHandler(handler)
             reset_loggers()
@@ -1240,6 +1870,34 @@ log_name = %(yarr)s'''
         for i in range(4):
             conf_dir = os.path.join(t, 'object-server/%d.conf.d' % (i + 1))
             self.assert_(conf_dir in conf_dirs)
+
+    def test_search_tree_conf_dir_with_named_conf_match(self):
+        files = (
+            'proxy-server/proxy-server.conf.d/base.conf',
+            'proxy-server/proxy-server.conf.d/pipeline.conf',
+            'proxy-server/proxy-noauth.conf.d/base.conf',
+            'proxy-server/proxy-noauth.conf.d/pipeline.conf',
+        )
+        with temptree(files) as t:
+            conf_dirs = utils.search_tree(t, 'proxy-server', 'noauth.conf',
+                                          dir_ext='noauth.conf.d')
+        self.assertEquals(len(conf_dirs), 1)
+        conf_dir = conf_dirs[0]
+        expected = os.path.join(t, 'proxy-server/proxy-noauth.conf.d')
+        self.assertEqual(conf_dir, expected)
+
+    def test_search_tree_conf_dir_pid_with_named_conf_match(self):
+        files = (
+            'proxy-server/proxy-server.pid.d',
+            'proxy-server/proxy-noauth.pid.d',
+        )
+        with temptree(files) as t:
+            pid_files = utils.search_tree(t, 'proxy-server',
+                                          exts=['noauth.pid', 'noauth.pid.d'])
+        self.assertEquals(len(pid_files), 1)
+        pid_file = pid_files[0]
+        expected = os.path.join(t, 'proxy-server/proxy-noauth.pid.d')
+        self.assertEqual(pid_file, expected)
 
     def test_write_file(self):
         with temptree([]) as t:
@@ -1871,6 +2529,22 @@ cluster_dfw1 = http://dfw1.host/v1/
         self.assertEquals(listing_dict['content_type'],
                           'text/plain;hello="world"')
 
+    def test_clean_content_type(self):
+        subtests = {
+            '': '', 'text/plain': 'text/plain',
+            'text/plain; someother=thing': 'text/plain; someother=thing',
+            'text/plain; swift_bytes=123': 'text/plain',
+            'text/plain; someother=thing; swift_bytes=123':
+                'text/plain; someother=thing',
+            # Since Swift always tacks on the swift_bytes, clean_content_type()
+            # only strips swift_bytes if it's last. The next item simply shows
+            # that if for some other odd reason it's not last,
+            # clean_content_type() will not remove it from the header.
+            'text/plain; swift_bytes=123; someother=thing':
+                'text/plain; swift_bytes=123; someother=thing'}
+        for before, after in subtests.items():
+            self.assertEqual(utils.clean_content_type(before), after)
+
     def test_quote(self):
         res = utils.quote('/v1/a/c3/subdirx/')
         assert res == '/v1/a/c3/subdirx/'
@@ -1892,6 +2566,54 @@ cluster_dfw1 = http://dfw1.host/v1/
         self.assertEquals(
             utils.get_hmac('GET', '/path', 1, 'abc'),
             'b17f6ff8da0e251737aa9e3ee69a881e3e092e2f')
+
+    def test_get_log_line(self):
+        req = Request.blank(
+            '/sda1/p/a/c/o',
+            environ={'REQUEST_METHOD': 'HEAD', 'REMOTE_ADDR': '1.2.3.4'})
+        res = Response()
+        trans_time = 1.2
+        additional_info = 'some information'
+        exp_line = '1.2.3.4 - - [01/Jan/1970:02:46:41 +0000] "HEAD ' \
+            '/sda1/p/a/c/o" 200 - "-" "-" "-" 1.2000 "some information"'
+        with mock.patch(
+                'time.gmtime',
+                mock.MagicMock(side_effect=[time.gmtime(10001.0)])):
+            self.assertEquals(
+                exp_line,
+                utils.get_log_line(req, res, trans_time, additional_info))
+
+    def test_cache_from_env(self):
+        # should never get logging when swift.cache is found
+        env = {'swift.cache': 42}
+        logger = FakeLogger()
+        with mock.patch('swift.common.utils.logging', logger):
+            self.assertEqual(42, utils.cache_from_env(env))
+            self.assertEqual(0, len(logger.get_lines_for_level('error')))
+        logger = FakeLogger()
+        with mock.patch('swift.common.utils.logging', logger):
+            self.assertEqual(42, utils.cache_from_env(env, False))
+            self.assertEqual(0, len(logger.get_lines_for_level('error')))
+        logger = FakeLogger()
+        with mock.patch('swift.common.utils.logging', logger):
+            self.assertEqual(42, utils.cache_from_env(env, True))
+            self.assertEqual(0, len(logger.get_lines_for_level('error')))
+
+        # check allow_none controls logging when swift.cache is not found
+        err_msg = 'ERROR: swift.cache could not be found in env!'
+        env = {}
+        logger = FakeLogger()
+        with mock.patch('swift.common.utils.logging', logger):
+            self.assertEqual(None, utils.cache_from_env(env))
+            self.assertTrue(err_msg in logger.get_lines_for_level('error'))
+        logger = FakeLogger()
+        with mock.patch('swift.common.utils.logging', logger):
+            self.assertEqual(None, utils.cache_from_env(env, False))
+            self.assertTrue(err_msg in logger.get_lines_for_level('error'))
+        logger = FakeLogger()
+        with mock.patch('swift.common.utils.logging', logger):
+            self.assertEqual(None, utils.cache_from_env(env, True))
+            self.assertEqual(0, len(logger.get_lines_for_level('error')))
 
 
 class TestSwiftInfo(unittest.TestCase):
@@ -1924,6 +2646,13 @@ class TestSwiftInfo(unittest.TestCase):
         self.assertRaises(ValueError,
                           utils.register_swift_info, 'disallowed_sections',
                           disallowed_sections=None)
+
+        utils.register_swift_info('goodkey', foo='5.6')
+        self.assertRaises(ValueError,
+                          utils.register_swift_info, 'bad.key', foo='5.6')
+        data = {'bad.key': '5.6'}
+        self.assertRaises(ValueError,
+                          utils.register_swift_info, 'goodkey', **data)
 
     def test_get_swift_info(self):
         utils._swift_info = {'swift': {'foo': 'bar'},
@@ -2040,6 +2769,36 @@ class TestSwiftInfo(unittest.TestCase):
         self.assertEqual(info['cap2']['cap2_foo'], 'cap2_bar')
 
         self.assertTrue('cap3' not in info)
+
+    def test_get_swift_admin_info_with_disallowed_sub_sections(self):
+        utils._swift_info = {'swift': {'foo': 'bar'},
+                             'cap1': {'cap1_foo': 'cap1_bar',
+                                      'cap1_moo': 'cap1_baa'},
+                             'cap2': {'cap2_foo': 'cap2_bar'},
+                             'cap3': {'cap2_foo': 'cap2_bar'},
+                             'cap4': {'a': {'b': {'c': 'c'},
+                                            'b.c': 'b.c'}}}
+        utils._swift_admin_info = {'admin_cap1': {'ac1_foo': 'ac1_bar'}}
+
+        info = utils.get_swift_info(
+            admin=True, disallowed_sections=['cap1.cap1_foo', 'cap3',
+                                             'cap4.a.b.c'])
+        self.assertTrue('cap3' not in info)
+        self.assertEquals(info['cap1']['cap1_moo'], 'cap1_baa')
+        self.assertTrue('cap1_foo' not in info['cap1'])
+        self.assertTrue('c' not in info['cap4']['a']['b'])
+        self.assertEqual(info['cap4']['a']['b.c'], 'b.c')
+
+    def test_get_swift_info_with_unmatched_disallowed_sections(self):
+        cap1 = {'cap1_foo': 'cap1_bar',
+                'cap1_moo': 'cap1_baa'}
+        utils._swift_info = {'swift': {'foo': 'bar'},
+                             'cap1': cap1}
+        # expect no exceptions
+        info = utils.get_swift_info(disallowed_sections=
+                                    ['cap2.cap1_foo', 'cap1.no_match',
+                                     'cap1.cap1_foo.no_match.no_match'])
+        self.assertEquals(info['cap1'], cap1)
 
 
 class TestFileLikeIter(unittest.TestCase):
@@ -3044,6 +3803,101 @@ class TestGreenAsyncPile(unittest.TestCase):
         pile.spawn(run_test, 0.1)
         self.assertEqual(pile.waitall(0.5), [0.1, 0.1])
         self.assertEqual(completed[0], 2)
+
+
+class TestLRUCache(unittest.TestCase):
+
+    def test_maxsize(self):
+        @utils.LRUCache(maxsize=10)
+        def f(*args):
+            return math.sqrt(*args)
+        _orig_math_sqrt = math.sqrt
+        # setup cache [0-10)
+        for i in range(10):
+            self.assertEqual(math.sqrt(i), f(i))
+        self.assertEqual(f.size(), 10)
+        # validate cache [0-10)
+        with patch('math.sqrt'):
+            for i in range(10):
+                self.assertEqual(_orig_math_sqrt(i), f(i))
+        self.assertEqual(f.size(), 10)
+        # update cache [10-20)
+        for i in range(10, 20):
+            self.assertEqual(math.sqrt(i), f(i))
+        # cache size is fixed
+        self.assertEqual(f.size(), 10)
+        # validate cache [10-20)
+        with patch('math.sqrt'):
+            for i in range(10, 20):
+                self.assertEqual(_orig_math_sqrt(i), f(i))
+        # validate un-cached [0-10)
+        with patch('math.sqrt', new=None):
+            for i in range(10):
+                self.assertRaises(TypeError, f, i)
+        # cache unchanged
+        self.assertEqual(f.size(), 10)
+        with patch('math.sqrt'):
+            for i in range(10, 20):
+                self.assertEqual(_orig_math_sqrt(i), f(i))
+        self.assertEqual(f.size(), 10)
+
+    def test_maxtime(self):
+        @utils.LRUCache(maxtime=30)
+        def f(*args):
+            return math.sqrt(*args)
+        self.assertEqual(30, f.maxtime)
+        _orig_math_sqrt = math.sqrt
+
+        now = time.time()
+        the_future = now + 31
+        # setup cache [0-10)
+        with patch('time.time', lambda: now):
+            for i in range(10):
+                self.assertEqual(math.sqrt(i), f(i))
+            self.assertEqual(f.size(), 10)
+            # validate cache [0-10)
+            with patch('math.sqrt'):
+                for i in range(10):
+                    self.assertEqual(_orig_math_sqrt(i), f(i))
+            self.assertEqual(f.size(), 10)
+
+        # validate expired [0-10)
+        with patch('math.sqrt', new=None):
+            with patch('time.time', lambda: the_future):
+                for i in range(10):
+                    self.assertRaises(TypeError, f, i)
+
+        # validate repopulates [0-10)
+        with patch('time.time', lambda: the_future):
+            for i in range(10):
+                self.assertEqual(math.sqrt(i), f(i))
+        # reuses cache space
+        self.assertEqual(f.size(), 10)
+
+    def test_set_maxtime(self):
+        @utils.LRUCache(maxtime=30)
+        def f(*args):
+            return math.sqrt(*args)
+        self.assertEqual(30, f.maxtime)
+        self.assertEqual(2, f(4))
+        self.assertEqual(1, f.size())
+        # expire everything
+        f.maxtime = -1
+        # validate un-cached [0-10)
+        with patch('math.sqrt', new=None):
+            self.assertRaises(TypeError, f, 4)
+
+    def test_set_maxsize(self):
+        @utils.LRUCache(maxsize=10)
+        def f(*args):
+            return math.sqrt(*args)
+        for i in range(12):
+            f(i)
+        self.assertEqual(f.size(), 10)
+        f.maxsize = 4
+        for i in range(12):
+            f(i)
+        self.assertEqual(f.size(), 4)
 
 
 if __name__ == '__main__':

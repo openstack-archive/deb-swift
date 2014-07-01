@@ -13,14 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from contextlib import nested
 import json
 import mock
 import os
 import random
 import string
+from StringIO import StringIO
 import tempfile
 import time
 import unittest
+import urlparse
 
 from eventlet.green import urllib2
 
@@ -146,3 +149,112 @@ class TestRecon(unittest.TestCase):
         ips = self.recon_instance.get_devices(
             1, self.swift_dir, self.ring_name)
         self.assertEqual(set([('127.0.0.1', 10001)]), ips)
+
+    def test_get_ringmd5(self):
+        for server_type in ('account', 'container', 'object', 'object-1'):
+            ring_name = '%s.ring.gz' % server_type
+            ring_file = os.path.join(self.swift_dir, ring_name)
+            open(ring_file, 'w')
+
+        empty_file_hash = 'd41d8cd98f00b204e9800998ecf8427e'
+        hosts = [("127.0.0.1", "8080")]
+        with mock.patch('swift.cli.recon.Scout') as mock_scout:
+            scout_instance = mock.MagicMock()
+            url = 'http://%s:%s/recon/ringmd5' % hosts[0]
+            response = {
+                '/etc/swift/account.ring.gz': empty_file_hash,
+                '/etc/swift/container.ring.gz': empty_file_hash,
+                '/etc/swift/object.ring.gz': empty_file_hash,
+                '/etc/swift/object-1.ring.gz': empty_file_hash,
+            }
+            status = 200
+            scout_instance.scout.return_value = (url, response, status)
+            mock_scout.return_value = scout_instance
+            stdout = StringIO()
+            mock_hash = mock.MagicMock()
+            patches = [
+                mock.patch('sys.stdout', new=stdout),
+                mock.patch('swift.cli.recon.md5', new=mock_hash),
+            ]
+            with nested(*patches):
+                mock_hash.return_value.hexdigest.return_value = \
+                    empty_file_hash
+                self.recon_instance.get_ringmd5(hosts, self.swift_dir)
+            output = stdout.getvalue()
+            expected = '1/1 hosts matched'
+            for line in output.splitlines():
+                if '!!' in line:
+                    self.fail('Unexpected Error in output: %r' % line)
+                if expected in line:
+                    break
+            else:
+                self.fail('Did not find expected substring %r '
+                          'in output:\n%s' % (expected, output))
+
+
+class TestReconCommands(unittest.TestCase):
+    def setUp(self):
+        self.recon = recon.SwiftRecon()
+        self.hosts = set([('127.0.0.1', 10000)])
+
+    def mock_responses(self, resps):
+
+        def fake_urlopen(url, timeout):
+            scheme, netloc, path, _, _, _ = urlparse.urlparse(url)
+            self.assertEqual(scheme, 'http')  # can't handle anything else
+            self.assertTrue(path.startswith('/recon/'))
+
+            if ':' in netloc:
+                host, port = netloc.split(':', 1)
+                port = int(port)
+            else:
+                host = netloc
+                port = 80
+
+            response_body = resps[(host, port, path[7:])]
+
+            resp = mock.MagicMock()
+            resp.read = mock.MagicMock(side_effect=[response_body])
+            return resp
+
+        return mock.patch('eventlet.green.urllib2.urlopen', fake_urlopen)
+
+    def test_get_swiftconfmd5(self):
+        hosts = set([('10.1.1.1', 10000),
+                     ('10.2.2.2', 10000)])
+        cksum = '729cf900f2876dead617d088ece7fe8c'
+
+        responses = {
+            ('10.1.1.1', 10000, 'swiftconfmd5'):
+            json.dumps({'/etc/swift/swift.conf': cksum}),
+            ('10.2.2.2', 10000, 'swiftconfmd5'):
+            json.dumps({'/etc/swift/swift.conf': cksum})}
+
+        printed = []
+        with self.mock_responses(responses):
+            with mock.patch.object(self.recon, '_md5_file', lambda _: cksum):
+                self.recon.get_swiftconfmd5(hosts, printfn=printed.append)
+
+        output = '\n'.join(printed) + '\n'
+        self.assertTrue("2/2 hosts matched" in output)
+
+    def test_get_swiftconfmd5_mismatch(self):
+        hosts = set([('10.1.1.1', 10000),
+                     ('10.2.2.2', 10000)])
+        cksum = '29d5912b1fcfcc1066a7f51412769c1d'
+
+        responses = {
+            ('10.1.1.1', 10000, 'swiftconfmd5'):
+            json.dumps({'/etc/swift/swift.conf': cksum}),
+            ('10.2.2.2', 10000, 'swiftconfmd5'):
+            json.dumps({'/etc/swift/swift.conf': 'bogus'})}
+
+        printed = []
+        with self.mock_responses(responses):
+            with mock.patch.object(self.recon, '_md5_file', lambda _: cksum):
+                self.recon.get_swiftconfmd5(hosts, printfn=printed.append)
+
+        output = '\n'.join(printed) + '\n'
+        self.assertTrue("1/2 hosts matched" in output)
+        self.assertTrue("http://10.2.2.2:10000/recon/swiftconfmd5 (bogus) "
+                        "doesn't match on disk md5sum" in output)

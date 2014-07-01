@@ -49,6 +49,7 @@ import glob
 from urlparse import urlparse as stdlib_urlparse, ParseResult
 import itertools
 import stat
+import datetime
 
 import eventlet
 import eventlet.semaphore
@@ -62,7 +63,7 @@ utf8_decoder = codecs.getdecoder('utf-8')
 utf8_encoder = codecs.getencoder('utf-8')
 
 from swift import gettext_ as _
-from swift.common.exceptions import LockTimeout, MessageTimeout
+import swift.common.exceptions
 from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND
 
 # logging doesn't import patched as cleanly as one would like
@@ -163,11 +164,19 @@ def get_swift_info(admin=False, disallowed_sections=None):
     :returns: dictionary of information about the swift cluster.
     """
     disallowed_sections = disallowed_sections or []
-    info = {}
-    for section in _swift_info:
-        if section in disallowed_sections:
-            continue
-        info[section] = dict(_swift_info[section].items())
+    info = dict(_swift_info)
+    for section in disallowed_sections:
+        key_to_pop = None
+        sub_section_dict = info
+        for sub_section in section.split('.'):
+            if key_to_pop:
+                sub_section_dict = sub_section_dict.get(key_to_pop, {})
+                if not isinstance(sub_section_dict, dict):
+                    sub_section_dict = {}
+                    break
+            key_to_pop = sub_section
+        sub_section_dict.pop(key_to_pop, None)
+
     if admin:
         info['admin'] = dict(_swift_admin_info)
         info['admin']['disallowed_sections'] = list(disallowed_sections)
@@ -179,12 +188,16 @@ def register_swift_info(name='swift', admin=False, **kwargs):
     Registers information about the swift cluster to be retrieved with calls
     to get_swift_info.
 
+    NOTE: Do not use "." in the param: name or any keys in kwargs. "." is used
+          in the disallowed_sections to remove unwanted keys from /info.
+
     :param name: string, the section name to place the information under.
     :param admin: boolean, if True, information will be registered to an
                   admin section which can optionally be withheld when
                   requesting the information.
     :param kwargs: key value arguments representing the information to be
                    added.
+    :raises ValueError: if name or any of the keys in kwargs has "." in it
     """
     if name == 'admin' or name == 'disallowed_sections':
         raise ValueError('\'{0}\' is reserved name.'.format(name))
@@ -194,8 +207,12 @@ def register_swift_info(name='swift', admin=False, **kwargs):
     else:
         dict_to_use = _swift_info
     if name not in dict_to_use:
+        if "." in name:
+            raise ValueError('Cannot use "." in a swift_info key: %s' % name)
         dict_to_use[name] = {}
     for key, val in kwargs.iteritems():
+        if "." in key:
+            raise ValueError('Cannot use "." in a swift_info key: %s' % key)
         dict_to_use[name][key] = val
 
 
@@ -255,7 +272,7 @@ def config_auto_int_value(value, default):
     try:
         value = int(value)
     except (TypeError, ValueError):
-        raise ValueError('Config option must be a integer or the '
+        raise ValueError('Config option must be an integer or the '
                          'string "auto", not "%s".' % value)
     return value
 
@@ -289,7 +306,29 @@ def load_libc_function(func_name, log_error=True):
 
 def generate_trans_id(trans_id_suffix):
     return 'tx%s-%010x%s' % (
-        uuid.uuid4().hex[:21], time.time(), trans_id_suffix)
+        uuid.uuid4().hex[:21], time.time(), quote(trans_id_suffix))
+
+
+def get_log_line(req, res, trans_time, additional_info):
+    """
+    Make a line for logging that matches the documented log line format
+    for backend servers.
+
+    :param req: the request.
+    :param res: the response.
+    :param trans_time: the time the request took to complete, a float.
+    :param additional_info: a string to log at the end of the line
+
+    :returns: a properly formated line for logging.
+    """
+
+    return '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %.4f "%s"' % (
+        req.remote_addr,
+        time.strftime('%d/%b/%Y:%H:%M:%S +0000', time.gmtime()),
+        req.method, req.path, res.status.split()[0],
+        res.content_length or '-', req.referer or '-',
+        req.headers.get('x-trans-id', '-'),
+        req.user_agent or '-', trans_time, additional_info or '-')
 
 
 def get_trans_id_time(trans_id):
@@ -518,8 +557,123 @@ def drop_buffer_cache(fd, offset, length):
     ret = _posix_fadvise(fd, ctypes.c_uint64(offset),
                          ctypes.c_uint64(length), 4)
     if ret != 0:
-        logging.warn("posix_fadvise64(%s, %s, %s, 4) -> %s"
-                     % (fd, offset, length, ret))
+        logging.warn("posix_fadvise64(%(fd)s, %(offset)s, %(length)s, 4) "
+                     "-> %(ret)s", {'fd': fd, 'offset': offset,
+                                    'length': length, 'ret': ret})
+
+
+NORMAL_FORMAT = "%016.05f"
+INTERNAL_FORMAT = NORMAL_FORMAT + '_%016x'
+# Setting this to True will cause the internal format to always display
+# extended digits - even when the value is equivalent to the normalized form.
+# This isn't ideal during an upgrade when some servers might not understand
+# the new time format - but flipping it to True works great for testing.
+FORCE_INTERNAL = False  # or True
+
+
+class Timestamp(object):
+    """
+    Internal Representation of Swift Time.
+
+    The normalized form of the X-Timestamp header looks like a float
+    with a fixed width to ensure stable string sorting - normalized
+    timestamps look like "1402464677.04188"
+
+    To support overwrites of existing data without modifying the original
+    timestamp but still maintain consistency a second internal offset vector
+    is append to the normalized timestamp form which compares and sorts
+    greater than the fixed width float format but less than a newer timestamp.
+    The internalized format of timestamps looks like
+    "1402464677.04188_0000000000000000" - the portion after the underscore is
+    the offset and is a formatted hexadecimal integer.
+
+    The internalized form is not exposed to clients in responses from
+    Swift.  Normal client operations will not create a timestamp with an
+    offset.
+
+    The Timestamp class in common.utils supports internalized and
+    normalized formatting of timestamps and also comparison of timestamp
+    values.  When the offset value of a Timestamp is 0 - it's considered
+    insignificant and need not be represented in the string format; to
+    support backwards compatibility during a Swift upgrade the
+    internalized and normalized form of a Timestamp with an
+    insignificant offset are identical.  When a timestamp includes an
+    offset it will always be represented in the internalized form, but
+    is still excluded from the normalized form.  Timestamps with an
+    equivalent timestamp portion (the float part) will compare and order
+    by their offset.  Timestamps with a greater timestamp portion will
+    always compare and order greater than a Timestamp with a lesser
+    timestamp regardless of it's offset.  String comparison and ordering
+    is guaranteed for the internalized string format, and is backwards
+    compatible for normalized timestamps which do not include an offset.
+    """
+
+    def __init__(self, timestamp, offset=0):
+        if isinstance(timestamp, basestring):
+            parts = timestamp.split('_', 1)
+            self.timestamp = float(parts.pop(0))
+            if parts:
+                self.offset = int(parts[0], 16)
+            else:
+                self.offset = 0
+        else:
+            self.timestamp = float(timestamp)
+            self.offset = getattr(timestamp, 'offset', 0)
+        # increment offset
+        if offset >= 0:
+            self.offset += offset
+        else:
+            raise ValueError('offset must be non-negative')
+
+    def __repr__(self):
+        return INTERNAL_FORMAT % (self.timestamp, self.offset)
+
+    def __str__(self):
+        raise TypeError('You must specificy which string format is required')
+
+    def __float__(self):
+        return self.timestamp
+
+    def __int__(self):
+        return int(self.timestamp)
+
+    def __nonzero__(self):
+        return bool(self.timestamp or self.offset)
+
+    @property
+    def normal(self):
+        return NORMAL_FORMAT % self.timestamp
+
+    @property
+    def internal(self):
+        if self.offset or FORCE_INTERNAL:
+            return INTERNAL_FORMAT % (self.timestamp, self.offset)
+        else:
+            return self.normal
+
+    @property
+    def isoformat(self):
+        isoformat = datetime.datetime.utcfromtimestamp(
+            float(self.normal)).isoformat()
+        # python isoformat() doesn't include msecs when zero
+        if len(isoformat) < len("1970-01-01T00:00:00.000000"):
+            isoformat += ".000000"
+        return isoformat
+
+    def __eq__(self, other):
+        if not isinstance(other, Timestamp):
+            other = Timestamp(other)
+        return self.internal == other.internal
+
+    def __ne__(self, other):
+        if not isinstance(other, Timestamp):
+            other = Timestamp(other)
+        return self.internal != other.internal
+
+    def __cmp__(self, other):
+        if not isinstance(other, Timestamp):
+            other = Timestamp(other)
+        return cmp(self.internal, other.internal)
 
 
 def normalize_timestamp(timestamp):
@@ -534,7 +688,19 @@ def normalize_timestamp(timestamp):
     :param timestamp: unix timestamp
     :returns: normalized timestamp as a string
     """
-    return "%016.05f" % (float(timestamp))
+    return Timestamp(timestamp).normal
+
+
+def last_modified_date_to_timestamp(last_modified_date_str):
+    """
+    Convert a last modified date (like you'd get from a container listing,
+    e.g. 2014-02-28T23:22:36.698390) to a float.
+    """
+    return Timestamp(
+        datetime.datetime.strptime(
+            last_modified_date_str, '%Y-%m-%dT%H:%M:%S.%f'
+        ).strftime('%s.%f')
+    )
 
 
 def normalize_delete_at_timestamp(timestamp):
@@ -608,7 +774,7 @@ def split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
     :param rest_with_last: If True, trailing data will be returned as part
                            of last segment.  If False, and there is
                            trailing data, raises ValueError.
-    :returns: list of segments with a length of maxsegs (non-existant
+    :returns: list of segments with a length of maxsegs (non-existent
               segments will return as None)
     :raises: ValueError if given an invalid path
     """
@@ -955,7 +1121,7 @@ class LogAdapter(logging.LoggerAdapter, object):
             emsg = exc.__class__.__name__
             if hasattr(exc, 'seconds'):
                 emsg += ' (%ss)' % exc.seconds
-            if isinstance(exc, MessageTimeout):
+            if isinstance(exc, swift.common.exceptions.MessageTimeout):
                 if exc.msg:
                     emsg += ' %s' % exc.msg
         else:
@@ -1001,9 +1167,14 @@ class LogAdapter(logging.LoggerAdapter, object):
 
 class SwiftLogFormatter(logging.Formatter):
     """
-    Custom logging.Formatter will append txn_id to a log message if the record
-    has one and the message does not.
+    Custom logging.Formatter will append txn_id to a log message if the
+    record has one and the message does not. Optionally it can shorten
+    overly long log lines.
     """
+
+    def __init__(self, fmt=None, datefmt=None, max_line_length=0):
+        logging.Formatter.__init__(self, fmt=fmt, datefmt=datefmt)
+        self.max_line_length = max_line_length
 
     def format(self, record):
         if not hasattr(record, 'server'):
@@ -1036,6 +1207,12 @@ class SwiftLogFormatter(logging.Formatter):
                 record.levelno != logging.INFO and
                 record.client_ip not in msg):
             msg = "%s (client_ip: %s)" % (msg, record.client_ip)
+        if self.max_line_length > 0 and len(msg) > self.max_line_length:
+            if self.max_line_length < 7:
+                msg = msg[:self.max_line_length]
+            else:
+                approxhalf = (self.max_line_length - 5) / 2
+                msg = msg[:approxhalf] + " ... " + msg[-approxhalf:]
         return msg
 
 
@@ -1049,6 +1226,7 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
         log_facility = LOG_LOCAL0
         log_level = INFO
         log_name = swift
+        log_max_line_length = 0
         log_udp_host = (disabled)
         log_udp_port = logging.handlers.SYSLOG_UDP_PORT
         log_address = /dev/log
@@ -1074,7 +1252,8 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
     logger = logging.getLogger(log_route)
     logger.propagate = False
     # all new handlers will get the same formatter
-    formatter = SwiftLogFormatter(fmt)
+    formatter = SwiftLogFormatter(
+        fmt=fmt, max_line_length=int(conf.get('log_max_line_length', 0)))
 
     # get_logger will only ever add one SysLog Handler to a logger
     if not hasattr(get_logger, 'handler4logger'):
@@ -1376,7 +1555,7 @@ def hash_path(account, container=None, object=None, raw_digest=False):
 
 
 @contextmanager
-def lock_path(directory, timeout=10, timeout_class=LockTimeout):
+def lock_path(directory, timeout=10, timeout_class=None):
     """
     Context manager that acquires a lock on a directory.  This will block until
     the lock can be acquired, or the timeout time has expired (whichever occurs
@@ -1393,6 +1572,8 @@ def lock_path(directory, timeout=10, timeout_class=LockTimeout):
         constructed as timeout_class(timeout, lockpath). Default:
         LockTimeout
     """
+    if timeout_class is None:
+        timeout_class = swift.common.exceptions.LockTimeout
     mkdirs(directory)
     lockpath = '%s/.lock' % directory
     fd = os.open(lockpath, os.O_WRONLY | os.O_CREAT)
@@ -1432,7 +1613,7 @@ def lock_file(filename, timeout=10, append=False, unlink=True):
     fd = os.open(filename, flags)
     file_obj = os.fdopen(fd, mode)
     try:
-        with LockTimeout(timeout, filename):
+        with swift.common.exceptions.LockTimeout(timeout, filename):
             while True:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1513,7 +1694,7 @@ def unlink_older_than(path, mtime):
             pass
 
 
-def item_from_env(env, item_name):
+def item_from_env(env, item_name, allow_none=False):
     """
     Get a value from the wsgi environment
 
@@ -1523,12 +1704,12 @@ def item_from_env(env, item_name):
     :returns: the value from the environment
     """
     item = env.get(item_name, None)
-    if item is None:
-        logging.error("ERROR: %s could not be found in env!" % item_name)
+    if item is None and not allow_none:
+        logging.error("ERROR: %s could not be found in env!", item_name)
     return item
 
 
-def cache_from_env(env):
+def cache_from_env(env, allow_none=False):
     """
     Get memcache connection pool from the environment (which had been
     previously set by the memcache middleware
@@ -1537,7 +1718,7 @@ def cache_from_env(env):
 
     :returns: swift.common.memcached.MemcacheRing from environment
     """
-    return item_from_env(env, 'swift.cache')
+    return item_from_env(env, 'swift.cache', allow_none)
 
 
 def read_conf_dir(parser, conf_dir):
@@ -1622,7 +1803,7 @@ def write_pickle(obj, dest, tmp=None, pickle_protocol=0):
         renamer(tmppath, dest)
 
 
-def search_tree(root, glob_match, ext='', dir_ext=None):
+def search_tree(root, glob_match, ext='', exts=None, dir_ext=None):
     """Look in root, for any files/dirs matching glob, recursively traversing
     any found directories looking for files ending with ext
 
@@ -1636,6 +1817,7 @@ def search_tree(root, glob_match, ext='', dir_ext=None):
     :returns: list of full paths to matching files, sorted
 
     """
+    exts = exts or [ext]
     found_files = []
     for path in glob.glob(os.path.join(root, glob_match)):
         if os.path.isdir(path):
@@ -1645,7 +1827,7 @@ def search_tree(root, glob_match, ext='', dir_ext=None):
                     # the root is a config dir, descend no further
                     break
                 for file_ in files:
-                    if ext and not file_.endswith(ext):
+                    if any(exts) and not any(file_.endswith(e) for e in exts):
                         continue
                     found_files.append(os.path.join(root, file_))
                 found_dir = False
@@ -2358,6 +2540,93 @@ class InputProxy(object):
         return line
 
 
+class LRUCache(object):
+    """
+    Decorator for size/time bound memoization that evicts the least
+    recently used members.
+    """
+
+    PREV, NEXT, KEY, CACHED_AT, VALUE = 0, 1, 2, 3, 4  # link fields
+
+    def __init__(self, maxsize=1000, maxtime=3600):
+        self.maxsize = maxsize
+        self.maxtime = maxtime
+        self.reset()
+
+    def reset(self):
+        self.mapping = {}
+        self.head = [None, None, None, None, None]  # oldest
+        self.tail = [self.head, None, None, None, None]  # newest
+        self.head[self.NEXT] = self.tail
+
+    def set_cache(self, value, *key):
+        while len(self.mapping) >= self.maxsize:
+            old_next, old_key = self.head[self.NEXT][self.NEXT:self.NEXT + 2]
+            self.head[self.NEXT], old_next[self.PREV] = old_next, self.head
+            del self.mapping[old_key]
+        last = self.tail[self.PREV]
+        link = [last, self.tail, key, time.time(), value]
+        self.mapping[key] = last[self.NEXT] = self.tail[self.PREV] = link
+        return value
+
+    def get_cached(self, link, *key):
+        link_prev, link_next, key, cached_at, value = link
+        if cached_at + self.maxtime < time.time():
+            raise KeyError('%r has timed out' % (key,))
+        link_prev[self.NEXT] = link_next
+        link_next[self.PREV] = link_prev
+        last = self.tail[self.PREV]
+        last[self.NEXT] = self.tail[self.PREV] = link
+        link[self.PREV] = last
+        link[self.NEXT] = self.tail
+        return value
+
+    def __call__(self, f):
+
+        class LRUCacheWrapped(object):
+
+            @functools.wraps(f)
+            def __call__(im_self, *key):
+                link = self.mapping.get(key, self.head)
+                if link is not self.head:
+                    try:
+                        return self.get_cached(link, *key)
+                    except KeyError:
+                        pass
+                value = f(*key)
+                self.set_cache(value, *key)
+                return value
+
+            def size(im_self):
+                """
+                Return the size of the cache
+                """
+                return len(self.mapping)
+
+            def reset(im_self):
+                return self.reset()
+
+            def get_maxsize(im_self):
+                return self.maxsize
+
+            def set_maxsize(im_self, i):
+                self.maxsize = i
+
+            def get_maxtime(im_self):
+                return self.maxtime
+
+            def set_maxtime(im_self, i):
+                self.maxtime = i
+
+            maxsize = property(get_maxsize, set_maxsize)
+            maxtime = property(get_maxtime, set_maxtime)
+
+            def __repr__(im_self):
+                return '<%s %r>' % (im_self.__class__.__name__, f)
+
+        return LRUCacheWrapped()
+
+
 def tpool_reraise(func, *args, **kwargs):
     """
     Hack to work around Eventlet's tpool not catching and reraising Timeouts.
@@ -2634,6 +2903,14 @@ def override_bytes_from_content_type(listing_dict, logger=None):
         else:
             content_type += ';%s=%s' % (key, value)
     listing_dict['content_type'] = content_type
+
+
+def clean_content_type(value):
+    if ';' in value:
+        left, right = value.rsplit(';', 1)
+        if right.lstrip().startswith('swift_bytes='):
+            return left
+    return value
 
 
 def quote(value, safe='/'):

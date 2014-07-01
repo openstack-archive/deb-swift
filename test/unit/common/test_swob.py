@@ -15,14 +15,15 @@
 
 "Tests for swift.common.swob"
 
-import unittest
 import datetime
+import unittest
 import re
 import time
 from StringIO import StringIO
 from urllib import quote
 
 import swift.common.swob
+from swift.common import utils, exceptions
 
 
 class TestHeaderEnvironProxy(unittest.TestCase):
@@ -386,7 +387,7 @@ class TestRequest(unittest.TestCase):
         else:
             self.assert_(False, "invalid req_environ_property "
                          "didn't raise error!")
-        # non-existant attribute
+        # non-existent attribute
         try:
             swift.common.swob.Request.blank('/', params_cache={'a': 'b'})
         except TypeError as e:
@@ -463,6 +464,25 @@ class TestRequest(unittest.TestCase):
         req = swift.common.swob.Request.blank('/?a=b&c=d')
         self.assertEquals(req.params['a'], 'b')
         self.assertEquals(req.params['c'], 'd')
+
+    def test_timestamp_missing(self):
+        req = swift.common.swob.Request.blank('/')
+        self.assertRaises(exceptions.InvalidTimestamp,
+                          getattr, req, 'timestamp')
+
+    def test_timestamp_invalid(self):
+        req = swift.common.swob.Request.blank(
+            '/', headers={'X-Timestamp': 'asdf'})
+        self.assertRaises(exceptions.InvalidTimestamp,
+                          getattr, req, 'timestamp')
+
+    def test_timestamp(self):
+        req = swift.common.swob.Request.blank(
+            '/', headers={'X-Timestamp': '1402447134.13507_00000001'})
+        expected = utils.Timestamp('1402447134.13507', offset=1)
+        self.assertEqual(req.timestamp, expected)
+        self.assertEqual(req.timestamp.normal, expected.normal)
+        self.assertEqual(req.timestamp.internal, expected.internal)
 
     def test_path(self):
         req = swift.common.swob.Request.blank('/hi?a=b&c=d')
@@ -599,6 +619,28 @@ class TestRequest(unittest.TestCase):
         self.assertEquals(resp.status_int, 401)
         self.assert_('Www-Authenticate' in resp.headers)
         self.assertEquals('Me realm="whatever"',
+                          resp.headers['Www-Authenticate'])
+
+    def test_401_www_authenticate_is_quoted(self):
+
+        def test_app(environ, start_response):
+            start_response('401 Unauthorized', [])
+            return ['hi']
+
+        hacker = 'account-name\n\n<b>foo<br>'  # url injection test
+        quoted_hacker = quote(hacker)
+        req = swift.common.swob.Request.blank('/v1/' + hacker)
+        resp = req.get_response(test_app)
+        self.assertEquals(resp.status_int, 401)
+        self.assert_('Www-Authenticate' in resp.headers)
+        self.assertEquals('Swift realm="%s"' % quoted_hacker,
+                          resp.headers['Www-Authenticate'])
+
+        req = swift.common.swob.Request.blank('/v1/' + quoted_hacker)
+        resp = req.get_response(test_app)
+        self.assertEquals(resp.status_int, 401)
+        self.assert_('Www-Authenticate' in resp.headers)
+        self.assertEquals('Swift realm="%s"' % quoted_hacker,
                           resp.headers['Www-Authenticate'])
 
     def test_not_401(self):
@@ -1449,6 +1491,142 @@ class TestConditionalIfMatch(unittest.TestCase):
         body = ''.join(resp(req.environ, self.fake_start_response))
         self.assertEquals(resp.status_int, 412)
         self.assertEquals(body, '')
+
+
+class TestConditionalIfModifiedSince(unittest.TestCase):
+    def fake_app(self, environ, start_response):
+        start_response(
+            '200 OK', [('Last-Modified', 'Thu, 27 Feb 2014 03:29:37 GMT')])
+        return ['hi']
+
+    def fake_start_response(*a, **kw):
+        pass
+
+    def test_absent(self):
+        req = swift.common.swob.Request.blank('/')
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_before(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Modified-Since': 'Thu, 27 Feb 2014 03:29:36 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_same(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Modified-Since': 'Thu, 27 Feb 2014 03:29:37 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(body, '')
+
+    def test_greater(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Modified-Since': 'Thu, 27 Feb 2014 03:29:38 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 304)
+        self.assertEquals(body, '')
+
+    def test_out_of_range_is_ignored(self):
+        # All that datetime gives us is a ValueError or OverflowError when
+        # something is out of range (i.e. less than datetime.datetime.min or
+        # greater than datetime.datetime.max). Unfortunately, we can't
+        # distinguish between a date being too old and a date being too new,
+        # so the best we can do is ignore such headers.
+        max_date_list = list(datetime.datetime.max.timetuple())
+        max_date_list[0] += 1  # bump up the year
+        too_big_date_header = time.strftime(
+            "%a, %d %b %Y %H:%M:%S GMT", time.struct_time(max_date_list))
+
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Modified-Since': too_big_date_header})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+
+class TestConditionalIfUnmodifiedSince(unittest.TestCase):
+    def fake_app(self, environ, start_response):
+        start_response(
+            '200 OK', [('Last-Modified', 'Thu, 20 Feb 2014 03:29:37 GMT')])
+        return ['hi']
+
+    def fake_start_response(*a, **kw):
+        pass
+
+    def test_absent(self):
+        req = swift.common.swob.Request.blank('/')
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_before(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Unmodified-Since': 'Thu, 20 Feb 2014 03:29:36 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 412)
+        self.assertEquals(body, '')
+
+    def test_same(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Unmodified-Since': 'Thu, 20 Feb 2014 03:29:37 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_greater(self):
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Unmodified-Since': 'Thu, 20 Feb 2014 03:29:38 GMT'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
+    def test_out_of_range_is_ignored(self):
+        # All that datetime gives us is a ValueError or OverflowError when
+        # something is out of range (i.e. less than datetime.datetime.min or
+        # greater than datetime.datetime.max). Unfortunately, we can't
+        # distinguish between a date being too old and a date being too new,
+        # so the best we can do is ignore such headers.
+        max_date_list = list(datetime.datetime.max.timetuple())
+        max_date_list[0] += 1  # bump up the year
+        too_big_date_header = time.strftime(
+            "%a, %d %b %Y %H:%M:%S GMT", time.struct_time(max_date_list))
+
+        req = swift.common.swob.Request.blank(
+            '/',
+            headers={'If-Unmodified-Since': too_big_date_header})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
 
 
 if __name__ == '__main__':

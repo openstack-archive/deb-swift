@@ -20,13 +20,14 @@ import struct
 from sys import exc_info
 import zlib
 from swift import gettext_ as _
+from time import gmtime, strftime, time
 import urlparse
 from zlib import compressobj
 
 from swift.common.utils import quote
 from swift.common.http import HTTP_NOT_FOUND
 from swift.common.swob import Request
-from swift.common.wsgi import loadapp
+from swift.common.wsgi import loadapp, pipeline_property
 
 
 class UnexpectedResponse(Exception):
@@ -89,15 +90,15 @@ class CompressingFileReader(object):
             return ''
         x = self._f.read(*a, **kw)
         if x:
-            self.crc32 = zlib.crc32(x, self.crc32) & 0xffffffffL
+            self.crc32 = zlib.crc32(x, self.crc32) & 0xffffffff
             self.total_size += len(x)
             compressed = self._compressor.compress(x)
             if not compressed:
                 compressed = self._compressor.flush(zlib.Z_SYNC_FLUSH)
         else:
             compressed = self._compressor.flush(zlib.Z_FINISH)
-            crc32 = struct.pack("<L", self.crc32 & 0xffffffffL)
-            size = struct.pack("<L", self.total_size & 0xffffffffL)
+            crc32 = struct.pack("<L", self.crc32 & 0xffffffff)
+            size = struct.pack("<L", self.total_size & 0xffffffff)
             footer = crc32 + size
             compressed += footer
             self.done = True
@@ -140,6 +141,12 @@ class InternalClient(object):
                            allow_modify_pipeline=allow_modify_pipeline)
         self.user_agent = user_agent
         self.request_tries = request_tries
+
+    get_object_ring = pipeline_property('get_object_ring')
+    container_ring = pipeline_property('container_ring')
+    account_ring = pipeline_property('account_ring')
+    auto_create_account_prefix = pipeline_property(
+        'auto_create_account_prefix', default='.')
 
     def make_request(
             self, method, path, headers, acceptable_statuses, body_file=None):
@@ -189,7 +196,8 @@ class InternalClient(object):
             raise exc_type(*exc_value.args), None, exc_traceback
 
     def _get_metadata(
-            self, path, metadata_prefix='', acceptable_statuses=(2,)):
+            self, path, metadata_prefix='', acceptable_statuses=(2,),
+            headers=None):
         """
         Gets metadata by doing a HEAD on a path and using the metadata_prefix
         to get values from the headers returned.
@@ -200,6 +208,7 @@ class InternalClient(object):
                                 keys in the dict returned.  Defaults to ''.
         :param acceptable_statuses: List of status for valid responses,
                                     defaults to (2,).
+        :param headers: extra headers to send
 
         :returns : A dict of metadata with metadata_prefix stripped from keys.
                    Keys will be lowercase.
@@ -210,9 +219,8 @@ class InternalClient(object):
                            unexpected way.
         """
 
-        resp = self.make_request('HEAD', path, {}, acceptable_statuses)
-        if not resp.status_int // 100 == 2:
-            return {}
+        headers = headers or {}
+        resp = self.make_request('HEAD', path, headers, acceptable_statuses)
         metadata_prefix = metadata_prefix.lower()
         metadata = {}
         for k, v in resp.headers.iteritems():
@@ -543,7 +551,8 @@ class InternalClient(object):
 
     def delete_object(
             self, account, container, obj,
-            acceptable_statuses=(2, HTTP_NOT_FOUND)):
+            acceptable_statuses=(2, HTTP_NOT_FOUND),
+            headers=None):
         """
         Deletes an object.
 
@@ -552,6 +561,7 @@ class InternalClient(object):
         :param obj: The object.
         :param acceptable_statuses: List of status for valid responses,
                                     defaults to (2, HTTP_NOT_FOUND).
+        :param headers: extra headers to send with request
 
         :raises UnexpectedResponse: Exception raised when requests fail
                                     to get a response with an acceptable status
@@ -560,11 +570,11 @@ class InternalClient(object):
         """
 
         path = self.make_path(account, container, obj)
-        self.make_request('DELETE', path, {}, acceptable_statuses)
+        self.make_request('DELETE', path, (headers or {}), acceptable_statuses)
 
     def get_object_metadata(
             self, account, container, obj, metadata_prefix='',
-            acceptable_statuses=(2,)):
+            acceptable_statuses=(2,), headers=None):
         """
         Gets object metadata.
 
@@ -576,6 +586,7 @@ class InternalClient(object):
                                 keys in the dict returned.  Defaults to ''.
         :param acceptable_statuses: List of status for valid responses,
                                     defaults to (2,).
+        :param headers: extra headers to send with request
 
         :returns : Dict of object metadata.
 
@@ -586,7 +597,19 @@ class InternalClient(object):
         """
 
         path = self.make_path(account, container, obj)
-        return self._get_metadata(path, metadata_prefix, acceptable_statuses)
+        return self._get_metadata(path, metadata_prefix, acceptable_statuses,
+                                  headers=headers)
+
+    def get_object(self, account, container, obj, headers,
+                   acceptable_statuses=(2,)):
+        """
+        Returns a 3-tuple (status, headers, iterator of object body)
+        """
+
+        headers = headers or {}
+        path = self.make_path(account, container, obj)
+        resp = self.make_request('GET', path, headers, acceptable_statuses)
+        return (resp.status_int, resp.headers, resp.app_iter)
 
     def iter_object_lines(
             self, account, container, obj, headers=None,
@@ -678,7 +701,8 @@ class InternalClient(object):
         """
 
         headers = dict(headers or {})
-        headers['Transfer-Encoding'] = 'chunked'
+        if 'Content-Length' not in headers:
+            headers['Transfer-Encoding'] = 'chunked'
         path = self.make_path(account, container, obj)
         self.make_request('PUT', path, headers, (2,), fobj)
 
@@ -710,9 +734,14 @@ class SimpleClient(object):
         self.retries = retries
 
     def base_request(self, method, container=None, name=None, prefix=None,
-                     headers={}, proxy=None, contents=None, full_listing=None):
+                     headers=None, proxy=None, contents=None,
+                     full_listing=None, logger=None, additional_info=None):
         # Common request method
+        trans_start = time()
         url = self.url
+
+        if headers is None:
+            headers = {}
 
         if self.token:
             headers['X-Auth-Token'] = self.token
@@ -722,11 +751,10 @@ class SimpleClient(object):
 
         if name:
             url = '%s/%s' % (url.rstrip('/'), quote(name))
-
-        url += '?format=json'
-
-        if prefix:
-            url += '&prefix=%s' % prefix
+        else:
+            url += '?format=json'
+            if prefix:
+                url += '&prefix=%s' % prefix
 
         if proxy:
             proxy = urlparse.urlparse(proxy)
@@ -743,6 +771,31 @@ class SimpleClient(object):
             body_data = json.loads(body)
         except ValueError:
             body_data = None
+        trans_stop = time()
+        if logger:
+            sent_content_length = 0
+            for n, v in headers.items():
+                nl = n.lower()
+                if nl == 'content-length':
+                    try:
+                        sent_content_length = int(v)
+                        break
+                    except ValueError:
+                        pass
+            logger.debug("-> " + " ".join(
+                quote(str(x) if x else "-", ":/")
+                for x in (
+                    strftime('%Y-%m-%dT%H:%M:%S', gmtime(trans_stop)),
+                    method,
+                    url,
+                    conn.getcode(),
+                    sent_content_length,
+                    conn.info()['content-length'],
+                    trans_start,
+                    trans_stop,
+                    trans_stop - trans_start,
+                    additional_info
+                )))
         return [None, body_data]
 
     def retry_request(self, method, **kwargs):

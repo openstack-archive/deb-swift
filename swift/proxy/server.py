@@ -25,6 +25,7 @@ from eventlet import Timeout
 
 from swift import __canonical_version__ as swift_version
 from swift.common import constraints
+from swift.common.storage_policy import POLICIES
 from swift.common.ring import Ring
 from swift.common.utils import cache_from_env, get_logger, \
     get_remote_client, split_path, config_true_value, generate_trans_id, \
@@ -56,17 +57,18 @@ required_filters = [
     {'name': 'catch_errors'},
     {'name': 'gatekeeper',
      'after_fn': lambda pipe: (['catch_errors']
-                               if pipe.startswith("catch_errors")
+                               if pipe.startswith('catch_errors')
                                else [])},
-    {'name': 'dlo', 'after_fn': lambda _junk: ['catch_errors', 'gatekeeper',
-                                               'proxy_logging']}]
+    {'name': 'dlo', 'after_fn': lambda _junk: [
+        'staticweb', 'tempauth', 'keystoneauth',
+        'catch_errors', 'gatekeeper', 'proxy_logging']}]
 
 
 class Application(object):
     """WSGI application for the proxy server."""
 
     def __init__(self, conf, memcache=None, logger=None, account_ring=None,
-                 container_ring=None, object_ring=None):
+                 container_ring=None):
         if conf is None:
             conf = {}
         if logger is None:
@@ -75,6 +77,7 @@ class Application(object):
             self.logger = logger
 
         swift_dir = conf.get('swift_dir', '/etc/swift')
+        self.swift_dir = swift_dir
         self.node_timeout = int(conf.get('node_timeout', 10))
         self.recoverable_node_timeout = int(
             conf.get('recoverable_node_timeout', self.node_timeout))
@@ -97,18 +100,21 @@ class Application(object):
             config_true_value(conf.get('allow_account_management', 'no'))
         self.object_post_as_copy = \
             config_true_value(conf.get('object_post_as_copy', 'true'))
-        self.object_ring = object_ring or Ring(swift_dir, ring_name='object')
         self.container_ring = container_ring or Ring(swift_dir,
                                                      ring_name='container')
         self.account_ring = account_ring or Ring(swift_dir,
                                                  ring_name='account')
+        # ensure rings are loaded for all configured storage policies
+        for policy in POLICIES:
+            policy.load_ring(swift_dir)
         self.memcache = memcache
         mimetypes.init(mimetypes.knownfiles +
                        [os.path.join(swift_dir, 'mime.types')])
         self.account_autocreate = \
             config_true_value(conf.get('account_autocreate', 'no'))
-        self.expiring_objects_account = \
-            (conf.get('auto_create_account_prefix') or '.') + \
+        self.auto_create_account_prefix = (
+            conf.get('auto_create_account_prefix') or '.')
+        self.expiring_objects_account = self.auto_create_account_prefix + \
             (conf.get('expiring_objects_account_name') or 'expiring_objects')
         self.expiring_objects_container_divisor = \
             int(conf.get('expiring_objects_container_divisor') or 86400)
@@ -139,11 +145,11 @@ class Application(object):
             conf.get('max_large_object_get_time', '86400'))
         value = conf.get('request_node_count', '2 * replicas').lower().split()
         if len(value) == 1:
-            value = int(value[0])
-            self.request_node_count = lambda replicas: value
+            rnc_value = int(value[0])
+            self.request_node_count = lambda replicas: rnc_value
         elif len(value) == 3 and value[1] == '*' and value[2] == 'replicas':
-            value = int(value[0])
-            self.request_node_count = lambda replicas: value * replicas
+            rnc_value = int(value[0])
+            self.request_node_count = lambda replicas: rnc_value * replicas
         else:
             raise ValueError(
                 'Invalid request_node_count value: %r' % ''.join(value))
@@ -165,11 +171,12 @@ class Application(object):
         value = conf.get('write_affinity_node_count',
                          '2 * replicas').lower().split()
         if len(value) == 1:
-            value = int(value[0])
-            self.write_affinity_node_count = lambda replicas: value
+            wanc_value = int(value[0])
+            self.write_affinity_node_count = lambda replicas: wanc_value
         elif len(value) == 3 and value[1] == '*' and value[2] == 'replicas':
-            value = int(value[0])
-            self.write_affinity_node_count = lambda replicas: value * replicas
+            wanc_value = int(value[0])
+            self.write_affinity_node_count = \
+                lambda replicas: wanc_value * replicas
         else:
             raise ValueError(
                 'Invalid write_affinity_node_count value: %r' % ''.join(value))
@@ -204,16 +211,9 @@ class Application(object):
         self.admin_key = conf.get('admin_key', None)
         register_swift_info(
             version=swift_version,
-            max_file_size=constraints.MAX_FILE_SIZE,
-            max_meta_name_length=constraints.MAX_META_NAME_LENGTH,
-            max_meta_value_length=constraints.MAX_META_VALUE_LENGTH,
-            max_meta_count=constraints.MAX_META_COUNT,
-            account_listing_limit=constraints.ACCOUNT_LISTING_LIMIT,
-            container_listing_limit=constraints.CONTAINER_LISTING_LIMIT,
-            max_account_name_length=constraints.MAX_ACCOUNT_NAME_LENGTH,
-            max_container_name_length=constraints.MAX_CONTAINER_NAME_LENGTH,
-            max_object_name_length=constraints.MAX_OBJECT_NAME_LENGTH,
-            strict_cors_mode=self.strict_cors_mode)
+            strict_cors_mode=self.strict_cors_mode,
+            policies=POLICIES.get_policy_info(),
+            **constraints.EFFECTIVE_CONSTRAINTS)
 
     def check_config(self):
         """
@@ -223,6 +223,16 @@ class Application(object):
             self.logger.warn("sorting_method is set to '%s', not 'affinity'; "
                              "read_affinity setting will have no effect." %
                              self.sorting_method)
+
+    def get_object_ring(self, policy_idx):
+        """
+        Get the ring object to use to handle a request based on its policy.
+
+        :param policy_idx: policy index as defined in swift.conf
+
+        :returns: appropriate ring object
+        """
+        return POLICIES.get_object_ring(policy_idx, self.swift_dir)
 
     def get_controller(self, path):
         """
@@ -263,7 +273,7 @@ class Application(object):
         """
         try:
             if self.memcache is None:
-                self.memcache = cache_from_env(env)
+                self.memcache = cache_from_env(env, True)
             req = self.update_request(Request(env))
             return self.handle_request(req)(env, start_response)
         except UnicodeError:
@@ -325,7 +335,11 @@ class Application(object):
             controller = controller(self, **path_parts)
             if 'swift.trans_id' not in req.environ:
                 # if this wasn't set by an earlier middleware, set it now
-                trans_id = generate_trans_id(self.trans_id_suffix)
+                trans_id_suffix = self.trans_id_suffix
+                trans_id_extra = req.headers.get('x-trans-id-extra')
+                if trans_id_extra:
+                    trans_id_suffix += '-' + trans_id_extra[:32]
+                trans_id = generate_trans_id(trans_id_suffix)
                 req.environ['swift.trans_id'] = trans_id
                 self.logger.txn_id = trans_id
             req.headers['x-trans-id'] = req.environ['swift.trans_id']

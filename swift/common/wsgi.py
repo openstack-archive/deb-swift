@@ -16,7 +16,6 @@
 """WSGI tools for use with swift."""
 
 import errno
-import inspect
 import os
 import signal
 import time
@@ -202,6 +201,47 @@ class RestrictedGreenPool(GreenPool):
             self.waitall()
 
 
+def pipeline_property(name, **kwargs):
+    """
+    Create a property accessor for the given name.  The property will
+    dig through the bound instance on which it was accessed for an
+    attribute "app" and check that object for an attribute of the given
+    name.  If the "app" object does not have such an attribute, it will
+    look for an attribute "app" on THAT object and continue it's search
+    from there.  If the named attribute cannot be found accessing the
+    property will raise AttributeError.
+
+    If a default kwarg is provided you get that instead of the
+    AttributeError.  When found the attribute will be cached on instance
+    with the property accessor using the same name as the attribute
+    prefixed with a leading underscore.
+    """
+
+    cache_attr_name = '_%s' % name
+
+    def getter(self):
+        cached_value = getattr(self, cache_attr_name, None)
+        if cached_value:
+            return cached_value
+        app = self  # first app is on self
+        while True:
+            app = getattr(app, 'app', None)
+            if not app:
+                break
+            try:
+                value = getattr(app, name)
+            except AttributeError:
+                continue
+            setattr(self, cache_attr_name, value)
+            return value
+        if 'default' in kwargs:
+            return kwargs['default']
+        raise AttributeError('No apps in pipeline have a '
+                             '%s attribute' % name)
+
+    return property(getter)
+
+
 class PipelineWrapper(object):
     """
     This class provides a number of utility methods for
@@ -234,26 +274,11 @@ class PipelineWrapper(object):
         return first_ctx.entry_point_name == entry_point_name
 
     def _format_for_display(self, ctx):
-        if ctx.entry_point_name:
-            return ctx.entry_point_name
-        elif inspect.isfunction(ctx.object):
-            # ctx.object is a reference to the actual filter_factory
-            # function, so we pretty-print that. It's not the nice short
-            # entry point, but it beats "<unknown>".
-            #
-            # These happen when, instead of something like
-            #
-            #    use = egg:swift#healthcheck
-            #
-            # you have something like this:
-            #
-            #    paste.filter_factory = \
-            #        swift.common.middleware.healthcheck:filter_factory
-            return "%s:%s" % (inspect.getmodule(ctx.object).__name__,
-                              ctx.object.__name__)
-        else:
-            # No idea what this is
-            return "<unknown context>"
+        # Contexts specified by pipeline= have .name set in NamedConfigLoader.
+        if hasattr(ctx, 'name'):
+            return ctx.name
+        # This should not happen: a foreign context. Let's not crash.
+        return "<unknown>"
 
     def __str__(self):
         parts = [self._format_for_display(ctx)
@@ -274,6 +299,7 @@ class PipelineWrapper(object):
         ctx = loadwsgi.loadcontext(loadwsgi.FILTER, spec,
                                    global_conf=self.context.global_conf)
         ctx.protocol = 'paste.filter_factory'
+        ctx.name = entry_point_name
         return ctx
 
     def index(self, entry_point_name):
@@ -305,6 +331,13 @@ def loadcontext(object_type, uri, name=None, relative_to=None,
     return loadwsgi.loadcontext(object_type, add_conf_type(uri), name=name,
                                 relative_to=relative_to,
                                 global_conf=global_conf)
+
+
+def _add_pipeline_properties(app, *names):
+    for property_name in names:
+        if not hasattr(app, property_name):
+            setattr(app.__class__, property_name,
+                    pipeline_property(property_name))
 
 
 def loadapp(conf_file, global_conf=None, allow_modify_pipeline=True):

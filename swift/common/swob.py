@@ -49,7 +49,8 @@ import random
 import functools
 import inspect
 
-from swift.common.utils import reiterate, split_path
+from swift.common.utils import reiterate, split_path, Timestamp
+from swift.common.exceptions import InvalidTimestamp
 
 
 RESPONSE_REASONS = {
@@ -762,6 +763,7 @@ class Request(object):
     body = _req_body_property()
     charset = None
     _params_cache = None
+    _timestamp = None
     acl = _req_environ_property('swob.ACL')
 
     def __init__(self, environ):
@@ -842,6 +844,22 @@ class Request(object):
                 self._params_cache = {}
         return self._params_cache
     str_params = params
+
+    @property
+    def timestamp(self):
+        """
+        Provides HTTP_X_TIMESTAMP as a :class:`~swift.common.utils.Timestamp`
+        """
+        if self._timestamp is None:
+            try:
+                raw_timestamp = self.environ['HTTP_X_TIMESTAMP']
+            except KeyError:
+                raise InvalidTimestamp('Missing X-Timestamp header')
+            try:
+                self._timestamp = Timestamp(raw_timestamp)
+            except ValueError:
+                raise InvalidTimestamp('Invalid X-Timestamp header')
+        return self._timestamp
 
     @property
     def path_qs(self):
@@ -953,7 +971,7 @@ class Request(object):
         :param rest_with_last: If True, trailing data will be returned as part
                                of last segment.  If False, and there is
                                trailing data, raises ValueError.
-        :returns: list of segments with a length of maxsegs (non-existant
+        :returns: list of segments with a length of maxsegs (non-existent
                   segments will return as None)
         :raises: ValueError if given an invalid path
         """
@@ -1117,6 +1135,18 @@ class Response(object):
                 self.content_length = 0
                 return ['']
 
+            if self.last_modified and self.request.if_modified_since \
+               and self.last_modified <= self.request.if_modified_since:
+                self.status = 304
+                self.content_length = 0
+                return ['']
+
+            if self.last_modified and self.request.if_unmodified_since \
+               and self.last_modified > self.request.if_unmodified_since:
+                self.status = 412
+                self.content_length = 0
+                return ['']
+
         if self.request and self.request.method == 'HEAD':
             # We explicitly do NOT want to set self.content_length to 0 here
             return ['']
@@ -1203,7 +1233,7 @@ class Response(object):
                 realm = 'unknown'
         except (AttributeError, ValueError):
             realm = 'unknown'
-        return 'Swift realm="%s"' % realm
+        return 'Swift realm="%s"' % urllib2.quote(realm)
 
     @property
     def is_success(self):

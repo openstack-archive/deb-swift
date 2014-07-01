@@ -19,7 +19,8 @@ from swift import gettext_ as _
 
 from swift import __version__ as swiftver
 from swift.common.swob import Request, Response
-from swift.common.utils import get_logger, config_true_value, json
+from swift.common.utils import get_logger, config_true_value, json, \
+    SWIFT_CONF_FILE
 from swift.common.constraints import check_mount
 from resource import getpagesize
 from hashlib import md5
@@ -54,9 +55,11 @@ class ReconMiddleware(object):
                                                 'account.recon')
         self.account_ring_path = os.path.join(swift_dir, 'account.ring.gz')
         self.container_ring_path = os.path.join(swift_dir, 'container.ring.gz')
-        self.object_ring_path = os.path.join(swift_dir, 'object.ring.gz')
-        self.rings = [self.account_ring_path, self.container_ring_path,
-                      self.object_ring_path]
+        self.rings = [self.account_ring_path, self.container_ring_path]
+        # include all object ring files (for all policies)
+        for f in os.listdir(swift_dir):
+            if f.startswith('object') and f.endswith('ring.gz'):
+                self.rings.append(os.path.join(swift_dir, f))
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
 
     def _from_recon_cache(self, cache_keys, cache_file, openr=open):
@@ -244,6 +247,23 @@ class ReconMiddleware(object):
                         self.logger.exception(_('Error reading ringfile'))
         return sums
 
+    def get_swift_conf_md5(self, openr=open):
+        """get md5 of swift.conf"""
+        md5sum = md5()
+        try:
+            with openr(SWIFT_CONF_FILE, 'r') as fh:
+                chunk = fh.read(4096)
+                while chunk:
+                    md5sum.update(chunk)
+                    chunk = fh.read(4096)
+        except IOError as err:
+            if err.errno != errno.ENOENT:
+                self.logger.exception(_('Error reading swift.conf'))
+            hexsum = None
+        else:
+            hexsum = md5sum.hexdigest()
+        return {SWIFT_CONF_FILE: hexsum}
+
     def get_quarantine_count(self):
         """get obj/container/account quarantine counts"""
         qcounts = {"objects": 0, "containers": 0, "accounts": 0}
@@ -318,6 +338,8 @@ class ReconMiddleware(object):
             content = self.get_diskusage()
         elif rcheck == "ringmd5":
             content = self.get_ring_md5()
+        elif rcheck == "swiftconfmd5":
+            content = self.get_swift_conf_md5()
         elif rcheck == "quarantined":
             content = self.get_quarantine_count()
         elif rcheck == "sockstat":

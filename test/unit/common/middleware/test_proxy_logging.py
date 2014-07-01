@@ -23,11 +23,15 @@ from test.unit import FakeLogger
 from swift.common.utils import get_logger
 from swift.common.middleware import proxy_logging
 from swift.common.swob import Request, Response
+from swift.common import constraints
 
 
 class FakeApp(object):
 
-    def __init__(self, body=['FAKE APP'], response_str='200 OK'):
+    def __init__(self, body=None, response_str='200 OK'):
+        if body is None:
+            body = ['FAKE APP']
+
         self.body = body
         self.response_str = response_str
 
@@ -48,7 +52,10 @@ class FakeAppThatExcepts(object):
 
 class FakeAppNoContentLengthNoTransferEncoding(object):
 
-    def __init__(self, body=['FAKE APP']):
+    def __init__(self, body=None):
+        if body is None:
+            body = ['FAKE APP']
+
         self.body = body
 
     def __call__(self, env, start_response):
@@ -652,7 +659,7 @@ class TestProxyLogging(unittest.TestCase):
     def test_log_auth_token(self):
         auth_token = 'b05bf940-0464-4c0e-8c70-87717d2d73e8'
 
-        # Default - no reveal_sensitive_prefix in config
+        # Default - reveal_sensitive_prefix is 16
         # No x-auth-token header
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {})
         app.access_logger = FakeLogger()
@@ -669,7 +676,7 @@ class TestProxyLogging(unittest.TestCase):
         resp = app(req.environ, start_response)
         resp_body = ''.join(resp)
         log_parts = self._log_parts(app)
-        self.assertEquals(log_parts[9], auth_token)
+        self.assertEquals(log_parts[9], 'b05bf940-0464-4c...')
 
         # Truncate to first 8 characters
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {
@@ -693,6 +700,17 @@ class TestProxyLogging(unittest.TestCase):
         # Token length and reveal_sensitive_prefix are same (no truncate)
         app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {
             'reveal_sensitive_prefix': str(len(auth_token))})
+        app.access_logger = FakeLogger()
+        req = Request.blank('/', environ={'REQUEST_METHOD': 'GET',
+                                          'HTTP_X_AUTH_TOKEN': auth_token})
+        resp = app(req.environ, start_response)
+        resp_body = ''.join(resp)
+        log_parts = self._log_parts(app)
+        self.assertEquals(log_parts[9], auth_token)
+
+        # No effective limit on auth token
+        app = proxy_logging.ProxyLoggingMiddleware(FakeApp(), {
+            'reveal_sensitive_prefix': constraints.MAX_HEADER_SIZE})
         app.access_logger = FakeLogger()
         req = Request.blank('/', environ={'REQUEST_METHOD': 'GET',
                                           'HTTP_X_AUTH_TOKEN': auth_token})
