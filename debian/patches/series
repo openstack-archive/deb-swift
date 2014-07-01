@@ -1,2 +1,1 @@
 fix-doc-no-network.patch
-CVE-2014-3497_properly_quote_www-authenticate_header_value.patch
