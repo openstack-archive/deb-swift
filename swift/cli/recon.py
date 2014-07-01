@@ -572,24 +572,6 @@ class SwiftRecon(object):
             if k == key:
                 yield v
 
-    def nested_get_value(self, key, recon_entry):
-        """
-        Generator that yields all values for given key in a recon cache entry.
-        This is for use with object auditor recon cache entries.  If the
-        object auditor has run in 'once' mode with a subset of devices
-        specified the checksum auditor section will have an entry of the form:
-           {'object_auditor_stats_ALL': { 'disk1disk2diskN': {..}}
-        The same is true of the ZBF auditor cache entry section.  We use this
-        generator to find all instances of a particular key in these multi-
-        level dictionaries.
-        """
-        for k, v in recon_entry.items():
-            if isinstance(v, dict):
-                for value in self.nested_get_value(key, v):
-                    yield value
-            if k == key:
-                yield v
-
     def object_auditor_check(self, hosts):
         """
         Obtain and print obj auditor statistics

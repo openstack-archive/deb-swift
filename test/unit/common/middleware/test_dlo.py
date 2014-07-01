@@ -33,10 +33,6 @@ def md5hex(s):
     return hashlib.md5(s).hexdigest()
 
 
-def md5hex(s):
-    return hashlib.md5(s).hexdigest()
-
-
 class DloTestCase(unittest.TestCase):
     def call_dlo(self, req, app=None, expect_exception=False):
         if app is None:
