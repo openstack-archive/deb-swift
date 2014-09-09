@@ -3,7 +3,11 @@ swift (2.0.0~rc1-1) experimental; urgency=medium
   * New upstream release.
   * Removed CVE-2014-3497_properly_quote_www-authenticate_header_value.patch
     applied upstream.
-  * Added new command lines into packages.
+  * Added new command lines into packages:
+    - usr/bin/swift-container-info
+    - usr/bin/swift-container-reconciler
+    - usr/bin/swift-reconciler-enqueue
+    - usr/bin/swift-account-info
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 01 Jul 2014 19:31:22 +0800
 
