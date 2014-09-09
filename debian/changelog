@@ -1,4 +1,4 @@
-swift (2.0.0~rc1-1) experimental; urgency=medium
+swift (2.1.0-1) unstable; urgency=medium
 
   * New upstream release.
   * Removed CVE-2014-3497_properly_quote_www-authenticate_header_value.patch
