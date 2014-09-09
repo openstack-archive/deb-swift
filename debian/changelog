@@ -8,6 +8,7 @@ swift (2.0.0~rc1-1) experimental; urgency=medium
     - usr/bin/swift-container-reconciler
     - usr/bin/swift-reconciler-enqueue
     - usr/bin/swift-account-info
+  * Added new package (+init script): swift-account-expirer (Closes: #760363).
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 01 Jul 2014 19:31:22 +0800
 

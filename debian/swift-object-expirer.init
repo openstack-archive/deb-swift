@@ -1,0 +1,46 @@
+#! /bin/sh
+### BEGIN INIT INFO
+# Provides:          swift-object-expirer
+# Required-Start:    $remote_fs
+# Required-Stop:     $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Swift object server expirer
+# Description:       Object expirer daemon for swift.
+### END INIT INFO
+
+SERVICE_NAME="object-server-expirer"
+PRINT_NAME="object expirer daemon"
+
+. /lib/lsb/init-functions
+
+if ! [ -x /usr/bin/swift-init ] ; then
+	exit 0
+fi
+  
+case "$1" in
+start)
+	log_daemon_msg "Starting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
+	/usr/bin/swift-init ${SERVICE_NAME} start
+	log_end_msg $?
+;;
+stop)
+	log_daemon_msg "Stopping Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
+	/usr/bin/swift-init ${SERVICE_NAME} stop
+	log_end_msg $?
+;;
+restart|force-reload|reload)
+	$0 stop
+	sleep 1
+	$0 start
+;;
+status)
+	exec /usr/bin/swift-init ${SERVICE_NAME} status
+;;
+*)
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1
+;;
+esac
+
+exit 0
