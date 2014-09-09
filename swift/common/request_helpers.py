@@ -30,7 +30,6 @@ from swift.common.exceptions import ListingIterError, SegmentError
 from swift.common.http import is_success, HTTP_SERVICE_UNAVAILABLE
 from swift.common.swob import HTTPBadRequest, HTTPNotAcceptable
 from swift.common.utils import split_path, validate_device_partition
-from swift.common.storage_policy import POLICY_INDEX
 from swift.common.wsgi import make_subrequest
 
 
@@ -91,7 +90,7 @@ def get_name_and_placement(request, minsegs=1, maxsegs=None,
               storage_policy_index appended on the end
     :raises: HTTPBadRequest
     """
-    policy_idx = request.headers.get(POLICY_INDEX, '0')
+    policy_idx = request.headers.get('X-Backend-Storage-Policy-Index', '0')
     policy_idx = int(policy_idx)
     results = split_and_validate_path(request, minsegs=minsegs,
                                       maxsegs=maxsegs,
@@ -224,6 +223,21 @@ def remove_items(headers, condition):
     keys = filter(condition, headers)
     removed.update((key, headers.pop(key)) for key in keys)
     return removed
+
+
+def copy_header_subset(from_r, to_r, condition):
+    """
+    Will copy desired subset of headers from from_r to to_r.
+
+    :param from_r: a swob Request or Response
+    :param to_r: a swob Request or Response
+    :param condition: a function that will be passed the header key as a
+                      single argument and should return True if the header
+                      is to be copied.
+    """
+    for k, v in from_r.headers.items():
+        if condition(k):
+            to_r.headers[k] = v
 
 
 def close_if_possible(maybe_closable):

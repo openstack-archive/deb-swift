@@ -40,8 +40,7 @@ import swift.container.server as container_server
 import swift.account.server as account_server
 from swift.common.swob import Request
 from swift.common import wsgi, utils
-from swift.common.storage_policy import StoragePolicy, \
-    StoragePolicyCollection
+from swift.common.storage_policy import POLICIES
 
 from test.unit import temptree, with_tempdir, write_fake_ring, patch_policies
 
@@ -51,16 +50,15 @@ from paste.deploy import loadwsgi
 def _fake_rings(tmpdir):
     write_fake_ring(os.path.join(tmpdir, 'account.ring.gz'))
     write_fake_ring(os.path.join(tmpdir, 'container.ring.gz'))
-    # Some storage-policy-specific fake rings.
-    policy = [StoragePolicy(0, 'zero'),
-              StoragePolicy(1, 'one', is_default=True)]
-    policies = StoragePolicyCollection(policy)
-    for pol in policies:
+    for policy in POLICIES:
         obj_ring_path = \
-            os.path.join(tmpdir, pol.ring_name + '.ring.gz')
+            os.path.join(tmpdir, policy.ring_name + '.ring.gz')
         write_fake_ring(obj_ring_path)
+        # make sure there's no other ring cached on this policy
+        policy.object_ring = None
 
 
+@patch_policies
 class TestWSGI(unittest.TestCase):
     """Tests for swift.common.wsgi"""
 
@@ -335,10 +333,11 @@ class TestWSGI(unittest.TestCase):
                             'modify_wsgi_pipeline'):
                 with mock.patch('swift.common.wsgi.wsgi') as _wsgi:
                     with mock.patch('swift.common.wsgi.eventlet') as _eventlet:
-                        conf = wsgi.appconfig(conf_file)
-                        logger = logging.getLogger('test')
-                        sock = listen(('localhost', 0))
-                        wsgi.run_server(conf, logger, sock)
+                        with mock.patch('swift.common.wsgi.inspect'):
+                            conf = wsgi.appconfig(conf_file)
+                            logger = logging.getLogger('test')
+                            sock = listen(('localhost', 0))
+                            wsgi.run_server(conf, logger, sock)
         self.assertEquals('HTTP/1.0',
                           _wsgi.HttpProtocol.default_request_version)
         self.assertEquals(30, _wsgi.WRITE_TIMEOUT)
@@ -355,6 +354,43 @@ class TestWSGI(unittest.TestCase):
         self.assert_(isinstance(server_logger, wsgi.NullLogger))
         self.assert_('custom_pool' in kwargs)
         self.assertEquals(1000, kwargs['custom_pool'].size)
+
+    def test_run_server_with_latest_eventlet(self):
+        config = """
+        [DEFAULT]
+        swift_dir = TEMPDIR
+
+        [pipeline:main]
+        pipeline = proxy-server
+
+        [app:proxy-server]
+        use = egg:swift#proxy
+        """
+
+        def argspec_stub(server):
+            return mock.MagicMock(args=['capitalize_response_headers'])
+
+        contents = dedent(config)
+        with temptree(['proxy-server.conf']) as t:
+            conf_file = os.path.join(t, 'proxy-server.conf')
+            with open(conf_file, 'w') as f:
+                f.write(contents.replace('TEMPDIR', t))
+            _fake_rings(t)
+            with nested(
+                mock.patch('swift.proxy.server.Application.'
+                           'modify_wsgi_pipeline'),
+                mock.patch('swift.common.wsgi.wsgi'),
+                mock.patch('swift.common.wsgi.eventlet'),
+                mock.patch('swift.common.wsgi.inspect',
+                           getargspec=argspec_stub)) as (_, _wsgi, _, _):
+                conf = wsgi.appconfig(conf_file)
+                logger = logging.getLogger('test')
+                sock = listen(('localhost', 0))
+                wsgi.run_server(conf, logger, sock)
+
+        _wsgi.server.assert_called()
+        args, kwargs = _wsgi.server.call_args
+        self.assertEquals(kwargs.get('capitalize_response_headers'), False)
 
     def test_run_server_conf_dir(self):
         config_dir = {
@@ -384,11 +420,12 @@ class TestWSGI(unittest.TestCase):
                 with mock.patch('swift.common.wsgi.wsgi') as _wsgi:
                     with mock.patch('swift.common.wsgi.eventlet') as _eventlet:
                         with mock.patch.dict('os.environ', {'TZ': ''}):
-                            conf = wsgi.appconfig(conf_dir)
-                            logger = logging.getLogger('test')
-                            sock = listen(('localhost', 0))
-                            wsgi.run_server(conf, logger, sock)
-                            self.assert_(os.environ['TZ'] is not '')
+                            with mock.patch('swift.common.wsgi.inspect'):
+                                conf = wsgi.appconfig(conf_dir)
+                                logger = logging.getLogger('test')
+                                sock = listen(('localhost', 0))
+                                wsgi.run_server(conf, logger, sock)
+                                self.assert_(os.environ['TZ'] is not '')
 
         self.assertEquals('HTTP/1.0',
                           _wsgi.HttpProtocol.default_request_version)
@@ -757,6 +794,7 @@ class TestPipelineWrapper(unittest.TestCase):
             "<unknown> catch_errors tempurl proxy-server")
 
 
+@patch_policies
 @mock.patch('swift.common.utils.HASH_PATH_SUFFIX', new='endcap')
 class TestPipelineModification(unittest.TestCase):
     def pipeline_modules(self, app):
@@ -1012,7 +1050,6 @@ class TestPipelineModification(unittest.TestCase):
             'swift.common.middleware.dlo',
             'swift.proxy.server'])
 
-    @patch_policies
     @with_tempdir
     def test_loadapp_proxy(self, tempdir):
         conf_path = os.path.join(tempdir, 'proxy-server.conf')
@@ -1034,24 +1071,23 @@ class TestPipelineModification(unittest.TestCase):
         """ % tempdir
         with open(conf_path, 'w') as f:
             f.write(dedent(conf_body))
+        _fake_rings(tempdir)
         account_ring_path = os.path.join(tempdir, 'account.ring.gz')
-        write_fake_ring(account_ring_path)
         container_ring_path = os.path.join(tempdir, 'container.ring.gz')
-        write_fake_ring(container_ring_path)
-        object_ring_path = os.path.join(tempdir, 'object.ring.gz')
-        write_fake_ring(object_ring_path)
-        object_1_ring_path = os.path.join(tempdir, 'object-1.ring.gz')
-        write_fake_ring(object_1_ring_path)
+        object_ring_paths = {}
+        for policy in POLICIES:
+            object_ring_paths[int(policy)] = os.path.join(
+                tempdir, policy.ring_name + '.ring.gz')
+
         app = wsgi.loadapp(conf_path)
         proxy_app = app.app.app.app.app
         self.assertEqual(proxy_app.account_ring.serialized_path,
                          account_ring_path)
         self.assertEqual(proxy_app.container_ring.serialized_path,
                          container_ring_path)
-        self.assertEqual(proxy_app.get_object_ring(0).serialized_path,
-                         object_ring_path)
-        self.assertEqual(proxy_app.get_object_ring(1).serialized_path,
-                         object_1_ring_path)
+        for policy_index, expected_path in object_ring_paths.items():
+            object_ring = proxy_app.get_object_ring(policy_index)
+            self.assertEqual(expected_path, object_ring.serialized_path)
 
     @with_tempdir
     def test_loadapp_storage(self, tempdir):

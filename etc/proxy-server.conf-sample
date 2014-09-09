@@ -70,6 +70,7 @@
 #
 # Use a comma separated list of full url (http://foo.bar:1234,https://foo.bar)
 # cors_allow_origin =
+# strict_cors_mode = True
 #
 # client_timeout = 60
 # eventlet_debug = false
@@ -88,8 +89,8 @@ use = egg:swift#proxy
 # log_handoffs = true
 # recheck_account_existence = 60
 # recheck_container_existence = 60
-# object_chunk_size = 8192
-# client_chunk_size = 8192
+# object_chunk_size = 65536
+# client_chunk_size = 65536
 #
 # How long the proxy server will wait on responses from the a/c/o servers.
 # node_timeout = 10
@@ -204,7 +205,6 @@ use = egg:swift#proxy
 # usually indicates administrative responsibilities.
 # swift_owner_headers = x-container-read, x-container-write, x-container-sync-key, x-container-sync-to, x-account-meta-temp-url-key, x-account-meta-temp-url-key-2, x-account-access-control
 
-
 [filter:tempauth]
 use = egg:swift#tempauth
 # You can override the default log routing for this filter here:
@@ -266,7 +266,7 @@ user_test_tester3 = testing3
 # there you can change it to: authtoken keystoneauth
 #
 # [filter:authtoken]
-# paste.filter_factory = keystoneclient.middleware.auth_token:filter_factory
+# paste.filter_factory = keystonemiddleware.auth_token:filter_factory
 # auth_host = keystonehost
 # auth_port = 35357
 # auth_protocol = http
@@ -415,7 +415,7 @@ use = egg:swift#staticweb
 [filter:tempurl]
 use = egg:swift#tempurl
 # The methods allowed with Temp URLs.
-# methods = GET HEAD PUT
+# methods = GET HEAD PUT POST DELETE
 #
 # The headers to remove from incoming requests. Simply a whitespace delimited
 # list of header names and names can optionally end with '*' to indicate a

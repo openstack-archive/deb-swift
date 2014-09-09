@@ -15,6 +15,8 @@
 
 """Miscellaneous utility functions for use with Swift."""
 
+from __future__ import print_function
+
 import errno
 import fcntl
 import grp
@@ -64,7 +66,9 @@ utf8_encoder = codecs.getencoder('utf-8')
 
 from swift import gettext_ as _
 import swift.common.exceptions
-from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND
+from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND, \
+    HTTP_PRECONDITION_FAILED, HTTP_REQUESTED_RANGE_NOT_SATISFIABLE
+
 
 # logging doesn't import patched as cleanly as one would like
 from logging.handlers import SysLogHandler
@@ -322,13 +326,14 @@ def get_log_line(req, res, trans_time, additional_info):
     :returns: a properly formated line for logging.
     """
 
-    return '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %.4f "%s"' % (
+    return '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %.4f "%s" %d' % (
         req.remote_addr,
         time.strftime('%d/%b/%Y:%H:%M:%S +0000', time.gmtime()),
         req.method, req.path, res.status.split()[0],
         res.content_length or '-', req.referer or '-',
         req.headers.get('x-trans-id', '-'),
-        req.user_agent or '-', trans_time, additional_info or '-')
+        req.user_agent or '-', trans_time, additional_info or '-',
+        os.getpid())
 
 
 def get_trans_id_time(trans_id):
@@ -629,7 +634,7 @@ class Timestamp(object):
         return INTERNAL_FORMAT % (self.timestamp, self.offset)
 
     def __str__(self):
-        raise TypeError('You must specificy which string format is required')
+        raise TypeError('You must specify which string format is required')
 
     def __float__(self):
         return self.timestamp
@@ -928,7 +933,7 @@ class LoggerFileObject(object):
 
 class StatsdClient(object):
     def __init__(self, host, port, base_prefix='', tail_prefix='',
-                 default_sample_rate=1, sample_rate_factor=1):
+                 default_sample_rate=1, sample_rate_factor=1, logger=None):
         self._host = host
         self._port = port
         self._base_prefix = base_prefix
@@ -937,6 +942,7 @@ class StatsdClient(object):
         self._sample_rate_factor = sample_rate_factor
         self._target = (self._host, self._port)
         self.random = random
+        self.logger = logger
 
     def set_prefix(self, new_prefix):
         if new_prefix and self._base_prefix:
@@ -961,7 +967,13 @@ class StatsdClient(object):
         # Ideally, we'd cache a sending socket in self, but that
         # results in a socket getting shared by multiple green threads.
         with closing(self._open_socket()) as sock:
-            return sock.sendto('|'.join(parts), self._target)
+            try:
+                return sock.sendto('|'.join(parts), self._target)
+            except IOError as err:
+                if self.logger:
+                    self.logger.warn(
+                        'Error sending UDP message to %r: %s',
+                        self._target, err)
 
     def _open_socket(self):
         return socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -989,6 +1001,24 @@ class StatsdClient(object):
                                sample_rate)
 
 
+def server_handled_successfully(status_int):
+    """
+    True for successful responses *or* error codes that are not Swift's fault,
+    False otherwise. For example, 500 is definitely the server's fault, but
+    412 is an error code (4xx are all errors) that is due to a header the
+    client sent.
+
+    If one is tracking error rates to monitor server health, one would be
+    advised to use a function like this one, lest a client cause a flurry of
+    404s or 416s and make a spurious spike in your errors graph.
+    """
+    return (is_success(status_int) or
+            is_redirection(status_int) or
+            status_int == HTTP_NOT_FOUND or
+            status_int == HTTP_PRECONDITION_FAILED or
+            status_int == HTTP_REQUESTED_RANGE_NOT_SATISFIABLE)
+
+
 def timing_stats(**dec_kwargs):
     """
     Returns a decorator that logs timing events or errors for public methods in
@@ -1001,9 +1031,7 @@ def timing_stats(**dec_kwargs):
         def _timing_stats(ctrl, *args, **kwargs):
             start_time = time.time()
             resp = func(ctrl, *args, **kwargs)
-            if is_success(resp.status_int) or \
-                    is_redirection(resp.status_int) or \
-                    resp.status_int == HTTP_NOT_FOUND:
+            if server_handled_successfully(resp.status_int):
                 ctrl.logger.timing_since(method + '.timing',
                                          start_time, **dec_kwargs)
             else:
@@ -1311,7 +1339,7 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
             'log_statsd_sample_rate_factor', 1))
         statsd_client = StatsdClient(statsd_host, statsd_port, base_prefix,
                                      name, default_sample_rate,
-                                     sample_rate_factor)
+                                     sample_rate_factor, logger=logger)
         logger.statsd_client = statsd_client
     else:
         logger.statsd_client = None
@@ -1328,9 +1356,11 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
                 logger_hook(conf, name, log_to_console, log_route, fmt,
                             logger, adapted_logger)
             except (AttributeError, ImportError):
-                print >>sys.stderr, 'Error calling custom handler [%s]' % hook
+                print(
+                    'Error calling custom handler [%s]' % hook,
+                    file=sys.stderr)
             except ValueError:
-                print >>sys.stderr, 'Invalid custom handler format [%s]' % hook
+                print('Invalid custom handler format [%s]' % hook, sys.stderr)
 
     # Python 2.6 has the undesirable property of keeping references to all log
     # handlers around forever in logging._handlers and logging._handlerList.
@@ -1469,12 +1499,12 @@ def parse_options(parser=None, once=False, test_args=None):
 
     if not args:
         parser.print_usage()
-        print _("Error: missing config path argument")
+        print(_("Error: missing config path argument"))
         sys.exit(1)
     config = os.path.abspath(args.pop(0))
     if not os.path.exists(config):
         parser.print_usage()
-        print _("Error: unable to locate %s") % config
+        print(_("Error: unable to locate %s") % config)
         sys.exit(1)
 
     extra_args = []
@@ -1577,6 +1607,10 @@ def lock_path(directory, timeout=10, timeout_class=None):
     mkdirs(directory)
     lockpath = '%s/.lock' % directory
     fd = os.open(lockpath, os.O_WRONLY | os.O_CREAT)
+    sleep_time = 0.01
+    slower_sleep_time = max(timeout * 0.01, sleep_time)
+    slowdown_at = timeout * 0.01
+    time_slept = 0
     try:
         with timeout_class(timeout, lockpath):
             while True:
@@ -1586,7 +1620,10 @@ def lock_path(directory, timeout=10, timeout_class=None):
                 except IOError as err:
                     if err.errno != errno.EAGAIN:
                         raise
-                sleep(0.01)
+                if time_slept > slowdown_at:
+                    sleep_time = slower_sleep_time
+                sleep(sleep_time)
+                time_slept += sleep_time
         yield True
     finally:
         os.close(fd)
@@ -1610,26 +1647,32 @@ def lock_file(filename, timeout=10, append=False, unlink=True):
         mode = 'a+'
     else:
         mode = 'r+'
-    fd = os.open(filename, flags)
-    file_obj = os.fdopen(fd, mode)
-    try:
-        with swift.common.exceptions.LockTimeout(timeout, filename):
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except IOError as err:
-                    if err.errno != errno.EAGAIN:
-                        raise
-                sleep(0.01)
-        yield file_obj
-    finally:
+    while True:
+        fd = os.open(filename, flags)
+        file_obj = os.fdopen(fd, mode)
         try:
+            with swift.common.exceptions.LockTimeout(timeout, filename):
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except IOError as err:
+                        if err.errno != errno.EAGAIN:
+                            raise
+                    sleep(0.01)
+            try:
+                if os.stat(filename).st_ino != os.fstat(fd).st_ino:
+                    continue
+            except OSError as err:
+                if err.errno == errno.ENOENT:
+                    continue
+                raise
+            yield file_obj
+            if unlink:
+                os.unlink(filename)
+            break
+        finally:
             file_obj.close()
-        except UnboundLocalError:
-            pass  # may have not actually opened the file
-        if unlink:
-            os.unlink(filename)
 
 
 def lock_parent_directory(filename, timeout=10):
@@ -1758,14 +1801,14 @@ def readconf(conf_path, section_name=None, log_name=None, defaults=None,
         else:
             success = c.read(conf_path)
         if not success:
-            print _("Unable to read config from %s") % conf_path
+            print(_("Unable to read config from %s") % conf_path)
             sys.exit(1)
     if section_name:
         if c.has_section(section_name):
             conf = dict(c.items(section_name))
         else:
-            print _("Unable to find %s config section in %s") % \
-                (section_name, conf_path)
+            print(_("Unable to find %s config section in %s") %
+                  (section_name, conf_path))
             sys.exit(1)
         if "log_name" not in conf:
             if log_name is not None:
@@ -1896,11 +1939,16 @@ def audit_location_generator(devices, datadir, suffix='',
     for device in device_dir:
         if mount_check and not ismount(os.path.join(devices, device)):
             if logger:
-                logger.debug(
+                logger.warning(
                     _('Skipping %s as it is not mounted'), device)
             continue
         datadir_path = os.path.join(devices, device, datadir)
-        partitions = listdir(datadir_path)
+        try:
+            partitions = listdir(datadir_path)
+        except OSError as e:
+            if logger:
+                logger.warning('Skipping %s because %s', datadir_path, e)
+            continue
         for partition in partitions:
             part_path = os.path.join(datadir_path, partition)
             try:
@@ -2284,7 +2332,8 @@ def put_recon_cache_entry(cache_entry, key, item):
     """
     Function that will check if item is a dict, and if so put it under
     cache_entry[key].  We use nested recon cache entries when the object
-    auditor runs in 'once' mode with a specified subset of devices.
+    auditor runs in parallel or else in 'once' mode with a specified
+    subset of devices.
     """
     if isinstance(item, dict):
         if key not in cache_entry or key in cache_entry and not \
@@ -2918,3 +2967,13 @@ def quote(value, safe='/'):
     Patched version of urllib.quote that encodes utf-8 strings before quoting
     """
     return _quote(get_valid_utf8_str(value), safe)
+
+
+def get_expirer_container(x_delete_at, expirer_divisor, acc, cont, obj):
+    """
+    Returns a expiring object container name for given X-Delete-At and
+    a/c/o.
+    """
+    shard_int = int(hash_path(acc, cont, obj), 16) % 100
+    return normalize_delete_at_timestamp(
+        int(x_delete_at) / expirer_divisor * expirer_divisor - shard_int)

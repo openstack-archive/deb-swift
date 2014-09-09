@@ -32,7 +32,8 @@ from shutil import rmtree
 from tempfile import mkdtemp
 
 from test import get_config
-from test.functional.swift_test_client import Connection, ResponseError
+from test.functional.swift_test_client import Account, Connection, \
+    ResponseError
 # This has the side effect of mocking out the xattr module so that unit tests
 # (and in this case, when in-process functional tests are called for) can run
 # on file systems that don't support extended attributes.
@@ -47,7 +48,7 @@ from swift.common.utils import config_true_value
 from swift.proxy import server as proxy_server
 from swift.account import server as account_server
 from swift.container import server as container_server
-from swift.obj import server as object_server
+from swift.obj import server as object_server, mem_server as mem_object_server
 import swift.proxy.controllers.obj
 
 # In order to get the proper blocking behavior of sockets without using
@@ -132,6 +133,7 @@ max_file_size = %d
 
 def in_process_setup(the_object_server=object_server):
     print >>sys.stderr, 'IN-PROCESS SERVERS IN USE FOR FUNCTIONAL TESTS'
+    print >>sys.stderr, 'Using object_server: %s' % the_object_server.__name__
 
     monkey_patch_mimetools()
 
@@ -347,7 +349,13 @@ def get_cluster_info():
         # test.conf data
         pass
     else:
-        eff_constraints.update(cluster_info.get('swift', {}))
+        try:
+            eff_constraints.update(cluster_info['swift'])
+        except KeyError:
+            # Most likely the swift cluster has "expose_info = false" set
+            # in its proxy-server.conf file, so we'll just do the best we
+            # can.
+            print >>sys.stderr, "** Swift Cluster not exposing /info **"
 
     # Finally, we'll allow any constraint present in the swift-constraints
     # section of test.conf to override everything. Note that only those
@@ -401,7 +409,10 @@ def setup_package():
             config.update(get_config('func_test'))
 
     if in_process:
-        in_process_setup()
+        in_mem_obj_env = os.environ.get('SWIFT_TEST_IN_MEMORY_OBJ')
+        in_mem_obj = utils.config_true_value(in_mem_obj_env)
+        in_process_setup(the_object_server=(
+            mem_object_server if in_mem_obj else object_server))
 
     global web_front_end
     web_front_end = config.get('web_front_end', 'integral')
@@ -506,6 +517,12 @@ def setup_package():
 def teardown_package():
     global orig_collate
     locale.setlocale(locale.LC_COLLATE, orig_collate)
+
+    # clean up containers and objects left behind after running tests
+    conn = Connection(config)
+    conn.authenticate()
+    account = Account(conn, config.get('account', config['username']))
+    account.delete_containers()
 
     global in_process
     if in_process:

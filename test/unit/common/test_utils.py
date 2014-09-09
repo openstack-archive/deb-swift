@@ -110,10 +110,14 @@ class MockOs(object):
 
 
 class MockUdpSocket(object):
-    def __init__(self):
+    def __init__(self, sendto_errno=None):
         self.sent = []
+        self.sendto_errno = sendto_errno
 
     def sendto(self, data, target):
+        if self.sendto_errno:
+            raise socket.error(self.sendto_errno,
+                               'test errno %s' % self.sendto_errno)
         self.sent.append((data, target))
 
     def close(self):
@@ -726,6 +730,30 @@ class TestUtils(unittest.TestCase):
                 self.assertTrue(not success)
         finally:
             shutil.rmtree(tmpdir)
+
+    def test_lock_path_num_sleeps(self):
+        tmpdir = mkdtemp()
+        num_short_calls = [0]
+        exception_raised = [False]
+
+        def my_sleep(to_sleep):
+            if to_sleep == 0.01:
+                num_short_calls[0] += 1
+            else:
+                raise Exception('sleep time changed: %s' % to_sleep)
+
+        try:
+            with mock.patch('swift.common.utils.sleep', my_sleep):
+                with utils.lock_path(tmpdir):
+                    with utils.lock_path(tmpdir):
+                        pass
+        except Exception as e:
+            exception_raised[0] = True
+            self.assertTrue('sleep time changed' in str(e))
+        finally:
+            shutil.rmtree(tmpdir)
+        self.assertEqual(num_short_calls[0], 11)
+        self.assertTrue(exception_raised[0])
 
     def test_lock_path_class(self):
         tmpdir = mkdtemp()
@@ -2351,6 +2379,77 @@ cluster_dfw1 = http://dfw1.host/v1/
 
             self.assertRaises(OSError, os.remove, nt.name)
 
+    def test_lock_file_unlinked_after_open(self):
+        os_open = os.open
+        first_pass = [True]
+
+        def deleting_open(filename, flags):
+            # unlink the file after it's opened.  once.
+            fd = os_open(filename, flags)
+            if first_pass[0]:
+                os.unlink(filename)
+                first_pass[0] = False
+            return fd
+
+        with NamedTemporaryFile(delete=False) as nt:
+            with mock.patch('os.open', deleting_open):
+                with utils.lock_file(nt.name, unlink=True) as f:
+                    self.assertNotEqual(os.fstat(nt.fileno()).st_ino,
+                                        os.fstat(f.fileno()).st_ino)
+        first_pass = [True]
+
+        def recreating_open(filename, flags):
+            # unlink and recreate the file after it's opened
+            fd = os_open(filename, flags)
+            if first_pass[0]:
+                os.unlink(filename)
+                os.close(os_open(filename, os.O_CREAT | os.O_RDWR))
+                first_pass[0] = False
+            return fd
+
+        with NamedTemporaryFile(delete=False) as nt:
+            with mock.patch('os.open', recreating_open):
+                with utils.lock_file(nt.name, unlink=True) as f:
+                    self.assertNotEqual(os.fstat(nt.fileno()).st_ino,
+                                        os.fstat(f.fileno()).st_ino)
+
+    def test_lock_file_held_on_unlink(self):
+        os_unlink = os.unlink
+
+        def flocking_unlink(filename):
+            # make sure the lock is held when we unlink
+            fd = os.open(filename, os.O_RDWR)
+            self.assertRaises(
+                IOError, fcntl.flock, fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.close(fd)
+            os_unlink(filename)
+
+        with NamedTemporaryFile(delete=False) as nt:
+            with mock.patch('os.unlink', flocking_unlink):
+                with utils.lock_file(nt.name, unlink=True):
+                    pass
+
+    def test_lock_file_no_unlink_if_fail(self):
+        os_open = os.open
+        with NamedTemporaryFile(delete=True) as nt:
+
+            def lock_on_open(filename, flags):
+                # lock the file on another fd after it's opened.
+                fd = os_open(filename, flags)
+                fd2 = os_open(filename, flags)
+                fcntl.flock(fd2, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+
+            try:
+                timedout = False
+                with mock.patch('os.open', lock_on_open):
+                    with utils.lock_file(nt.name, unlink=False, timeout=0.01):
+                        pass
+            except LockTimeout:
+                timedout = True
+            self.assert_(timedout)
+            self.assert_(os.path.exists(nt.name))
+
     def test_ismount_path_does_not_exist(self):
         tmpdir = mkdtemp()
         try:
@@ -2574,14 +2673,17 @@ cluster_dfw1 = http://dfw1.host/v1/
         res = Response()
         trans_time = 1.2
         additional_info = 'some information'
+        server_pid = 1234
         exp_line = '1.2.3.4 - - [01/Jan/1970:02:46:41 +0000] "HEAD ' \
-            '/sda1/p/a/c/o" 200 - "-" "-" "-" 1.2000 "some information"'
+            '/sda1/p/a/c/o" 200 - "-" "-" "-" 1.2000 "some information" 1234'
         with mock.patch(
                 'time.gmtime',
                 mock.MagicMock(side_effect=[time.gmtime(10001.0)])):
-            self.assertEquals(
-                exp_line,
-                utils.get_log_line(req, res, trans_time, additional_info))
+            with mock.patch(
+                    'os.getpid', mock.MagicMock(return_value=server_pid)):
+                self.assertEquals(
+                    exp_line,
+                    utils.get_log_line(req, res, trans_time, additional_info))
 
     def test_cache_from_env(self):
         # should never get logging when swift.cache is found
@@ -2963,6 +3065,18 @@ class TestStatsdLogging(unittest.TestCase):
         self.assertEqual(logger.logger.statsd_client._sample_rate_factor,
                          0.81)
 
+    def test_no_exception_when_cant_send_udp_packet(self):
+        logger = utils.get_logger({'log_statsd_host': 'some.host.com'})
+        statsd_client = logger.logger.statsd_client
+        fl = FakeLogger()
+        statsd_client.logger = fl
+        mock_socket = MockUdpSocket(sendto_errno=errno.EPERM)
+        statsd_client._open_socket = lambda *_: mock_socket
+        logger.increment('tunafish')
+        expected = ["Error sending UDP message to ('some.host.com', 8125): "
+                    "[Errno 1] test errno 1"]
+        self.assertEqual(fl.get_lines_for_level('warning'), expected)
+
     def test_sample_rates(self):
         logger = utils.get_logger({'log_statsd_host': 'some.host.com'})
 
@@ -3044,6 +3158,20 @@ class TestStatsdLogging(unittest.TestCase):
         self.assert_(mock_controller.args[1] > 0)
 
         mock_controller = MockController(404)
+        METHOD(mock_controller)
+        self.assertEquals(len(mock_controller.args), 2)
+        self.assertEquals(mock_controller.called, 'timing')
+        self.assertEquals(mock_controller.args[0], 'METHOD.timing')
+        self.assert_(mock_controller.args[1] > 0)
+
+        mock_controller = MockController(412)
+        METHOD(mock_controller)
+        self.assertEquals(len(mock_controller.args), 2)
+        self.assertEquals(mock_controller.called, 'timing')
+        self.assertEquals(mock_controller.args[0], 'METHOD.timing')
+        self.assert_(mock_controller.args[1] > 0)
+
+        mock_controller = MockController(416)
         METHOD(mock_controller)
         self.assertEquals(len(mock_controller.args), 2)
         self.assertEquals(mock_controller.called, 'timing')
@@ -3683,8 +3811,112 @@ class TestThreadpool(unittest.TestCase):
 
 
 class TestAuditLocationGenerator(unittest.TestCase):
+
+    def test_drive_tree_access(self):
+        orig_listdir = utils.listdir
+
+        def _mock_utils_listdir(path):
+            if 'bad_part' in path:
+                raise OSError(errno.EACCES)
+            elif 'bad_suffix' in path:
+                raise OSError(errno.EACCES)
+            elif 'bad_hash' in path:
+                raise OSError(errno.EACCES)
+            else:
+                return orig_listdir(path)
+
+        #Check Raise on Bad partition
+        tmpdir = mkdtemp()
+        data = os.path.join(tmpdir, "drive", "data")
+        os.makedirs(data)
+        obj_path = os.path.join(data, "bad_part")
+        with open(obj_path, "w"):
+            pass
+        part1 = os.path.join(data, "partition1")
+        os.makedirs(part1)
+        part2 = os.path.join(data, "partition2")
+        os.makedirs(part2)
+        with patch('swift.common.utils.listdir', _mock_utils_listdir):
+            audit = lambda: list(utils.audit_location_generator(
+                tmpdir, "data", mount_check=False))
+            self.assertRaises(OSError, audit)
+
+        #Check Raise on Bad Suffix
+        tmpdir = mkdtemp()
+        data = os.path.join(tmpdir, "drive", "data")
+        os.makedirs(data)
+        part1 = os.path.join(data, "partition1")
+        os.makedirs(part1)
+        part2 = os.path.join(data, "partition2")
+        os.makedirs(part2)
+        obj_path = os.path.join(part1, "bad_suffix")
+        with open(obj_path, 'w'):
+            pass
+        suffix = os.path.join(part2, "suffix")
+        os.makedirs(suffix)
+        with patch('swift.common.utils.listdir', _mock_utils_listdir):
+            audit = lambda: list(utils.audit_location_generator(
+                tmpdir, "data", mount_check=False))
+            self.assertRaises(OSError, audit)
+
+        #Check Raise on Bad Hash
+        tmpdir = mkdtemp()
+        data = os.path.join(tmpdir, "drive", "data")
+        os.makedirs(data)
+        part1 = os.path.join(data, "partition1")
+        os.makedirs(part1)
+        suffix = os.path.join(part1, "suffix")
+        os.makedirs(suffix)
+        hash1 = os.path.join(suffix, "hash1")
+        os.makedirs(hash1)
+        obj_path = os.path.join(suffix, "bad_hash")
+        with open(obj_path, 'w'):
+            pass
+        with patch('swift.common.utils.listdir', _mock_utils_listdir):
+            audit = lambda: list(utils.audit_location_generator(
+                tmpdir, "data", mount_check=False))
+            self.assertRaises(OSError, audit)
+
+    def test_non_dir_drive(self):
+        with temptree([]) as tmpdir:
+            logger = FakeLogger()
+            data = os.path.join(tmpdir, "drive", "data")
+            os.makedirs(data)
+            #Create a file, that represents a non-dir drive
+            open(os.path.join(tmpdir, 'asdf'), 'w')
+            locations = utils.audit_location_generator(
+                tmpdir, "data", mount_check=False, logger=logger
+            )
+            self.assertEqual(list(locations), [])
+            self.assertEqual(1, len(logger.get_lines_for_level('warning')))
+            #Test without the logger
+            locations = utils.audit_location_generator(
+                tmpdir, "data", mount_check=False
+            )
+            self.assertEqual(list(locations), [])
+
+    def test_mount_check_drive(self):
+        with temptree([]) as tmpdir:
+            logger = FakeLogger()
+            data = os.path.join(tmpdir, "drive", "data")
+            os.makedirs(data)
+            #Create a file, that represents a non-dir drive
+            open(os.path.join(tmpdir, 'asdf'), 'w')
+            locations = utils.audit_location_generator(
+                tmpdir, "data", mount_check=True, logger=logger
+            )
+            self.assertEqual(list(locations), [])
+            self.assertEqual(2, len(logger.get_lines_for_level('warning')))
+
+            #Test without the logger
+            locations = utils.audit_location_generator(
+                tmpdir, "data", mount_check=True
+            )
+            self.assertEqual(list(locations), [])
+
     def test_non_dir_contents(self):
         with temptree([]) as tmpdir:
+            logger = FakeLogger()
             data = os.path.join(tmpdir, "drive", "data")
             os.makedirs(data)
             with open(os.path.join(data, "partition1"), "w"):
@@ -3698,31 +3930,49 @@ class TestAuditLocationGenerator(unittest.TestCase):
             with open(os.path.join(suffix, "hash1"), "w"):
                 pass
             locations = utils.audit_location_generator(
-                tmpdir, "data", mount_check=False
+                tmpdir, "data", mount_check=False, logger=logger
             )
             self.assertEqual(list(locations), [])
 
     def test_find_objects(self):
         with temptree([]) as tmpdir:
+            expected_objs = list()
+            logger = FakeLogger()
             data = os.path.join(tmpdir, "drive", "data")
             os.makedirs(data)
+            #Create a file, that represents a non-dir drive
+            open(os.path.join(tmpdir, 'asdf'), 'w')
+            partition = os.path.join(data, "partition1")
+            os.makedirs(partition)
+            suffix = os.path.join(partition, "suffix")
+            os.makedirs(suffix)
+            hash_path = os.path.join(suffix, "hash")
+            os.makedirs(hash_path)
+            obj_path = os.path.join(hash_path, "obj1.db")
+            with open(obj_path, "w"):
+                pass
+            expected_objs.append((obj_path, 'drive', 'partition1'))
             partition = os.path.join(data, "partition2")
             os.makedirs(partition)
             suffix = os.path.join(partition, "suffix2")
             os.makedirs(suffix)
             hash_path = os.path.join(suffix, "hash2")
             os.makedirs(hash_path)
-            obj_path = os.path.join(hash_path, "obj1.dat")
+            obj_path = os.path.join(hash_path, "obj2.db")
             with open(obj_path, "w"):
                 pass
+            expected_objs.append((obj_path, 'drive', 'partition2'))
             locations = utils.audit_location_generator(
-                tmpdir, "data", ".dat", mount_check=False
+                tmpdir, "data", mount_check=False, logger=logger
             )
-            self.assertEqual(list(locations),
-                             [(obj_path, "drive", "partition2")])
+            got_objs = list(locations)
+            self.assertEqual(len(got_objs), len(expected_objs))
+            self.assertEqual(sorted(got_objs), sorted(expected_objs))
+            self.assertEqual(1, len(logger.get_lines_for_level('warning')))
 
     def test_ignore_metadata(self):
         with temptree([]) as tmpdir:
+            logger = FakeLogger()
             data = os.path.join(tmpdir, "drive", "data")
             os.makedirs(data)
             partition = os.path.join(data, "partition2")
@@ -3738,7 +3988,7 @@ class TestAuditLocationGenerator(unittest.TestCase):
             with open(meta_path, "w"):
                 pass
             locations = utils.audit_location_generator(
-                tmpdir, "data", ".dat", mount_check=False
+                tmpdir, "data", ".dat", mount_check=False, logger=logger
             )
             self.assertEqual(list(locations),
                              [(obj_path, "drive", "partition2")])

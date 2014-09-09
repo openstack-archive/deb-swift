@@ -37,7 +37,7 @@ from swift.common.http import HTTP_OK, HTTP_INSUFFICIENT_STORAGE
 from swift.obj import ssync_sender
 from swift.obj.diskfile import (DiskFileManager, get_hashes, get_data_dir,
                                 get_tmp_dir)
-from swift.common.storage_policy import POLICY_INDEX, POLICIES
+from swift.common.storage_policy import POLICIES
 
 
 hubs.use_hub(get_hub())
@@ -86,7 +86,7 @@ class ObjectReplicator(Daemon):
         self.disk_chunk_size = int(conf.get('disk_chunk_size', 65536))
         self.headers = {
             'Content-Length': '0',
-            'user-agent': 'obj-replicator %s' % os.getpid()}
+            'user-agent': 'object-replicator %s' % os.getpid()}
         self.rsync_error_log_line_length = \
             int(conf.get('rsync_error_log_line_length', 0))
         self.handoffs_first = config_true_value(conf.get('handoffs_first',
@@ -228,7 +228,7 @@ class ObjectReplicator(Daemon):
                     if len(suff) == 3 and isdir(join(path, suff))]
         self.replication_count += 1
         self.logger.increment('partition.delete.count.%s' % (job['device'],))
-        self.headers[POLICY_INDEX] = job['policy_idx']
+        self.headers['X-Backend-Storage-Policy-Index'] = job['policy_idx']
         begin = time.time()
         try:
             responses = []
@@ -270,7 +270,7 @@ class ObjectReplicator(Daemon):
         """
         self.replication_count += 1
         self.logger.increment('partition.update.count.%s' % (job['device'],))
-        self.headers[POLICY_INDEX] = job['policy_idx']
+        self.headers['X-Backend-Storage-Policy-Index'] = job['policy_idx']
         begin = time.time()
         try:
             hashed, local_hash = tpool_reraise(

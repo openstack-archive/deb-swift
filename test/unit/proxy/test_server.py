@@ -34,7 +34,7 @@ import re
 import random
 
 import mock
-from eventlet import sleep, spawn, wsgi, listen
+from eventlet import sleep, spawn, wsgi, listen, Timeout
 from swift.common.utils import json
 
 from test.unit import (
@@ -59,7 +59,7 @@ from swift.common.swob import Request, Response, HTTPUnauthorized, \
     HTTPException
 from swift.common import storage_policy
 from swift.common.storage_policy import StoragePolicy, \
-    StoragePolicyCollection, POLICIES, POLICY, POLICY_INDEX
+    StoragePolicyCollection, POLICIES
 from swift.common.request_helpers import get_sys_meta_prefix
 
 # mocks
@@ -268,6 +268,9 @@ def save_globals():
                                 None)
     orig_account_info = getattr(swift.proxy.controllers.Controller,
                                 'account_info', None)
+    orig_container_info = getattr(swift.proxy.controllers.Controller,
+                                  'container_info', None)
+
     try:
         yield True
     finally:
@@ -276,6 +279,7 @@ def save_globals():
         swift.proxy.controllers.obj.http_connect = orig_http_connect
         swift.proxy.controllers.account.http_connect = orig_http_connect
         swift.proxy.controllers.container.http_connect = orig_http_connect
+        swift.proxy.controllers.Controller.container_info = orig_container_info
 
 
 def set_http_connect(*args, **kwargs):
@@ -1138,11 +1142,20 @@ class TestObjectController(unittest.TestCase):
         with save_globals():
             controller = proxy_server.ObjectController(self.app, 'account',
                                                        'container', 'object')
-            # The (201, -4) tuples in there have the effect of letting the
-            # initial connect succeed, after which getexpect() gets called and
-            # then the -4 makes the response of that actually be 201 instead of
-            # 100.  Perfectly straightforward.
-            set_http_connect(200, 200, (201, -4), (201, -4), (201, -4),
+            # The (201, Exception('test')) tuples in there have the effect of
+            # changing the status of the initial expect response.  The default
+            # expect response from FakeConn for 201 is 100.
+            # But the object server won't send a 100 continue line if the
+            # client doesn't send a expect 100 header (as is the case with
+            # zero byte PUTs as validated by this test), nevertheless the
+            # object controller calls getexpect without prejudice.  In this
+            # case the status from the response shows up early in getexpect
+            # instead of having to wait until getresponse.  The Exception is
+            # in there to ensure that the object controller also *uses* the
+            # result of getexpect instead of calling getresponse in which case
+            # our FakeConn will blow up.
+            success_codes = [(201, Exception('test'))] * 3
+            set_http_connect(200, 200, *success_codes,
                              give_connect=test_connect)
             req = Request.blank('/v1/a/c/o.jpg', {})
             req.content_length = 0
@@ -1165,7 +1178,12 @@ class TestObjectController(unittest.TestCase):
         with save_globals():
             controller = \
                 proxy_server.ObjectController(self.app, 'a', 'c', 'o.jpg')
-            set_http_connect(200, 200, 201, 201, 201,
+            # the (100, 201) tuples in there are just being extra explicit
+            # about the FakeConn returning the 100 Continue status when the
+            # object controller calls getexpect.  Which is FakeConn's default
+            # for 201 if no expect_status is specified.
+            success_codes = [(100, 201)] * 3
+            set_http_connect(200, 200, *success_codes,
                              give_connect=test_connect)
             req = Request.blank('/v1/a/c/o.jpg', {})
             req.content_length = 1
@@ -1585,11 +1603,19 @@ class TestObjectController(unittest.TestCase):
                 res = controller.PUT(req)
                 expected = str(expected)
                 self.assertEquals(res.status[:len(expected)], expected)
-            test_status_map((200, 200, 201, 201, -1), 201)
-            test_status_map((200, 200, 201, 201, -2), 201)  # expect timeout
-            test_status_map((200, 200, 201, 201, -3), 201)  # error limited
-            test_status_map((200, 200, 201, -1, -1), 503)
-            test_status_map((200, 200, 503, 503, -1), 503)
+            test_status_map((200, 200, 201, 201, -1), 201)  # connect exc
+            # connect errors
+            test_status_map((200, 200, Timeout(), 201, 201, ), 201)
+            test_status_map((200, 200, 201, 201, Exception()), 201)
+            # expect errors
+            test_status_map((200, 200, (Timeout(), None), 201, 201), 201)
+            test_status_map((200, 200, (Exception(), None), 201, 201), 201)
+            # response errors
+            test_status_map((200, 200, (100, Timeout()), 201, 201), 201)
+            test_status_map((200, 200, (100, Exception()), 201, 201), 201)
+            test_status_map((200, 200, 507, 201, 201), 201)  # error limited
+            test_status_map((200, 200, -1, 201, -1), 503)
+            test_status_map((200, 200, 503, -1, 503), 503)
 
     def test_PUT_send_exceptions(self):
         with save_globals():
@@ -1706,40 +1732,50 @@ class TestObjectController(unittest.TestCase):
             req_method, req_path, req_headers = req
             self.assertEqual(method, req_method)
             # caller can ignore leading path parts
-            self.assertTrue(req_path.endswith(path))
+            self.assertTrue(req_path.endswith(path),
+                            'expected path to end with %s, it was %s' % (
+                                path, req_path))
             headers = headers or {}
             # caller can ignore some headers
             for k, v in headers.items():
                 self.assertEqual(req_headers[k], v)
         account_request = backend_requests.pop(0)
-        check_request(account_request, method='HEAD', path='/sda/1/a')
+        check_request(account_request, method='HEAD', path='/sda/0/a')
         container_request = backend_requests.pop(0)
-        check_request(container_request, method='HEAD', path='/sda/1/a/c')
-        for i, (device, request) in enumerate(zip(('sda', 'sdb', 'sdc'),
-                                                  backend_requests)):
+        check_request(container_request, method='HEAD', path='/sda/0/a/c')
+        # make sure backend requests included expected container headers
+        container_headers = {}
+        for request in backend_requests:
+            req_headers = request[2]
+            device = req_headers['x-container-device']
+            host = req_headers['x-container-host']
+            container_headers[device] = host
             expectations = {
                 'method': 'POST',
-                'path': '/%s/1/a/c/o' % device,
+                'path': '/0/a/c/o',
                 'headers': {
-                    'X-Container-Host': '10.0.0.%d:100%d' % (i, i),
-                    'X-Container-Partition': '1',
+                    'X-Container-Partition': '0',
                     'Connection': 'close',
                     'User-Agent': 'proxy-server %s' % os.getpid(),
                     'Host': 'localhost:80',
-                    'X-Container-Device': device,
                     'Referer': 'POST http://localhost/v1/a/c/o',
                     'X-Object-Meta-Color': 'Blue',
-                    POLICY_INDEX: '1'
+                    'X-Backend-Storage-Policy-Index': '1'
                 },
             }
             check_request(request, **expectations)
+
+        expected = {}
+        for i, device in enumerate(['sda', 'sdb', 'sdc']):
+            expected[device] = '10.0.0.%d:100%d' % (i, i)
+        self.assertEqual(container_headers, expected)
 
         # and again with policy override
         self.app.memcache.store = {}
         backend_requests = []
         req = Request.blank('/v1/a/c/o', {}, method='POST',
                             headers={'X-Object-Meta-Color': 'Blue',
-                                     POLICY_INDEX: 0})
+                                     'X-Backend-Storage-Policy-Index': 0})
         with mocked_http_conn(
                 200, 200, 202, 202, 202,
                 headers=resp_headers, give_connect=capture_requests
@@ -1751,10 +1787,10 @@ class TestObjectController(unittest.TestCase):
         for request in backend_requests[2:]:
             expectations = {
                 'method': 'POST',
-                'path': '/1/a/c/o',  # ignore device bit
+                'path': '/0/a/c/o',  # ignore device bit
                 'headers': {
                     'X-Object-Meta-Color': 'Blue',
-                    POLICY_INDEX: '0',
+                    'X-Backend-Storage-Policy-Index': '0',
                 }
             }
             check_request(request, **expectations)
@@ -1765,7 +1801,7 @@ class TestObjectController(unittest.TestCase):
         backend_requests = []
         req = Request.blank('/v1/a/c/o', {}, method='POST',
                             headers={'X-Object-Meta-Color': 'Blue',
-                                     POLICY_INDEX: 0})
+                                     'X-Backend-Storage-Policy-Index': 0})
         with mocked_http_conn(
                 200, 200, 200, 200, 200, 201, 201, 201,
                 headers=resp_headers, give_connect=capture_requests
@@ -1774,21 +1810,21 @@ class TestObjectController(unittest.TestCase):
             self.assertRaises(StopIteration, fake_conn.code_iter.next)
         self.assertEqual(resp.status_int, 202)
         self.assertEqual(len(backend_requests), 8)
-        policy0 = {POLICY_INDEX: '0'}
-        policy1 = {POLICY_INDEX: '1'}
+        policy0 = {'X-Backend-Storage-Policy-Index': '0'}
+        policy1 = {'X-Backend-Storage-Policy-Index': '1'}
         expected = [
             # account info
-            {'method': 'HEAD', 'path': '/1/a'},
+            {'method': 'HEAD', 'path': '/0/a'},
             # container info
-            {'method': 'HEAD', 'path': '/1/a/c'},
+            {'method': 'HEAD', 'path': '/0/a/c'},
             # x-newests
-            {'method': 'GET', 'path': '/1/a/c/o', 'headers': policy1},
-            {'method': 'GET', 'path': '/1/a/c/o', 'headers': policy1},
-            {'method': 'GET', 'path': '/1/a/c/o', 'headers': policy1},
+            {'method': 'GET', 'path': '/0/a/c/o', 'headers': policy1},
+            {'method': 'GET', 'path': '/0/a/c/o', 'headers': policy1},
+            {'method': 'GET', 'path': '/0/a/c/o', 'headers': policy1},
             # new writes
-            {'method': 'PUT', 'path': '/1/a/c/o', 'headers': policy0},
-            {'method': 'PUT', 'path': '/1/a/c/o', 'headers': policy0},
-            {'method': 'PUT', 'path': '/1/a/c/o', 'headers': policy0},
+            {'method': 'PUT', 'path': '/0/a/c/o', 'headers': policy0},
+            {'method': 'PUT', 'path': '/0/a/c/o', 'headers': policy0},
+            {'method': 'PUT', 'path': '/0/a/c/o', 'headers': policy0},
         ]
         for request, expectations in zip(backend_requests, expected):
             check_request(request, **expectations)
@@ -2128,7 +2164,7 @@ class TestObjectController(unittest.TestCase):
             #                acct cont obj  obj  obj
             resp = req.get_response(self.app)
             self.assertEquals(resp.status_int, 201)
-            self.app.client_timeout = 0.1
+            self.app.client_timeout = 0.05
             req = Request.blank('/v1/a/c/o',
                                 environ={'REQUEST_METHOD': 'PUT',
                                          'wsgi.input': SlowBody()},
@@ -2347,34 +2383,85 @@ class TestObjectController(unittest.TestCase):
                     collected_nodes.append(node)
                 self.assertEquals(len(collected_nodes), 9)
 
+                # zero error-limited primary nodes -> no handoff warnings
                 self.app.log_handoffs = True
                 self.app.logger = FakeLogger()
-                object_ring.max_more_nodes = 2
+                self.app.request_node_count = lambda r: 7
+                object_ring.max_more_nodes = 20
                 partition, nodes = object_ring.get_nodes('account',
                                                          'container',
                                                          'object')
                 collected_nodes = []
-                for node in self.app.iter_nodes(object_ring,
-                                                partition):
+                for node in self.app.iter_nodes(object_ring, partition):
                     collected_nodes.append(node)
-                self.assertEquals(len(collected_nodes), 5)
-                self.assertEquals(
-                    self.app.logger.log_dict['warning'],
-                    [(('Handoff requested (1)',), {}),
-                     (('Handoff requested (2)',), {})])
-
-                self.app.log_handoffs = False
-                self.app.logger = FakeLogger()
-                object_ring.max_more_nodes = 2
-                partition, nodes = object_ring.get_nodes('account',
-                                                         'container',
-                                                         'object')
-                collected_nodes = []
-                for node in self.app.iter_nodes(object_ring,
-                                                partition):
-                    collected_nodes.append(node)
-                self.assertEquals(len(collected_nodes), 5)
+                self.assertEquals(len(collected_nodes), 7)
                 self.assertEquals(self.app.logger.log_dict['warning'], [])
+                self.assertEquals(self.app.logger.get_increments(), [])
+
+                # one error-limited primary node -> one handoff warning
+                self.app.log_handoffs = True
+                self.app.logger = FakeLogger()
+                self.app.request_node_count = lambda r: 7
+                object_ring.clear_errors()
+                object_ring._devs[0]['errors'] = 999
+                object_ring._devs[0]['last_error'] = 2 ** 63 - 1
+
+                collected_nodes = []
+                for node in self.app.iter_nodes(object_ring, partition):
+                    collected_nodes.append(node)
+                self.assertEquals(len(collected_nodes), 7)
+                self.assertEquals(self.app.logger.log_dict['warning'], [
+                    (('Handoff requested (5)',), {})])
+                self.assertEquals(self.app.logger.get_increments(),
+                                  ['handoff_count'])
+
+                # two error-limited primary nodes -> two handoff warnings
+                self.app.log_handoffs = True
+                self.app.logger = FakeLogger()
+                self.app.request_node_count = lambda r: 7
+                object_ring.clear_errors()
+                for i in range(2):
+                    object_ring._devs[i]['errors'] = 999
+                    object_ring._devs[i]['last_error'] = 2 ** 63 - 1
+
+                collected_nodes = []
+                for node in self.app.iter_nodes(object_ring, partition):
+                    collected_nodes.append(node)
+                self.assertEquals(len(collected_nodes), 7)
+                self.assertEquals(self.app.logger.log_dict['warning'], [
+                    (('Handoff requested (5)',), {}),
+                    (('Handoff requested (6)',), {})])
+                self.assertEquals(self.app.logger.get_increments(),
+                                  ['handoff_count',
+                                   'handoff_count'])
+
+                # all error-limited primary nodes -> four handoff warnings,
+                # plus a handoff-all metric
+                self.app.log_handoffs = True
+                self.app.logger = FakeLogger()
+                self.app.request_node_count = lambda r: 10
+                object_ring.set_replicas(4)  # otherwise we run out of handoffs
+                object_ring.clear_errors()
+                for i in range(4):
+                    object_ring._devs[i]['errors'] = 999
+                    object_ring._devs[i]['last_error'] = 2 ** 63 - 1
+
+                collected_nodes = []
+                for node in self.app.iter_nodes(object_ring, partition):
+                    collected_nodes.append(node)
+                self.assertEquals(len(collected_nodes), 10)
+                self.assertEquals(self.app.logger.log_dict['warning'], [
+                    (('Handoff requested (7)',), {}),
+                    (('Handoff requested (8)',), {}),
+                    (('Handoff requested (9)',), {}),
+                    (('Handoff requested (10)',), {})])
+                self.assertEquals(self.app.logger.get_increments(),
+                                  ['handoff_count',
+                                   'handoff_count',
+                                   'handoff_count',
+                                   'handoff_count',
+                                   'handoff_all_count'])
+
             finally:
                 object_ring.max_more_nodes = 0
 
@@ -4020,29 +4107,15 @@ class TestObjectController(unittest.TestCase):
 
     def test_POST_converts_delete_after_to_delete_at(self):
         with save_globals():
+            self.app.object_post_as_copy = False
             controller = proxy_server.ObjectController(self.app, 'account',
                                                        'container', 'object')
-            set_http_connect(200, 200, 200, 200, 200, 202, 202, 202)
+            set_http_connect(200, 200, 202, 202, 202)
             self.app.memcache.store = {}
             orig_time = time.time
             try:
                 t = time.time()
                 time.time = lambda: t
-                req = Request.blank('/v1/a/c/o', {},
-                                    headers={'Content-Type': 'foo/bar',
-                                             'X-Delete-After': '60'})
-                self.app.update_request(req)
-                res = controller.POST(req)
-                self.assertEquals(res.status, '202 Fake')
-                self.assertEquals(req.headers.get('x-delete-at'),
-                                  str(int(t + 60)))
-
-                self.app.object_post_as_copy = False
-                controller = proxy_server.ObjectController(self.app, 'account',
-                                                           'container',
-                                                           'object')
-                set_http_connect(200, 200, 202, 202, 202)
-                self.app.memcache.store = {}
                 req = Request.blank('/v1/a/c/o', {},
                                     headers={'Content-Type': 'foo/bar',
                                              'X-Delete-After': '60'})
@@ -4234,8 +4307,10 @@ class TestObjectController(unittest.TestCase):
                          headers=None, query_string=None):
             if method == "HEAD":
                 self.assertEquals(path, '/a/c/o.jpg')
-                self.assertNotEquals(None, headers[POLICY_INDEX])
-                self.assertEquals(1, int(headers[POLICY_INDEX]))
+                self.assertNotEquals(None,
+                                     headers['X-Backend-Storage-Policy-Index'])
+                self.assertEquals(1, int(headers
+                                         ['X-Backend-Storage-Policy-Index']))
 
         def fake_container_info(account, container, req):
             return {'status': 200, 'sync_key': None, 'storage_policy': '1',
@@ -4333,7 +4408,8 @@ class TestObjectController(unittest.TestCase):
                     expected_storage_policy = 0
                 else:
                     continue
-                storage_policy_index = int(headers[POLICY_INDEX])
+                storage_policy_index = \
+                    int(headers['X-Backend-Storage-Policy-Index'])
                 self.assertEqual(
                     expected_storage_policy, storage_policy_index,
                     'Unexpected %s request for %s '
@@ -4631,13 +4707,13 @@ class TestObjectController(unittest.TestCase):
         self.assertEqual(
             seen_headers, [
                 {'X-Container-Host': '10.0.0.0:1000',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sda'},
                 {'X-Container-Host': '10.0.0.1:1001',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sdb'},
                 {'X-Container-Host': '10.0.0.2:1002',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sdc'}])
 
     def test_PUT_x_container_headers_with_fewer_container_replicas(self):
@@ -4653,10 +4729,10 @@ class TestObjectController(unittest.TestCase):
         self.assertEqual(
             seen_headers, [
                 {'X-Container-Host': '10.0.0.0:1000',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sda'},
                 {'X-Container-Host': '10.0.0.1:1001',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sdb'},
                 {'X-Container-Host': None,
                  'X-Container-Partition': None,
@@ -4675,13 +4751,13 @@ class TestObjectController(unittest.TestCase):
         self.assertEqual(
             seen_headers, [
                 {'X-Container-Host': '10.0.0.0:1000,10.0.0.3:1003',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sda,sdd'},
                 {'X-Container-Host': '10.0.0.1:1001',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sdb'},
                 {'X-Container-Host': '10.0.0.2:1002',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sdc'}])
 
     def test_POST_x_container_headers_with_more_container_replicas(self):
@@ -4699,13 +4775,13 @@ class TestObjectController(unittest.TestCase):
         self.assertEqual(
             seen_headers, [
                 {'X-Container-Host': '10.0.0.0:1000,10.0.0.3:1003',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sda,sdd'},
                 {'X-Container-Host': '10.0.0.1:1001',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sdb'},
                 {'X-Container-Host': '10.0.0.2:1002',
-                 'X-Container-Partition': '1',
+                 'X-Container-Partition': '0',
                  'X-Container-Device': 'sdc'}])
 
     def test_DELETE_x_container_headers_with_more_container_replicas(self):
@@ -4721,13 +4797,13 @@ class TestObjectController(unittest.TestCase):
 
         self.assertEqual(seen_headers, [
             {'X-Container-Host': '10.0.0.0:1000,10.0.0.3:1003',
-             'X-Container-Partition': '1',
+             'X-Container-Partition': '0',
              'X-Container-Device': 'sda,sdd'},
             {'X-Container-Host': '10.0.0.1:1001',
-             'X-Container-Partition': '1',
+             'X-Container-Partition': '0',
              'X-Container-Device': 'sdb'},
             {'X-Container-Host': '10.0.0.2:1002',
-             'X-Container-Partition': '1',
+             'X-Container-Partition': '0',
              'X-Container-Device': 'sdc'}
         ])
 
@@ -4736,10 +4812,9 @@ class TestObjectController(unittest.TestCase):
         self.app.container_ring.set_replicas(2)
 
         delete_at_timestamp = int(time.time()) + 100000
-        delete_at_container = str(
-            delete_at_timestamp /
-            self.app.expiring_objects_container_divisor *
-            self.app.expiring_objects_container_divisor)
+        delete_at_container = utils.get_expirer_container(
+            delete_at_timestamp, self.app.expiring_objects_container_divisor,
+            'a', 'c', 'o')
         req = Request.blank('/v1/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
                             headers={'Content-Type': 'application/stuff',
                                      'Content-Length': '0',
@@ -4754,11 +4829,11 @@ class TestObjectController(unittest.TestCase):
         self.assertEqual(seen_headers, [
             {'X-Delete-At-Host': '10.0.0.0:1000',
              'X-Delete-At-Container': delete_at_container,
-             'X-Delete-At-Partition': '1',
+             'X-Delete-At-Partition': '0',
              'X-Delete-At-Device': 'sda'},
             {'X-Delete-At-Host': '10.0.0.1:1001',
              'X-Delete-At-Container': delete_at_container,
-             'X-Delete-At-Partition': '1',
+             'X-Delete-At-Partition': '0',
              'X-Delete-At-Device': 'sdb'},
             {'X-Delete-At-Host': None,
              'X-Delete-At-Container': None,
@@ -4773,10 +4848,9 @@ class TestObjectController(unittest.TestCase):
         self.app.expiring_objects_container_divisor = 60
 
         delete_at_timestamp = int(time.time()) + 100000
-        delete_at_container = str(
-            delete_at_timestamp /
-            self.app.expiring_objects_container_divisor *
-            self.app.expiring_objects_container_divisor)
+        delete_at_container = utils.get_expirer_container(
+            delete_at_timestamp, self.app.expiring_objects_container_divisor,
+            'a', 'c', 'o')
         req = Request.blank('/v1/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
                             headers={'Content-Type': 'application/stuff',
                                      'Content-Length': 0,
@@ -4790,15 +4864,15 @@ class TestObjectController(unittest.TestCase):
         self.assertEqual(seen_headers, [
             {'X-Delete-At-Host': '10.0.0.0:1000,10.0.0.3:1003',
              'X-Delete-At-Container': delete_at_container,
-             'X-Delete-At-Partition': '1',
+             'X-Delete-At-Partition': '0',
              'X-Delete-At-Device': 'sda,sdd'},
             {'X-Delete-At-Host': '10.0.0.1:1001',
              'X-Delete-At-Container': delete_at_container,
-             'X-Delete-At-Partition': '1',
+             'X-Delete-At-Partition': '0',
              'X-Delete-At-Device': 'sdb'},
             {'X-Delete-At-Host': '10.0.0.2:1002',
              'X-Delete-At-Container': delete_at_container,
-             'X-Delete-At-Partition': '1',
+             'X-Delete-At-Partition': '0',
              'X-Delete-At-Device': 'sdc'}
         ])
 
@@ -4829,7 +4903,7 @@ class TestContainerController(unittest.TestCase):
         for name, index in expected.items():
             req = Request.blank('/a/c', headers={'Content-Length': '0',
                                                  'Content-Type': 'text/plain',
-                                                 POLICY: name})
+                                                 'X-Storage-Policy': name})
             self.assertEqual(controller._convert_policy_to_index(req), index)
         # default test
         req = Request.blank('/a/c', headers={'Content-Length': '0',
@@ -4837,13 +4911,14 @@ class TestContainerController(unittest.TestCase):
         self.assertEqual(controller._convert_policy_to_index(req), None)
         # negative test
         req = Request.blank('/a/c', headers={'Content-Length': '0',
-                            'Content-Type': 'text/plain', POLICY: 'nada'})
+                            'Content-Type': 'text/plain',
+                            'X-Storage-Policy': 'nada'})
         self.assertRaises(HTTPException, controller._convert_policy_to_index,
                           req)
         # storage policy two is deprecated
         req = Request.blank('/a/c', headers={'Content-Length': '0',
                                              'Content-Type': 'text/plain',
-                                             POLICY: 'two'})
+                                             'X-Storage-Policy': 'two'})
         self.assertRaises(HTTPException, controller._convert_policy_to_index,
                           req)
 
@@ -4852,33 +4927,34 @@ class TestContainerController(unittest.TestCase):
         req = Request.blank('/v1/a/c')
         with mocked_http_conn(
                 200, 200,
-                headers={POLICY_INDEX: int(policy)},
+                headers={'X-Backend-Storage-Policy-Index': int(policy)},
         ) as fake_conn:
             resp = req.get_response(self.app)
             self.assertRaises(StopIteration, fake_conn.code_iter.next)
         self.assertEqual(resp.status_int, 200)
-        self.assertEqual(resp.headers[POLICY], policy.name)
+        self.assertEqual(resp.headers['X-Storage-Policy'], policy.name)
 
     def test_no_convert_index_to_name_when_container_not_found(self):
         policy = random.choice(list(POLICIES))
         req = Request.blank('/v1/a/c')
         with mocked_http_conn(
                 200, 404, 404, 404,
-                headers={POLICY_INDEX: int(policy)}) as fake_conn:
+                headers={'X-Backend-Storage-Policy-Index':
+                         int(policy)}) as fake_conn:
             resp = req.get_response(self.app)
             self.assertRaises(StopIteration, fake_conn.code_iter.next)
         self.assertEqual(resp.status_int, 404)
-        self.assertEqual(resp.headers[POLICY], None)
+        self.assertEqual(resp.headers['X-Storage-Policy'], None)
 
     def test_error_convert_index_to_name(self):
         req = Request.blank('/v1/a/c')
         with mocked_http_conn(
                 200, 200,
-                headers={POLICY_INDEX: '-1'}) as fake_conn:
+                headers={'X-Backend-Storage-Policy-Index': '-1'}) as fake_conn:
             resp = req.get_response(self.app)
             self.assertRaises(StopIteration, fake_conn.code_iter.next)
         self.assertEqual(resp.status_int, 200)
-        self.assertEqual(resp.headers[POLICY], None)
+        self.assertEqual(resp.headers['X-Storage-Policy'], None)
         error_lines = self.app.logger.get_lines_for_level('error')
         self.assertEqual(2, len(error_lines))
         for msg in error_lines:
@@ -5010,7 +5086,7 @@ class TestContainerController(unittest.TestCase):
                                     headers={'Content-Length': 0})
                 if requested_policy:
                     expected_policy = requested_policy
-                    req.headers[POLICY] = policy.name
+                    req.headers['X-Storage-Policy'] = policy.name
                 else:
                     expected_policy = POLICIES.default
                 res = req.get_response(self.app)
@@ -5028,15 +5104,18 @@ class TestContainerController(unittest.TestCase):
                     len(backend_requests))
                 for headers in backend_requests:
                     if not requested_policy:
-                        self.assertFalse(POLICY_INDEX in headers)
+                        self.assertFalse('X-Backend-Storage-Policy-Index' in
+                                         headers)
                         self.assertTrue(
                             'X-Backend-Storage-Policy-Default' in headers)
                         self.assertEqual(
                             int(expected_policy),
                             int(headers['X-Backend-Storage-Policy-Default']))
                     else:
-                        self.assertTrue(POLICY_INDEX in headers)
-                        self.assertEqual(int(headers[POLICY_INDEX]),
+                        self.assertTrue('X-Backend-Storage-Policy-Index' in
+                                        headers)
+                        self.assertEqual(int(headers
+                                         ['X-Backend-Storage-Policy-Index']),
                                          policy.idx)
                 # make sure all mocked responses are consumed
                 self.assertRaises(StopIteration, mock_conn.code_iter.next)
@@ -5140,7 +5219,14 @@ class TestContainerController(unittest.TestCase):
             self.app.max_containers_per_account = 12345
             controller = proxy_server.ContainerController(self.app, 'account',
                                                           'container')
-            self.assert_status_map(controller.PUT, (201, 201, 201), 403,
+            self.assert_status_map(controller.PUT,
+                                   (200, 200, 201, 201, 201), 201,
+                                   missing_container=True)
+
+            controller = proxy_server.ContainerController(self.app, 'account',
+                                                          'container_new')
+
+            self.assert_status_map(controller.PUT, (200, 404, 404, 404), 403,
                                    missing_container=True)
 
             self.app.max_containers_per_account = 12345
@@ -5789,10 +5875,10 @@ class TestContainerController(unittest.TestCase):
             200, 201, 201, 201)    # HEAD PUT PUT PUT
         self.assertEqual(seen_headers, [
             {'X-Account-Host': '10.0.0.0:1000',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sda'},
             {'X-Account-Host': '10.0.0.1:1001',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sdb'},
             {'X-Account-Host': None,
              'X-Account-Partition': None,
@@ -5809,13 +5895,13 @@ class TestContainerController(unittest.TestCase):
             200, 201, 201, 201)    # HEAD PUT PUT PUT
         self.assertEqual(seen_headers, [
             {'X-Account-Host': '10.0.0.0:1000,10.0.0.3:1003',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sda,sdd'},
             {'X-Account-Host': '10.0.0.1:1001',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sdb'},
             {'X-Account-Host': '10.0.0.2:1002',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sdc'}
         ])
 
@@ -5829,10 +5915,10 @@ class TestContainerController(unittest.TestCase):
             200, 204, 204, 204)    # HEAD DELETE DELETE DELETE
         self.assertEqual(seen_headers, [
             {'X-Account-Host': '10.0.0.0:1000',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sda'},
             {'X-Account-Host': '10.0.0.1:1001',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sdb'},
             {'X-Account-Host': None,
              'X-Account-Partition': None,
@@ -5849,13 +5935,13 @@ class TestContainerController(unittest.TestCase):
             200, 204, 204, 204)    # HEAD DELETE DELETE DELETE
         self.assertEqual(seen_headers, [
             {'X-Account-Host': '10.0.0.0:1000,10.0.0.3:1003',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sda,sdd'},
             {'X-Account-Host': '10.0.0.1:1001',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sdb'},
             {'X-Account-Host': '10.0.0.2:1002',
-             'X-Account-Partition': '1',
+             'X-Account-Partition': '0',
              'X-Account-Device': 'sdc'}
         ])
 
@@ -6720,9 +6806,11 @@ class TestSwiftInfo(unittest.TestCase):
         self.assertEqual(si['max_object_name_length'],
                          constraints.MAX_OBJECT_NAME_LENGTH)
         self.assertTrue('strict_cors_mode' in si)
+        self.assertEqual(si['allow_account_management'], False)
+        self.assertEqual(si['account_autocreate'], False)
         # this next test is deliberately brittle in order to alert if
         # other items are added to swift info
-        self.assertEqual(len(si), 14)
+        self.assertEqual(len(si), 16)
 
         self.assertTrue('policies' in si)
         sorted_pols = sorted(si['policies'], key=operator.itemgetter('name'))

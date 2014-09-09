@@ -17,6 +17,7 @@ import os
 import sys
 import time
 import signal
+from random import shuffle
 from swift import gettext_ as _
 from contextlib import closing
 from eventlet import Timeout
@@ -47,6 +48,7 @@ class AuditorWorker(object):
             self.max_files_per_second = float(self.zero_byte_only_at_fps)
             self.auditor_type = 'ZBF'
         self.log_time = int(conf.get('log_time', 3600))
+        self.last_logged = 0
         self.files_running_time = 0
         self.bytes_running_time = 0
         self.bytes_processed = 0
@@ -72,7 +74,10 @@ class AuditorWorker(object):
         description = ''
         if device_dirs:
             device_dir_str = ','.join(sorted(device_dirs))
-            description = _(' - %s') % device_dir_str
+            if self.auditor_type == 'ALL':
+                description = _(' - parallel, %s') % device_dir_str
+            else:
+                description = _(' - %s') % device_dir_str
         self.logger.info(_('Begin object audit "%s" mode (%s%s)') %
                         (mode, self.auditor_type, description))
         begin = reported = time.time()
@@ -91,7 +96,7 @@ class AuditorWorker(object):
                 self.files_running_time, self.max_files_per_second)
             self.total_files_processed += 1
             now = time.time()
-            if now - reported >= self.log_time:
+            if now - self.last_logged >= self.log_time:
                 self.logger.info(_(
                     'Object audit (%(type)s). '
                     'Since %(start_time)s: Locally: %(passes)d passed, '
@@ -122,6 +127,7 @@ class AuditorWorker(object):
                 self.quarantines = 0
                 self.errors = 0
                 self.bytes_processed = 0
+                self.last_logged = now
             time_auditing += (now - loop_time)
         # Avoid divide by zero during very short runs
         elapsed = (time.time() - begin) or 0.000001
@@ -138,12 +144,6 @@ class AuditorWorker(object):
                 'frate': self.total_files_processed / elapsed,
                 'brate': self.total_bytes_processed / elapsed,
                 'audit': time_auditing, 'audit_rate': time_auditing / elapsed})
-        # Clear recon cache entry if device_dirs is set
-        if device_dirs:
-            cache_entry = self.create_recon_nested_dict(
-                'object_auditor_stats_%s' % (self.auditor_type),
-                device_dirs, {})
-            dump_recon_cache(cache_entry, self.rcache, self.logger)
         if self.stats_sizes:
             self.logger.info(
                 _('Object audit stats: %s') % json.dumps(self.stats_buckets))
@@ -223,6 +223,7 @@ class ObjectAuditor(Daemon):
         self.conf = conf
         self.logger = get_logger(conf, log_route='object-auditor')
         self.devices = conf.get('devices', '/srv/node')
+        self.concurrency = int(conf.get('concurrency', 1))
         self.conf_zero_byte_fps = int(
             conf.get('zero_byte_files_per_second', 50))
         self.recon_cache_path = conf.get('recon_cache_path',
@@ -260,7 +261,7 @@ class ObjectAuditor(Daemon):
             sys.exit()
 
     def audit_loop(self, parent, zbo_fps, override_devices=None, **kwargs):
-        """Audit loop"""
+        """Parallel audit loop"""
         self.clear_recon_cache('ALL')
         self.clear_recon_cache('ZBF')
         kwargs['device_dirs'] = override_devices
@@ -272,7 +273,34 @@ class ObjectAuditor(Daemon):
             if self.conf_zero_byte_fps:
                 zbf_pid = self.fork_child(zero_byte_fps=True, **kwargs)
                 pids.append(zbf_pid)
-            pids.append(self.fork_child(**kwargs))
+            if self.concurrency == 1:
+                # Audit all devices in 1 process
+                pids.append(self.fork_child(**kwargs))
+            else:
+                # Divide devices amongst parallel processes set by
+                # self.concurrency.  Total number of parallel processes
+                # is self.concurrency + 1 if zero_byte_fps.
+                parallel_proc = self.concurrency + 1 if \
+                    self.conf_zero_byte_fps else self.concurrency
+                device_list = list(override_devices) if override_devices else \
+                    listdir(self.devices)
+                shuffle(device_list)
+                while device_list:
+                    pid = None
+                    if len(pids) == parallel_proc:
+                        pid = os.wait()[0]
+                        pids.remove(pid)
+                    # ZBF scanner must be restarted as soon as it finishes
+                    if self.conf_zero_byte_fps and pid == zbf_pid:
+                        kwargs['device_dirs'] = override_devices
+                        # sleep between ZBF scanner forks
+                        self._sleep()
+                        zbf_pid = self.fork_child(zero_byte_fps=True,
+                                                  **kwargs)
+                        pids.append(zbf_pid)
+                    else:
+                        kwargs['device_dirs'] = [device_list.pop()]
+                        pids.append(self.fork_child(**kwargs))
             while pids:
                 pid = os.wait()[0]
                 # ZBF scanner must be restarted as soon as it finishes

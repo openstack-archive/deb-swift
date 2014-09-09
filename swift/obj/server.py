@@ -29,7 +29,8 @@ from eventlet import sleep, Timeout
 
 from swift.common.utils import public, get_logger, \
     config_true_value, timing_stats, replication, \
-    normalize_delete_at_timestamp, get_log_line, Timestamp
+    normalize_delete_at_timestamp, get_log_line, Timestamp, \
+    get_expirer_container
 from swift.common.bufferedhttp import http_connect
 from swift.common.constraints import check_object_creation, \
     valid_timestamp, check_utf8
@@ -38,7 +39,8 @@ from swift.common.exceptions import ConnectionTimeout, DiskFileQuarantined, \
     DiskFileDeviceUnavailable, DiskFileExpired, ChunkReadTimeout
 from swift.obj import ssync_receiver
 from swift.common.http import is_success
-from swift.common.request_helpers import get_name_and_placement, is_user_meta
+from swift.common.request_helpers import get_name_and_placement, \
+    is_user_meta, is_sys_or_user_meta
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
     HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPRequestTimeout, HTTPUnprocessableEntity, \
@@ -46,7 +48,6 @@ from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
     HTTPInsufficientStorage, HTTPForbidden, HTTPException, HeaderKeyDict, \
     HTTPConflict
 from swift.obj.diskfile import DATAFILE_SYSTEM_META, DiskFileManager
-from swift.common.storage_policy import POLICY_INDEX
 
 
 class ObjectController(object):
@@ -113,7 +114,7 @@ class ObjectController(object):
         # network_chunk_size parameter value instead.
         socket._fileobject.default_bufsize = self.network_chunk_size
 
-        # Provide further setup sepecific to an object server implemenation.
+        # Provide further setup specific to an object server implementation.
         self.setup(conf)
 
     def setup(self, conf):
@@ -170,7 +171,7 @@ class ObjectController(object):
         :param objdevice: device name that the object is in
         :param policy_index: the associated storage policy index
         """
-        headers_out['user-agent'] = 'obj-server %s' % os.getpid()
+        headers_out['user-agent'] = 'object-server %s' % os.getpid()
         full_path = '/%s/%s/%s' % (account, container, obj)
         if all([host, partition, contdevice]):
             try:
@@ -240,7 +241,7 @@ class ObjectController(object):
 
         headers_out['x-trans-id'] = headers_in.get('x-trans-id', '-')
         headers_out['referer'] = request.as_referer()
-        headers_out[POLICY_INDEX] = policy_idx
+        headers_out['X-Backend-Storage-Policy-Index'] = policy_idx
         for conthost, contdevice in updates:
             self.async_update(op, account, container, obj, conthost,
                               contpartition, contdevice, headers_out,
@@ -270,7 +271,8 @@ class ObjectController(object):
         hosts = contdevices = [None]
         headers_in = request.headers
         headers_out = HeaderKeyDict({
-            POLICY_INDEX: 0,  # system accounts are always Policy-0
+            # system accounts are always Policy-0
+            'X-Backend-Storage-Policy-Index': 0,
             'x-timestamp': request.timestamp.internal,
             'x-trans-id': headers_in.get('x-trans-id', '-'),
             'referer': request.as_referer()})
@@ -283,9 +285,9 @@ class ObjectController(object):
                     'best guess as to the container name for now.' % op)
                 # TODO(gholt): In a future release, change the above warning to
                 # a raised exception and remove the guess code below.
-                delete_at_container = (
-                    int(delete_at) / self.expiring_objects_container_divisor *
-                    self.expiring_objects_container_divisor)
+                delete_at_container = get_expirer_container(
+                    delete_at, self.expiring_objects_container_divisor,
+                    account, container, obj)
             partition = headers_in.get('X-Delete-At-Partition', None)
             hosts = headers_in.get('X-Delete-At-Host', '')
             contdevices = headers_in.get('X-Delete-At-Device', '')
@@ -306,9 +308,9 @@ class ObjectController(object):
             # exist there and the original data is left where it is, where
             # it will be ignored when the expirer eventually tries to issue the
             # object DELETE later since the X-Delete-At value won't match up.
-            delete_at_container = str(
-                int(delete_at) / self.expiring_objects_container_divisor *
-                self.expiring_objects_container_divisor)
+            delete_at_container = get_expirer_container(
+                delete_at, self.expiring_objects_container_divisor,
+                account, container, obj)
         delete_at_container = normalize_delete_at_timestamp(
             delete_at_container)
 
@@ -342,7 +344,9 @@ class ObjectController(object):
             return HTTPNotFound(request=request)
         orig_timestamp = Timestamp(orig_metadata.get('X-Timestamp', 0))
         if orig_timestamp >= req_timestamp:
-            return HTTPConflict(request=request)
+            return HTTPConflict(
+                request=request,
+                headers={'X-Backend-Timestamp': orig_timestamp.internal})
         metadata = {'X-Timestamp': req_timestamp.internal}
         metadata.update(val for val in request.headers.iteritems()
                         if is_user_meta('object', val[0]))
@@ -402,8 +406,10 @@ class ObjectController(object):
                 return HTTPPreconditionFailed(request=request)
 
         orig_timestamp = Timestamp(orig_metadata.get('X-Timestamp', 0))
-        if orig_timestamp and orig_timestamp >= req_timestamp:
-            return HTTPConflict(request=request)
+        if orig_timestamp >= req_timestamp:
+            return HTTPConflict(
+                request=request,
+                headers={'X-Backend-Timestamp': orig_timestamp.internal})
         orig_delete_at = int(orig_metadata.get('X-Delete-At') or 0)
         upload_expiration = time.time() + self.max_upload_time
         etag = md5()
@@ -445,7 +451,7 @@ class ObjectController(object):
                     'Content-Length': str(upload_size),
                 }
                 metadata.update(val for val in request.headers.iteritems()
-                                if is_user_meta('object', val[0]))
+                                if is_sys_or_user_meta('object', val[0]))
                 for header_key in (
                         request.headers.get('X-Backend-Replication-Headers') or
                         self.allowed_headers):
@@ -503,7 +509,7 @@ class ObjectController(object):
                 response.headers['Content-Type'] = metadata.get(
                     'Content-Type', 'application/octet-stream')
                 for key, value in metadata.iteritems():
-                    if is_user_meta('object', key) or \
+                    if is_sys_or_user_meta('object', key) or \
                             key.lower() in self.allowed_headers:
                         response.headers[key] = value
                 response.etag = metadata['ETag']
@@ -549,7 +555,7 @@ class ObjectController(object):
         response.headers['Content-Type'] = metadata.get(
             'Content-Type', 'application/octet-stream')
         for key, value in metadata.iteritems():
-            if is_user_meta('object', key) or \
+            if is_sys_or_user_meta('object', key) or \
                     key.lower() in self.allowed_headers:
                 response.headers[key] = value
         response.etag = metadata['ETag']
@@ -598,6 +604,7 @@ class ObjectController(object):
                 response_class = HTTPNoContent
             else:
                 response_class = HTTPConflict
+        response_timestamp = max(orig_timestamp, req_timestamp)
         orig_delete_at = int(orig_metadata.get('X-Delete-At') or 0)
         try:
             req_if_delete_at_val = request.headers['x-if-delete-at']
@@ -631,7 +638,9 @@ class ObjectController(object):
                 'DELETE', account, container, obj, request,
                 HeaderKeyDict({'x-timestamp': req_timestamp.internal}),
                 device, policy_idx)
-        return response_class(request=request)
+        return response_class(
+            request=request,
+            headers={'X-Backend-Timestamp': response_timestamp.internal})
 
     @public
     @replication

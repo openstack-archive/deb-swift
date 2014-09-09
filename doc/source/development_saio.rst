@@ -162,6 +162,11 @@ Getting the code
 
         cd $HOME/python-swiftclient; sudo python setup.py develop; cd -
 
+     Ubuntu 12.04 users need to install python-swiftclient's dependencies before the installation of
+     python-swiftclient. This is due to a bug in an older version of setup tools::
+
+        cd $HOME/python-swiftclient; sudo pip install -r requirements.txt; sudo python setup.py develop; cd -
+
   #. Check out the swift repo::
 
         git clone https://github.com/openstack/swift.git
@@ -392,6 +397,8 @@ commands are as follows:
   #. ``/etc/swift/object-server/4.conf``
 
      .. literalinclude:: /../saio/swift/object-server/4.conf
+
+.. _setup_scripts:
 
 ------------------------------------
 Setting up scripts for running Swift

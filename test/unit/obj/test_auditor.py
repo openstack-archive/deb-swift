@@ -78,6 +78,33 @@ class TestAuditor(unittest.TestCase):
         rmtree(os.path.dirname(self.testdir), ignore_errors=1)
         unit.xattr_data = {}
 
+    def test_worker_conf_parms(self):
+        def check_common_defaults():
+            self.assertEquals(auditor_worker.max_bytes_per_second, 10000000)
+            self.assertEquals(auditor_worker.log_time, 3600)
+
+        # test default values
+        conf = dict(
+            devices=self.devices,
+            mount_check='false',
+            object_size_stats='10,100,1024,10240')
+        auditor_worker = auditor.AuditorWorker(conf, self.logger,
+                                               self.rcache, self.devices)
+        check_common_defaults()
+        self.assertEquals(auditor_worker.diskfile_mgr.disk_chunk_size, 65536)
+        self.assertEquals(auditor_worker.max_files_per_second, 20)
+        self.assertEquals(auditor_worker.zero_byte_only_at_fps, 0)
+
+        # test specified audit value overrides
+        conf.update({'disk_chunk_size': 4096})
+        auditor_worker = auditor.AuditorWorker(conf, self.logger,
+                                               self.rcache, self.devices,
+                                               zero_byte_only_at_fps=50)
+        check_common_defaults()
+        self.assertEquals(auditor_worker.diskfile_mgr.disk_chunk_size, 4096)
+        self.assertEquals(auditor_worker.max_files_per_second, 50)
+        self.assertEquals(auditor_worker.zero_byte_only_at_fps, 50)
+
     def test_object_audit_extra_data(self):
         def run_tests(disk_file):
             auditor_worker = auditor.AuditorWorker(self.conf, self.logger,
@@ -197,6 +224,8 @@ class TestAuditor(unittest.TestCase):
     def test_generic_exception_handling(self):
         auditor_worker = auditor.AuditorWorker(self.conf, self.logger,
                                                self.rcache, self.devices)
+        # pretend that we logged (and reset counters) just now
+        auditor_worker.last_logged = time.time()
         timestamp = str(normalize_timestamp(time.time()))
         pre_errors = auditor_worker.errors
         data = '0' * 1024
@@ -278,11 +307,31 @@ class TestAuditor(unittest.TestCase):
         self.assertEquals(auditor_worker.stats_buckets[10240], 0)
         self.assertEquals(auditor_worker.stats_buckets['OVER'], 1)
 
+    def test_object_run_logging(self):
+        logger = FakeLogger()
+        auditor_worker = auditor.AuditorWorker(self.conf, logger,
+                                               self.rcache, self.devices)
+        auditor_worker.audit_all_objects(device_dirs=['sda'])
+        log_lines = logger.get_lines_for_level('info')
+        self.assertTrue(len(log_lines) > 0)
+        self.assertTrue(log_lines[0].index('ALL - parallel, sda'))
+
+        logger = FakeLogger()
+        auditor_worker = auditor.AuditorWorker(self.conf, logger,
+                                               self.rcache, self.devices,
+                                               zero_byte_only_at_fps=50)
+        auditor_worker.audit_all_objects(device_dirs=['sda'])
+        log_lines = logger.get_lines_for_level('info')
+        self.assertTrue(len(log_lines) > 0)
+        self.assertTrue(log_lines[0].index('ZBF - sda'))
+
     def test_object_run_once_no_sda(self):
         auditor_worker = auditor.AuditorWorker(self.conf, self.logger,
                                                self.rcache, self.devices)
         timestamp = str(normalize_timestamp(time.time()))
         pre_quarantines = auditor_worker.quarantines
+        # pretend that we logged (and reset counters) just now
+        auditor_worker.last_logged = time.time()
         data = '0' * 1024
         etag = md5()
         with self.disk_file.create() as writer:
@@ -302,6 +351,8 @@ class TestAuditor(unittest.TestCase):
     def test_object_run_once_multi_devices(self):
         auditor_worker = auditor.AuditorWorker(self.conf, self.logger,
                                                self.rcache, self.devices)
+        # pretend that we logged (and reset counters) just now
+        auditor_worker.last_logged = time.time()
         timestamp = str(normalize_timestamp(time.time()))
         pre_quarantines = auditor_worker.quarantines
         data = '0' * 10
@@ -444,15 +495,14 @@ class TestAuditor(unittest.TestCase):
         self.assertTrue(os.path.exists(ts_file_path))
 
     def test_sleeper(self):
-        auditor.SLEEP_BETWEEN_AUDITS = 0.10
-        my_auditor = auditor.ObjectAuditor(self.conf)
-        start = time.time()
-        my_auditor._sleep()
-        delta_t = time.time() - start
-        self.assert_(delta_t > 0.08)
-        self.assert_(delta_t < 0.12)
+        with mock.patch(
+                'time.sleep', mock.MagicMock()) as mock_sleep:
+            auditor.SLEEP_BETWEEN_AUDITS = 0.10
+            my_auditor = auditor.ObjectAuditor(self.conf)
+            my_auditor._sleep()
+            mock_sleep.assert_called_with(auditor.SLEEP_BETWEEN_AUDITS)
 
-    def test_run_audit(self):
+    def test_run_parallel_audit(self):
 
         class StopForever(Exception):
             pass
@@ -500,7 +550,9 @@ class TestAuditor(unittest.TestCase):
 
         my_auditor = auditor.ObjectAuditor(dict(devices=self.devices,
                                                 mount_check='false',
-                                                zero_byte_files_per_second=89))
+                                                zero_byte_files_per_second=89,
+                                                concurrency=1))
+
         mocker = ObjectAuditorMock()
         my_auditor.logger.exception = mock.MagicMock()
         real_audit_loop = my_auditor.audit_loop
@@ -555,12 +607,17 @@ class TestAuditor(unittest.TestCase):
 
             my_auditor._sleep = mocker.mock_sleep_continue
 
+            my_auditor.concurrency = 2
             mocker.fork_called = 0
             mocker.wait_called = 0
             my_auditor.run_once()
-            # Fork is called 3 times since the zbf process is forked twice
-            self.assertEquals(mocker.fork_called, 3)
-            self.assertEquals(mocker.wait_called, 3)
+            # Fork is called no. of devices + (no. of devices)/2 + 1 times
+            # since zbf process is forked (no.of devices)/2 + 1 times
+            no_devices = len(os.listdir(self.devices))
+            self.assertEquals(mocker.fork_called, no_devices + no_devices / 2
+                              + 1)
+            self.assertEquals(mocker.wait_called, no_devices + no_devices / 2
+                              + 1)
 
         finally:
             os.fork = was_fork

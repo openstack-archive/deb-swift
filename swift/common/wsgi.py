@@ -15,7 +15,10 @@
 
 """WSGI tools for use with swift."""
 
+from __future__ import print_function
+
 import errno
+import inspect
 import os
 import signal
 import time
@@ -386,7 +389,14 @@ def run_server(conf, logger, sock, global_conf=None):
     max_clients = int(conf.get('max_clients', '1024'))
     pool = RestrictedGreenPool(size=max_clients)
     try:
-        wsgi.server(sock, app, NullLogger(), custom_pool=pool)
+        # Disable capitalizing headers in Eventlet if possible.  This is
+        # necessary for the AWS SDK to work with swift3 middleware.
+        argspec = inspect.getargspec(wsgi.server)
+        if 'capitalize_response_headers' in argspec.args:
+            wsgi.server(sock, app, NullLogger(), custom_pool=pool,
+                        capitalize_response_headers=False)
+        else:
+            wsgi.server(sock, app, NullLogger(), custom_pool=pool)
     except socket.error as err:
         if err[0] != errno.EINVAL:
             raise
@@ -407,7 +417,7 @@ def run_wsgi(conf_path, app_section, *args, **kwargs):
         (conf, logger, log_name) = \
             _initrp(conf_path, app_section, *args, **kwargs)
     except ConfigFileError as e:
-        print e
+        print(e)
         return 1
 
     # bind to address and port

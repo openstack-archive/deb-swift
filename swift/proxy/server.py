@@ -127,10 +127,6 @@ class Application(object):
         self.deny_host_headers = [
             host.strip() for host in
             conf.get('deny_host_headers', '').split(',') if host.strip()]
-        self.rate_limit_after_segment = \
-            int(conf.get('rate_limit_after_segment', 10))
-        self.rate_limit_segments_per_sec = \
-            int(conf.get('rate_limit_segments_per_sec', 1))
         self.log_handoffs = config_true_value(conf.get('log_handoffs', 'true'))
         self.cors_allow_origin = [
             a.strip()
@@ -213,6 +209,8 @@ class Application(object):
             version=swift_version,
             strict_cors_mode=self.strict_cors_mode,
             policies=POLICIES.get_policy_info(),
+            allow_account_management=self.allow_account_management,
+            account_autocreate=self.account_autocreate,
             **constraints.EFFECTIVE_CONSTRAINTS)
 
     def check_config(self):
@@ -490,6 +488,7 @@ class Application(object):
         handoff_nodes = node_iter
         nodes_left = self.request_node_count(len(primary_nodes))
 
+        log_handoffs_threshold = nodes_left - len(primary_nodes)
         for node in primary_nodes:
             if not self.error_limited(node):
                 yield node
@@ -501,11 +500,11 @@ class Application(object):
         for node in handoff_nodes:
             if not self.error_limited(node):
                 handoffs += 1
-                if self.log_handoffs:
+                if self.log_handoffs and handoffs > log_handoffs_threshold:
                     self.logger.increment('handoff_count')
                     self.logger.warning(
                         'Handoff requested (%d)' % handoffs)
-                    if handoffs == len(primary_nodes):
+                    if handoffs - log_handoffs_threshold == len(primary_nodes):
                         self.logger.increment('handoff_all_count')
                 yield node
                 if not self.error_limited(node):
