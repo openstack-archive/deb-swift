@@ -1,3 +1,9 @@
+swift (2.2.0~rc1-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 08 Oct 2014 22:29:36 +0800
+
 swift (2.1.0-1) unstable; urgency=medium
 
   * New upstream release.
