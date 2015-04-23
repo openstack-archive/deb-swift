@@ -1,3 +1,11 @@
+swift (2.2.0-2) unstable; urgency=high
+
+  * CVE-2015-1856 & OSSA 2015-006: Unauthorized delete of versioned Swift
+    object. Applied upstream patch: Prevent unauthorized delete in versioned
+    container (Closes: #783163).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 23 Apr 2015 09:42:47 +0200
+
 swift (2.2.0-1) unstable; urgency=medium
 
   * New upstream release.
