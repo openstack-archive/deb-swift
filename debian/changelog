@@ -6,6 +6,7 @@ swift (2.3.0-1) unstable; urgency=medium
   * Standards-Version is now 3.9.6.
   * Removed applied upstream patch:
     - CVE-2015-1856_Prevent-unauthorized-delete-in-versioned-container.patch
+  * Added usr/bin/swift-object-reconstructor to swift-object.
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 04 Jun 2015 09:49:04 +0200
 

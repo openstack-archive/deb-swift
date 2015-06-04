@@ -4,3 +4,4 @@ usr/bin/swift-object-replicator
 usr/bin/swift-object-server
 usr/bin/swift-object-updater
 usr/bin/swift-recon-cron
+usr/bin/swift-object-reconstructor
