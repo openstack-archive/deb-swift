@@ -2,21 +2,18 @@ Source: swift
 Section: net
 Priority: optional
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
-Uploaders: Julien Danjou <acid@debian.org>,
-           Thomas Goirand <zigo@debian.org>,
-           Ghe Rivero <ghe.rivero@stackops.com>,
-           Mehdi Abaakouk <sileht@sileht.net>
+Uploaders: Thomas Goirand <zigo@debian.org>,
 Build-Depends: debhelper (>= 9),
                openstack-pkg-tools,
-               python-all (>=2.6.6-3~),
+               python-all,
                python-pbr,
                python-setuptools,
-               python-sphinx (>= 1.1.2)
+               python-sphinx,
 Build-Depends-Indep: python-coverage,
                      python-dnspython,
-                     python-eventlet (>= 0.9.15),
-                     python-greenlet (>= 0.3.1),
-                     python-mock (>= 1.0),
+                     python-eventlet (>= 0.16.1),
+                     python-greenlet,
+                     python-mock,
                      python-netifaces,
                      python-nose,
                      python-nosehtmloutput,
@@ -26,13 +23,14 @@ Build-Depends-Indep: python-coverage,
                      python-oslosphinx,
                      python-paste,
                      python-pastedeploy,
-                     python-simplejson (>= 2.0.9),
+                     python-pyeclib (>= 1.0.7),
+                     python-simplejson,
                      python-swiftclient,
-                     python-xattr
-Standards-Version: 3.9.4
+                     python-xattr,
+Standards-Version: 3.9.6
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/swift.git;a=summary
 Vcs-Git: git://anonscm.debian.org/openstack/swift.git
-Homepage: http://launchpad.net/swift
+Homepage: https://github.com/openstack/swift
 
 Package: python-swift
 Architecture: all
@@ -40,12 +38,13 @@ Section: python
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          python-dnspython,
-         python-eventlet (>= 0.9.15),
-         python-greenlet (>= 0.3.1),
+         python-eventlet (>= 0.16.1),
+         python-greenlet,
          python-netifaces,
          python-openssl,
          python-paste,
          python-pastedeploy,
+         python-pyeclib (>= 1.0.7),
          python-setuptools,
          python-simplejson (>= 2.0.9),
          python-swiftclient,
