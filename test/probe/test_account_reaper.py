@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 import uuid
+import unittest
 
 from swiftclient import client
 
@@ -21,24 +21,15 @@ from swift.common.storage_policy import POLICIES
 from swift.common.manager import Manager
 from swift.common.direct_client import direct_delete_account, \
     direct_get_object, direct_head_container, ClientException
-from test.probe.common import kill_servers, reset_environment, \
-    get_to_final_state
+from test.probe.common import ReplProbeTest, ENABLED_POLICIES
 
 
-class TestAccountReaper(unittest.TestCase):
-
-    def setUp(self):
-        (self.pids, self.port2server, self.account_ring, self.container_ring,
-         self.object_ring, self.policy, self.url, self.token,
-         self.account, self.configs) = reset_environment()
-
-    def tearDown(self):
-        kill_servers(self.port2server, self.pids)
+class TestAccountReaper(ReplProbeTest):
 
     def test_sync(self):
         all_objects = []
         # upload some containers
-        for policy in POLICIES:
+        for policy in ENABLED_POLICIES:
             container = 'container-%s-%s' % (policy.name, uuid.uuid4())
             client.put_container(self.url, self.token, container,
                                  headers={'X-Storage-Policy': policy.name})
@@ -52,11 +43,11 @@ class TestAccountReaper(unittest.TestCase):
         headers = client.head_account(self.url, self.token)
 
         self.assertEqual(int(headers['x-account-container-count']),
-                         len(POLICIES))
+                         len(ENABLED_POLICIES))
         self.assertEqual(int(headers['x-account-object-count']),
-                         len(POLICIES))
+                         len(ENABLED_POLICIES))
         self.assertEqual(int(headers['x-account-bytes-used']),
-                         len(POLICIES) * len(body))
+                         len(ENABLED_POLICIES) * len(body))
 
         part, nodes = self.account_ring.get_nodes(self.account)
         for node in nodes:
@@ -64,7 +55,7 @@ class TestAccountReaper(unittest.TestCase):
 
         Manager(['account-reaper']).once()
 
-        get_to_final_state()
+        self.get_to_final_state()
 
         for policy, container, obj in all_objects:
             cpart, cnodes = self.container_ring.get_nodes(

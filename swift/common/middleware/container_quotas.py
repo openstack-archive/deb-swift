@@ -40,10 +40,22 @@ set:
 | X-Container-Meta-Quota-Count                | Maximum object count of the   |
 |                                             | container.                    |
 +---------------------------------------------+-------------------------------+
+
+The ``container_quotas`` middleware should be added to the pipeline in your
+``/etc/swift/proxy-server.conf`` file just after any auth middleware.
+For example::
+
+    [pipeline:main]
+    pipeline = catch_errors cache tempauth container_quotas proxy-server
+
+    [filter:container_quotas]
+    use = egg:swift#container_quotas
 """
-from swift.common.constraints import check_copy_from_header
+from swift.common.constraints import check_copy_from_header, \
+    check_account_format, check_destination_header
 from swift.common.http import is_success
-from swift.common.swob import Response, HTTPBadRequest, wsgify
+from swift.common.swob import HTTPRequestEntityTooLarge, HTTPBadRequest, \
+    wsgify
 from swift.common.utils import register_swift_info
 from swift.proxy.controllers.base import get_container_info, get_object_info
 
@@ -60,7 +72,7 @@ class ContainerQuotaMiddleware(object):
             aresp = req.environ['swift.authorize'](req)
             if aresp:
                 return aresp
-        return Response(status=413, body='Upload exceeds quota.')
+        return HTTPRequestEntityTooLarge(body='Upload exceeds quota.')
 
     @wsgify
     def __call__(self, req):
@@ -85,10 +97,14 @@ class ContainerQuotaMiddleware(object):
                 container_info = get_container_info(
                     req.environ, self.app, swift_source='CQ')
             if req.method == 'COPY' and 'Destination' in req.headers:
-                dest = req.headers.get('Destination').lstrip('/')
+                dest_account = account
+                if 'Destination-Account' in req.headers:
+                    dest_account = req.headers.get('Destination-Account')
+                    dest_account = check_account_format(req, dest_account)
+                dest_container, dest_object = check_destination_header(req)
                 path_info = req.environ['PATH_INFO']
-                req.environ['PATH_INFO'] = "/%s/%s/%s" % (
-                    version, account, dest)
+                req.environ['PATH_INFO'] = "/%s/%s/%s/%s" % (
+                    version, dest_account, dest_container, dest_object)
                 try:
                     container_info = get_container_info(
                         req.environ, self.app, swift_source='CQ')

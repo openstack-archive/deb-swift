@@ -16,30 +16,65 @@
 from io import StringIO
 from tempfile import mkdtemp
 from textwrap import dedent
+import functools
+import unittest
 
 import os
 import shutil
-import unittest
 import uuid
-from swift.common import internal_client
+
+from swift.common import internal_client, utils
 
 from test.probe.brain import BrainSplitter
-from test.probe.common import kill_servers, reset_environment, \
-    get_to_final_state
+from test.probe.common import ReplProbeTest
 
 
-class Test(unittest.TestCase):
+def _sync_methods(object_server_config_paths):
+    """
+    Get the set of all configured sync_methods for the object-replicator
+    sections in the list of config paths.
+    """
+    sync_methods = set()
+    for config_path in object_server_config_paths:
+        options = utils.readconf(config_path, 'object-replicator')
+        sync_methods.add(options.get('sync_method', 'rsync'))
+    return sync_methods
+
+
+def expected_failure_with_ssync(m):
+    """
+    Wrapper for probetests that don't pass if you use ssync
+    """
+    @functools.wraps(m)
+    def wrapper(self, *args, **kwargs):
+        obj_conf = self.configs['object-server']
+        config_paths = [v for k, v in obj_conf.items()
+                        if k in self.brain.handoff_numbers]
+        using_ssync = 'ssync' in _sync_methods(config_paths)
+        failed = False
+        try:
+            return m(self, *args, **kwargs)
+        except AssertionError:
+            failed = True
+            if not using_ssync:
+                raise
+        finally:
+            if using_ssync and not failed:
+                self.fail('This test is expected to fail with ssync')
+    return wrapper
+
+
+class Test(ReplProbeTest):
     def setUp(self):
         """
         Reset all environment and start all servers.
         """
-        (self.pids, self.port2server, self.account_ring, self.container_ring,
-         self.object_ring, self.policy, self.url, self.token,
-         self.account, self.configs) = reset_environment()
+        super(Test, self).setUp()
         self.container_name = 'container-%s' % uuid.uuid4()
         self.object_name = 'object-%s' % uuid.uuid4()
         self.brain = BrainSplitter(self.url, self.token, self.container_name,
-                                   self.object_name, 'object')
+                                   self.object_name, 'object',
+                                   policy=self.policy)
         self.tempdir = mkdtemp()
         conf_path = os.path.join(self.tempdir, 'internal_client.conf')
         conf_body = """
@@ -64,10 +99,7 @@ class Test(unittest.TestCase):
         self.int_client = internal_client.InternalClient(conf_path, 'test', 1)
 
     def tearDown(self):
-        """
-        Stop all servers.
-        """
-        kill_servers(self.port2server, self.pids)
+        super(Test, self).tearDown()
         shutil.rmtree(self.tempdir)
 
     def _put_object(self, headers=None):
@@ -80,15 +112,70 @@ class Test(unittest.TestCase):
         self.int_client.set_object_metadata(self.account, self.container_name,
                                             self.object_name, headers)
 
+    def _delete_object(self):
+        self.int_client.delete_object(self.account, self.container_name,
+                                      self.object_name)
+
+    def _get_object(self, headers=None, expect_statuses=(2,)):
+        return self.int_client.get_object(self.account,
+                                          self.container_name,
+                                          self.object_name,
+                                          headers,
+                                          acceptable_statuses=expect_statuses)
+
     def _get_object_metadata(self):
         return self.int_client.get_object_metadata(self.account,
                                                    self.container_name,
                                                    self.object_name)
 
+    def test_object_delete_is_replicated(self):
+        self.brain.put_container(policy_index=int(self.policy))
+        # put object
+        self._put_object()
+
+        # put newer object with sysmeta to first server subset
+        self.brain.stop_primary_half()
+        self._put_object()
+        self.brain.start_primary_half()
+
+        # delete object on second server subset
+        self.brain.stop_handoff_half()
+        self._delete_object()
+        self.brain.start_handoff_half()
+
+        # run replicator
+        self.get_to_final_state()
+
+        # check object deletion has been replicated on first server set
+        self.brain.stop_primary_half()
+        self._get_object(expect_statuses=(4,))
+        self.brain.start_primary_half()
+
+        # check object deletion persists on second server set
+        self.brain.stop_handoff_half()
+        self._get_object(expect_statuses=(4,))
+
+        # put newer object to second server set
+        self._put_object()
+        self.brain.start_handoff_half()
+
+        # run replicator
+        self.get_to_final_state()
+
+        # check new object  has been replicated on first server set
+        self.brain.stop_primary_half()
+        self._get_object()
+        self.brain.start_primary_half()
+
+        # check new object persists on second server set
+        self.brain.stop_handoff_half()
+        self._get_object()
+
+    @expected_failure_with_ssync
     def test_sysmeta_after_replication_with_subsequent_post(self):
         sysmeta = {'x-object-sysmeta-foo': 'sysmeta-foo'}
         usermeta = {'x-object-meta-bar': 'meta-bar'}
-        self.brain.put_container(policy_index=0)
+        self.brain.put_container(policy_index=int(self.policy))
         # put object
         self._put_object()
         # put newer object with sysmeta to first server subset
@@ -112,7 +199,7 @@ class Test(unittest.TestCase):
         self.brain.start_handoff_half()
 
         # run replicator
-        get_to_final_state()
+        self.get_to_final_state()
 
         # check user metadata has been replicated to first server subset
         # and sysmeta is unchanged
@@ -135,7 +222,7 @@ class Test(unittest.TestCase):
     def test_sysmeta_after_replication_with_prior_post(self):
         sysmeta = {'x-object-sysmeta-foo': 'sysmeta-foo'}
         usermeta = {'x-object-meta-bar': 'meta-bar'}
-        self.brain.put_container(policy_index=0)
+        self.brain.put_container(policy_index=int(self.policy))
         # put object
         self._put_object()
 
@@ -158,7 +245,7 @@ class Test(unittest.TestCase):
         self.brain.start_primary_half()
 
         # run replicator
-        get_to_final_state()
+        self.get_to_final_state()
 
         # check stale user metadata is not replicated to first server subset
         # and sysmeta is unchanged

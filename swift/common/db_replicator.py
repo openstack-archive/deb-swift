@@ -33,9 +33,10 @@ from swift.common.utils import get_logger, whataremyips, storage_directory, \
     renamer, mkdirs, lock_parent_directory, config_true_value, \
     unlink_older_than, dump_recon_cache, rsync_ip, ismount, json, Timestamp
 from swift.common import ring
+from swift.common.ring.utils import is_local_device
 from swift.common.http import HTTP_NOT_FOUND, HTTP_INSUFFICIENT_STORAGE
 from swift.common.bufferedhttp import BufferedHTTPConnection
-from swift.common.exceptions import DriveNotMounted, ConnectionTimeout
+from swift.common.exceptions import DriveNotMounted
 from swift.common.daemon import Daemon
 from swift.common.swob import Response, HTTPNotFound, HTTPNoContent, \
     HTTPAccepted, HTTPBadRequest
@@ -58,12 +59,12 @@ def quarantine_db(object_file, server_type):
         os.path.join(object_dir, '..', '..', '..', '..', 'quarantined',
                      server_type + 's', os.path.basename(object_dir)))
     try:
-        renamer(object_dir, quarantine_dir)
+        renamer(object_dir, quarantine_dir, fsync=False)
     except OSError as e:
         if e.errno not in (errno.EEXIST, errno.ENOTEMPTY):
             raise
         quarantine_dir = "%s-%s" % (quarantine_dir, uuid.uuid4().hex)
-        renamer(object_dir, quarantine_dir)
+        renamer(object_dir, quarantine_dir, fsync=False)
 
 
 def roundrobin_datadirs(datadirs):
@@ -85,6 +86,8 @@ def roundrobin_datadirs(datadirs):
             if not os.path.isdir(part_dir):
                 continue
             suffixes = os.listdir(part_dir)
+            if not suffixes:
+                os.rmdir(part_dir)
             for suffix in suffixes:
                 suff_dir = os.path.join(part_dir, suffix)
                 if not os.path.isdir(suff_dir):
@@ -277,7 +280,8 @@ class Replicator(Daemon):
         """
         self.stats['diff'] += 1
         self.logger.increment('diffs')
-        self.logger.debug('Syncing chunks with %s', http.host)
+        self.logger.debug('Syncing chunks with %s, starting at %s',
+                          http.host, point)
         sync_table = broker.get_syncs()
         objects = broker.get_items_since(point, self.per_diff)
         diffs = 0
@@ -292,6 +296,8 @@ class Replicator(Daemon):
                                       {'status': response.status,
                                        'host': http.host})
                 return False
+            # replication relies on db order to send the next merge batch in
+            # order with no gaps
             point = objects[-1]['ROWID']
             objects = broker.get_items_since(point, self.per_diff)
         if objects:
@@ -370,12 +376,7 @@ class Replicator(Daemon):
 
         :returns: True if successful, False otherwise
         """
-        with ConnectionTimeout(self.conn_timeout):
-            http = self._http_connect(node, partition, broker.db_file)
-        if not http:
-            self.logger.error(
-                _('ERROR Unable to connect to remote server: %s'), node)
-            return False
+        http = self._http_connect(node, partition, broker.db_file)
         sync_args = self._gather_sync_args(info)
         with Timeout(self.node_timeout):
             response = http.replicate('sync', *sync_args)
@@ -464,7 +465,7 @@ class Replicator(Daemon):
                 delete_timestamp > put_timestamp and \
                 info['count'] in (None, '', 0, '0'):
             if self.report_up_to_date(info):
-                self.delete_db(object_file)
+                self.delete_db(broker)
             self.logger.timing_since('timing', start_time)
             return
         responses = []
@@ -543,8 +544,9 @@ class Replicator(Daemon):
             return
         self._local_device_ids = set()
         for node in self.ring.devs:
-            if (node and node['replication_ip'] in ips and
-                    node['replication_port'] == self.port):
+            if node and is_local_device(ips, self.port,
+                                        node['replication_ip'],
+                                        node['replication_port']):
                 if self.mount_check and not ismount(
                         os.path.join(self.root, node['device'])):
                     self.logger.warn(

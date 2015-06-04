@@ -747,7 +747,7 @@ def prespi_AccountBroker_initialize(self, conn, put_timestamp, **kwargs):
     The AccountBroker initialze() function before we added the
     policy stat table.  Used by test_policy_table_creation() to
     make sure that the AccountBroker will correctly add the table
-    for cases where the DB existed before the policy suport was added.
+    for cases where the DB existed before the policy support was added.
 
     :param conn: DB connection object
     :param put_timestamp: put timestamp
@@ -1447,10 +1447,10 @@ class TestAccountBrokerBeforePerPolicyContainerTrack(
 
             # now create an impossible situation by adding a container for a
             # policy index that doesn't exist
-            non_existant_policy_index = int(policy) + 1
-            self.broker.put_container('test-non-existant-policy',
+            non_existent_policy_index = int(policy) + 1
+            self.broker.put_container('test-non-existent-policy',
                                       next(self.ts), 0, 0, 0,
-                                      non_existant_policy_index)
+                                      non_existent_policy_index)
 
             total_container_count = self.broker.get_info()['container_count']
 

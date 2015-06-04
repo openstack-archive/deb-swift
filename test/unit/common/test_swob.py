@@ -1419,6 +1419,57 @@ class TestResponse(unittest.TestCase):
             '<html><h1>Insufficient Storage</h1><p>There was not enough space '
             'to save the resource. Drive: sda1</p></html>')
 
+    def test_200_with_body_and_headers(self):
+        headers = {'Content-Length': '0'}
+        content = 'foo'
+        resp = swift.common.swob.HTTPOk(body=content, headers=headers)
+        self.assertEquals(resp.body, content)
+        self.assertEquals(resp.content_length, len(content))
+
+    def test_init_with_body_headers_app_iter(self):
+        # body exists but no headers and no app_iter
+        body = 'ok'
+        resp = swift.common.swob.Response(body=body)
+        self.assertEquals(resp.body, body)
+        self.assertEquals(resp.content_length, len(body))
+
+        # body and headers with 0 content_length exist but no app_iter
+        body = 'ok'
+        resp = swift.common.swob.Response(
+            body=body, headers={'Content-Length': '0'})
+        self.assertEquals(resp.body, body)
+        self.assertEquals(resp.content_length, len(body))
+
+        # body and headers with content_length exist but no app_iter
+        body = 'ok'
+        resp = swift.common.swob.Response(
+            body=body, headers={'Content-Length': '5'})
+        self.assertEquals(resp.body, body)
+        self.assertEquals(resp.content_length, len(body))
+
+        # body and headers with no content_length exist but no app_iter
+        body = 'ok'
+        resp = swift.common.swob.Response(body=body, headers={})
+        self.assertEquals(resp.body, body)
+        self.assertEquals(resp.content_length, len(body))
+
+        # body, headers with content_length and app_iter exist
+        resp = swift.common.swob.Response(
+            body='ok', headers={'Content-Length': '5'}, app_iter=iter([]))
+        self.assertEquals(resp.content_length, 5)
+        self.assertEquals(resp.body, '')
+
+        # headers with content_length and app_iter exist but no body
+        resp = swift.common.swob.Response(
+            headers={'Content-Length': '5'}, app_iter=iter([]))
+        self.assertEquals(resp.content_length, 5)
+        self.assertEquals(resp.body, '')
+
+        # app_iter exists but no body and headers
+        resp = swift.common.swob.Response(app_iter=iter([]))
+        self.assertEquals(resp.content_length, None)
+        self.assertEquals(resp.body, '')
+
 
 class TestUTC(unittest.TestCase):
     def test_tzname(self):
@@ -1502,6 +1553,17 @@ class TestConditionalIfMatch(unittest.TestCase):
         self.assertEquals(resp.status_int, 200)
         self.assertEquals(body, 'hi')
 
+    def test_simple_conditional_etag_match(self):
+        # if etag matches, proceed as normal
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-Match': 'not-the-etag'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        resp._conditional_etag = 'not-the-etag'
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 200)
+        self.assertEquals(body, 'hi')
+
     def test_quoted_simple_match(self):
         # double quotes or not, doesn't matter
         req = swift.common.swob.Request.blank(
@@ -1518,6 +1580,16 @@ class TestConditionalIfMatch(unittest.TestCase):
             '/', headers={'If-Match': 'not-the-etag'})
         resp = req.get_response(self.fake_app)
         resp.conditional_response = True
+        body = ''.join(resp(req.environ, self.fake_start_response))
+        self.assertEquals(resp.status_int, 412)
+        self.assertEquals(body, '')
+
+    def test_simple_conditional_etag_no_match(self):
+        req = swift.common.swob.Request.blank(
+            '/', headers={'If-Match': 'the-etag'})
+        resp = req.get_response(self.fake_app)
+        resp.conditional_response = True
+        resp._conditional_etag = 'not-the-etag'
         body = ''.join(resp(req.environ, self.fake_start_response))
         self.assertEquals(resp.status_int, 412)
         self.assertEquals(body, '')

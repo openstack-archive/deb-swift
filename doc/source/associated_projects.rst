@@ -80,9 +80,21 @@ Custom Logger Hooks
 
 Storage Backends (DiskFile API implementations)
 -----------------------------------------------
-* `SwiftOnFile <https://github.com/swiftonfile/swiftonfile>`_ - Enables objects created using Swift API to be accessed as files on a POSIX filesystem and vice versa.
+* `Swift-on-File <https://github.com/stackforge/swiftonfile>`_ - Enables objects created using Swift API to be accessed as files on a POSIX filesystem and vice versa.
 * `swift-ceph-backend <https://github.com/stackforge/swift-ceph-backend>`_ - Ceph RADOS object server implementation for Swift.
 * `kinetic-swift <https://github.com/swiftstack/kinetic-swift>`_ - Seagate Kinetic Drive as backend for Swift
+* `swift-scality-backend <https://github.com/scality/ScalitySproxydSwift>`_ - Scality sproxyd object server implementation for Swift.
+
+Developer Tools
+---------------
+* `vagrant-swift-all-in-one
+  <https://github.com/swiftstack/vagrant-swift-all-in-one>`_ - Quickly setup a
+  standard development environment using Vagrant and Chef cookbooks in an
+  Ubuntu virtual machine.
+* `SAIO Ansible playbook <https://github.com/thiagodasilva/swift-aio>`_ -
+  Quickly setup a standard development environment using Vagrant and Ansible in
+  a Fedora virtual machine (with built-in `Swift-on-File
+  <https://github.com/stackforge/swiftonfile>`_ support).
 
 Other
 -----
@@ -90,5 +102,9 @@ Other
 * `Glance <https://github.com/openstack/glance>`_ - Provides services for discovering, registering, and retrieving virtual machine images (for OpenStack Compute [Nova], for example).
 * `Better Staticweb <https://github.com/CloudVPS/better-staticweb>`_ - Makes swift containers accessible by default.
 * `Swiftsync <https://github.com/stackforge/swiftsync>`_ - A massive syncer between two swift clusters.
-* `Swiftbrowser <https://github.com/cschwede/django-swiftbrowser>`_ - Simple web app to access Openstack Swift.
+* `Django Swiftbrowser <https://github.com/cschwede/django-swiftbrowser>`_ - Simple Django web app to access Openstack Swift.
 * `Swift-account-stats <https://github.com/enovance/swift-account-stats>`_ - Swift-account-stats is a tool to report statistics on Swift usage at tenant and global levels.
+* `PyECLib <https://bitbucket.org/kmgreen2/pyeclib>`_ - High Level Erasure Code library used by Swift
+* `liberasurecode <http://www.bytebucket.org/tsg-/liberasurecode>`_ - Low Level Erasure Code library used by PyECLib
+* `Swift Browser <https://github.com/zerovm/swift-browser>`_ - JavaScript interface for Swift
+* `swift-ui <https://github.com/fanatic/swift-ui>`_ - OpenStack Swift web browser

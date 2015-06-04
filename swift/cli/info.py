@@ -24,7 +24,7 @@ from swift.common.request_helpers import is_sys_meta, is_user_meta, \
 from swift.account.backend import AccountBroker, DATADIR as ABDATADIR
 from swift.container.backend import ContainerBroker, DATADIR as CBDATADIR
 from swift.obj.diskfile import get_data_dir, read_metadata, DATADIR_BASE, \
-    extract_policy_index
+    extract_policy
 from swift.common.storage_policy import POLICIES
 
 
@@ -330,7 +330,7 @@ def print_obj(datafile, check_etag=True, swift_dir='/etc/swift',
     :param swift_dir: the path on disk to rings
     :param policy_name: optionally the name to use when finding the ring
     """
-    if not os.path.exists(datafile) or not datafile.endswith('.data'):
+    if not os.path.exists(datafile):
         print "Data file doesn't exist"
         raise InfoSystemExit()
     if not datafile.startswith(('/', './')):
@@ -341,10 +341,7 @@ def print_obj(datafile, check_etag=True, swift_dir='/etc/swift',
     datadir = DATADIR_BASE
 
     # try to extract policy index from datafile disk path
-    try:
-        policy_index = extract_policy_index(datafile)
-    except ValueError:
-        pass
+    policy_index = int(extract_policy(datafile) or POLICIES.legacy)
 
     try:
         if policy_index:

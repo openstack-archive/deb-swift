@@ -20,6 +20,8 @@ from swift import gettext_ as _
 from random import shuffle
 from time import time
 import itertools
+import functools
+import sys
 
 from eventlet import Timeout
 
@@ -31,12 +33,14 @@ from swift.common.utils import cache_from_env, get_logger, \
     get_remote_client, split_path, config_true_value, generate_trans_id, \
     affinity_key_function, affinity_locality_predicate, list_from_csv, \
     register_swift_info
-from swift.common.constraints import check_utf8
-from swift.proxy.controllers import AccountController, ObjectController, \
-    ContainerController, InfoController
+from swift.common.constraints import check_utf8, valid_api_version
+from swift.proxy.controllers import AccountController, ContainerController, \
+    ObjectControllerRouter, InfoController
+from swift.proxy.controllers.base import get_container_info
 from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
     HTTPMethodNotAllowed, HTTPNotFound, HTTPPreconditionFailed, \
-    HTTPServerError, HTTPException, Request
+    HTTPServerError, HTTPException, Request, HTTPServiceUnavailable
+from swift.common.exceptions import APIVersionError
 
 
 # List of entry points for mandatory middlewares.
@@ -76,6 +80,8 @@ class Application(object):
         else:
             self.logger = logger
 
+        self._error_limiting = {}
+
         swift_dir = conf.get('swift_dir', '/etc/swift')
         self.swift_dir = swift_dir
         self.node_timeout = int(conf.get('node_timeout', 10))
@@ -107,6 +113,7 @@ class Application(object):
         # ensure rings are loaded for all configured storage policies
         for policy in POLICIES:
             policy.load_ring(swift_dir)
+        self.obj_controller_router = ObjectControllerRouter()
         self.memcache = memcache
         mimetypes.init(mimetypes.knownfiles +
                        [os.path.join(swift_dir, 'mime.types')])
@@ -184,6 +191,7 @@ class Application(object):
             'x-container-read, x-container-write, '
             'x-container-sync-key, x-container-sync-to, '
             'x-account-meta-temp-url-key, x-account-meta-temp-url-key-2, '
+            'x-container-meta-temp-url-key, x-container-meta-temp-url-key-2, '
             'x-account-access-control')
         self.swift_owner_headers = [
             name.strip().title()
@@ -203,7 +211,7 @@ class Application(object):
         self.expose_info = config_true_value(
             conf.get('expose_info', 'yes'))
         self.disallowed_sections = list_from_csv(
-            conf.get('disallowed_sections'))
+            conf.get('disallowed_sections', 'swift.valid_api_versions'))
         self.admin_key = conf.get('admin_key', None)
         register_swift_info(
             version=swift_version,
@@ -232,29 +240,46 @@ class Application(object):
         """
         return POLICIES.get_object_ring(policy_idx, self.swift_dir)
 
-    def get_controller(self, path):
+    def get_controller(self, req):
         """
         Get the controller to handle a request.
 
-        :param path: path from request
+        :param req: the request
         :returns: tuple of (controller class, path dictionary)
 
         :raises: ValueError (thrown by split_path) if given invalid path
         """
-        if path == '/info':
+        if req.path == '/info':
             d = dict(version=None,
                      expose_info=self.expose_info,
                      disallowed_sections=self.disallowed_sections,
                      admin_key=self.admin_key)
             return InfoController, d
 
-        version, account, container, obj = split_path(path, 1, 4, True)
+        version, account, container, obj = split_path(req.path, 1, 4, True)
         d = dict(version=version,
                  account_name=account,
                  container_name=container,
                  object_name=obj)
+        if account and not valid_api_version(version):
+            raise APIVersionError('Invalid path')
         if obj and container and account:
-            return ObjectController, d
+            info = get_container_info(req.environ, self)
+            policy_index = req.headers.get('X-Backend-Storage-Policy-Index',
+                                           info['storage_policy'])
+            policy = POLICIES.get_by_index(policy_index)
+            if not policy:
+                # This indicates that a new policy has been created,
+                # with rings, deployed, released (i.e. deprecated =
+                # False), used by a client to create a container via
+                # another proxy that was restarted after the policy
+                # was released, and is now cached - all before this
+                # worker was HUPed to stop accepting new
+                # connections.  There should never be an "unknown"
+                # index - but when there is - it's probably operator
+                # error and hopefully temporary.
+                raise HTTPServiceUnavailable('Unknown Storage Policy')
+            return self.obj_controller_router[policy], d
         elif container and account:
             return ContainerController, d
         elif account and not container and not obj:
@@ -314,10 +339,13 @@ class Application(object):
                     request=req, body='Invalid UTF8 or contains NULL')
 
             try:
-                controller, path_parts = self.get_controller(req.path)
+                controller, path_parts = self.get_controller(req)
                 p = req.path_info
                 if isinstance(p, unicode):
                     p = p.encode('utf-8')
+            except APIVersionError:
+                self.logger.increment('errors')
+                return HTTPBadRequest(request=req)
             except ValueError:
                 self.logger.increment('errors')
                 return HTTPNotFound(request=req)
@@ -406,6 +434,9 @@ class Application(object):
         timing = round(timing, 3)  # sort timings to the millisecond
         self.node_timings[node['ip']] = (timing, now + self.timing_expiry)
 
+    def _error_limit_node_key(self, node):
+        return "{ip}:{port}/{device}".format(**node)
+
     def error_limited(self, node):
         """
         Check if the node is currently error limited.
@@ -414,15 +445,16 @@ class Application(object):
         :returns: True if error limited, False otherwise
         """
         now = time()
-        if 'errors' not in node:
+        node_key = self._error_limit_node_key(node)
+        error_stats = self._error_limiting.get(node_key)
+
+        if error_stats is None or 'errors' not in error_stats:
             return False
-        if 'last_error' in node and node['last_error'] < \
+        if 'last_error' in error_stats and error_stats['last_error'] < \
                 now - self.error_suppression_interval:
-            del node['last_error']
-            if 'errors' in node:
-                del node['errors']
+            self._error_limiting.pop(node_key, None)
             return False
-        limited = node['errors'] > self.error_suppression_limit
+        limited = error_stats['errors'] > self.error_suppression_limit
         if limited:
             self.logger.debug(
                 _('Node error limited %(ip)s:%(port)s (%(device)s)'), node)
@@ -438,11 +470,19 @@ class Application(object):
         :param node: dictionary of node to error limit
         :param msg: error message
         """
-        node['errors'] = self.error_suppression_limit + 1
-        node['last_error'] = time()
+        node_key = self._error_limit_node_key(node)
+        error_stats = self._error_limiting.setdefault(node_key, {})
+        error_stats['errors'] = self.error_suppression_limit + 1
+        error_stats['last_error'] = time()
         self.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
                           {'msg': msg, 'ip': node['ip'],
                           'port': node['port'], 'device': node['device']})
+
+    def _incr_node_errors(self, node):
+        node_key = self._error_limit_node_key(node)
+        error_stats = self._error_limiting.setdefault(node_key, {})
+        error_stats['errors'] = error_stats.get('errors', 0) + 1
+        error_stats['last_error'] = time()
 
     def error_occurred(self, node, msg):
         """
@@ -451,8 +491,7 @@ class Application(object):
         :param node: dictionary of node to handle errors for
         :param msg: error message
         """
-        node['errors'] = node.get('errors', 0) + 1
-        node['last_error'] = time()
+        self._incr_node_errors(node)
         self.logger.error(_('%(msg)s %(ip)s:%(port)s/%(device)s'),
                           {'msg': msg, 'ip': node['ip'],
                           'port': node['port'], 'device': node['device']})
@@ -460,9 +499,9 @@ class Application(object):
     def iter_nodes(self, ring, partition, node_iter=None):
         """
         Yields nodes for a ring partition, skipping over error
-        limited nodes and stopping at the configurable number of
-        nodes. If a node yielded subsequently gets error limited, an
-        extra node will be yielded to take its place.
+        limited nodes and stopping at the configurable number of nodes. If a
+        node yielded subsequently gets error limited, an extra node will be
+        yielded to take its place.
 
         Note that if you're going to iterate over this concurrently from
         multiple greenthreads, you'll want to use a
@@ -513,7 +552,8 @@ class Application(object):
                     if nodes_left <= 0:
                         return
 
-    def exception_occurred(self, node, typ, additional_info):
+    def exception_occurred(self, node, typ, additional_info,
+                           **kwargs):
         """
         Handle logging of generic exceptions.
 
@@ -521,11 +561,19 @@ class Application(object):
         :param typ: server type
         :param additional_info: additional information to log
         """
-        self.logger.exception(
-            _('ERROR with %(type)s server %(ip)s:%(port)s/%(device)s re: '
-              '%(info)s'),
-            {'type': typ, 'ip': node['ip'], 'port': node['port'],
-             'device': node['device'], 'info': additional_info})
+        self._incr_node_errors(node)
+        if 'level' in kwargs:
+            log = functools.partial(self.logger.log, kwargs.pop('level'))
+            if 'exc_info' not in kwargs:
+                kwargs['exc_info'] = sys.exc_info()
+        else:
+            log = self.logger.exception
+        log(_('ERROR with %(type)s server %(ip)s:%(port)s/%(device)s'
+              ' re: %(info)s'), {
+                  'type': typ, 'ip': node['ip'], 'port':
+                  node['port'], 'device': node['device'],
+                  'info': additional_info
+              }, **kwargs)
 
     def modify_wsgi_pipeline(self, pipe):
         """

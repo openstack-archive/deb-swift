@@ -17,7 +17,7 @@
 import time
 from os import listdir, unlink
 from os.path import join as path_join
-from unittest import main, TestCase
+from unittest import main
 from uuid import uuid4
 
 from swiftclient import client
@@ -26,7 +26,7 @@ from swift.common import direct_client
 from swift.common.exceptions import ClientException
 from swift.common.utils import hash_path, readconf
 from swift.obj.diskfile import write_metadata, read_metadata, get_data_dir
-from test.probe.common import kill_servers, reset_environment
+from test.probe.common import ReplProbeTest
 
 
 RETRIES = 5
@@ -49,18 +49,12 @@ def get_data_file_path(obj_dir):
         return path_join(obj_dir, filename)
 
 
-class TestObjectFailures(TestCase):
-
-    def setUp(self):
-        (self.pids, self.port2server, self.account_ring, self.container_ring,
-         self.object_ring, self.policy, self.url, self.token,
-         self.account, self.configs) = reset_environment()
-
-    def tearDown(self):
-        kill_servers(self.port2server, self.pids)
+class TestObjectFailures(ReplProbeTest):
 
     def _setup_data_file(self, container, obj, data):
-        client.put_container(self.url, self.token, container)
+        client.put_container(self.url, self.token, container,
+                             headers={'X-Storage-Policy':
+                                      self.policy.name})
         client.put_object(self.url, self.token, container, obj, data)
         odata = client.get_object(self.url, self.token, container, obj)[-1]
         self.assertEquals(odata, data)
@@ -73,7 +67,7 @@ class TestObjectFailures(TestCase):
         obj_server_conf = readconf(self.configs['object-server'][node_id])
         devices = obj_server_conf['app:object-server']['devices']
         obj_dir = '%s/%s/%s/%s/%s/%s/' % (devices, device,
-                                          get_data_dir(self.policy.idx),
+                                          get_data_dir(self.policy),
                                           opart, hash_str[-3:], hash_str)
         data_file = get_data_file_path(obj_dir)
         return onode, opart, data_file

@@ -17,9 +17,10 @@ bind_port = 8080
 # to /info.  You can withhold subsections by separating the dict level with a
 # ".".  The following would cause the sections 'container_quotas' and 'tempurl'
 # to not be listed, and the key max_failed_deletes would be removed from
-# bulk_delete.  Default is empty, allowing all registered fetures to be listed
-# via HTTP GET /info.
-# disallowed_sections = container_quotas, tempurl, bulk_delete.max_failed_deletes
+# bulk_delete.  Default value is 'swift.valid_api_versions' which allows all
+# registered features to be listed via HTTP GET /info except
+# swift.valid_api_versions information
+# disallowed_sections = swift.valid_api_versions, container_quotas, tempurl
 
 # Use an integer to override the number of pre-forked processes that will
 # accept connections.  Should default to the number of effective cpu
@@ -203,7 +204,7 @@ use = egg:swift#proxy
 # These are the headers whose values will only be shown to swift_owners. The
 # exact definition of a swift_owner is up to the auth system in use, but
 # usually indicates administrative responsibilities.
-# swift_owner_headers = x-container-read, x-container-write, x-container-sync-key, x-container-sync-to, x-account-meta-temp-url-key, x-account-meta-temp-url-key-2, x-account-access-control
+# swift_owner_headers = x-container-read, x-container-write, x-container-sync-key, x-container-sync-to, x-account-meta-temp-url-key, x-account-meta-temp-url-key-2, x-container-meta-temp-url-key, x-container-meta-temp-url-key-2, x-account-access-control
 
 [filter:tempauth]
 use = egg:swift#tempauth
@@ -218,8 +219,22 @@ use = egg:swift#tempauth
 # attempting to validate it. Also, with authorization, only Swift storage
 # accounts with this prefix will be authorized by this middleware. Useful if
 # multiple auth systems are in use for one Swift cluster.
+# The reseller_prefix may contain a comma separated list of items. The first
+# item is used for the token as mentioned above. If second and subsequent
+# items exist, the middleware will handle authorization for an account with
+# that prefix. For example, for prefixes "AUTH, SERVICE", a path of
+# /v1/SERVICE_account is handled the same as /v1/AUTH_account. If an empty
+# (blank) reseller prefix is required, it must be first in the list. Two
+# single quote characters indicates an empty (blank) reseller prefix.
 # reseller_prefix = AUTH
+
 #
+# The require_group parameter names a group that must be presented by
+# either X-Auth-Token or X-Service-Token. Usually this parameter is
+# used only with multiple reseller prefixes (e.g., SERVICE_require_group=blah).
+# By default, no group is needed. Do not use .admin.
+# require_group =
+
 # The auth prefix will cause requests beginning with this prefix to be routed
 # to the auth subsystem, for granting tokens, etc.
 # auth_prefix = /auth/
@@ -255,6 +270,7 @@ user_admin_admin = admin .admin .reseller_admin
 user_test_tester = testing .admin
 user_test2_tester2 = testing2 .admin
 user_test_tester3 = testing3
+user_test5_tester5 = testing5 service
 
 # To enable Keystone authentication you need to have the auth token
 # middleware first to be configured. Here is an example below, please
@@ -267,30 +283,79 @@ user_test_tester3 = testing3
 #
 # [filter:authtoken]
 # paste.filter_factory = keystonemiddleware.auth_token:filter_factory
-# auth_host = keystonehost
-# auth_port = 35357
-# auth_protocol = http
+# identity_uri = http://keystonehost:35357/
 # auth_uri = http://keystonehost:5000/
 # admin_tenant_name = service
 # admin_user = swift
 # admin_password = password
-# delay_auth_decision = 1
+#
+# delay_auth_decision defaults to False, but leaving it as false will
+# prevent other auth systems, staticweb, tempurl, formpost, and ACLs from
+# working. This value must be explicitly set to True.
+# delay_auth_decision = False
+#
 # cache = swift.cache
 # include_service_catalog = False
 #
 # [filter:keystoneauth]
 # use = egg:swift#keystoneauth
-# Operator roles is the role which user would be allowed to manage a
-# tenant and be able to create container or give ACL to others.
+# The reseller_prefix option lists account namespaces that this middleware is
+# responsible for. The prefix is placed before the Keystone project id.
+# For example, for project 12345678, and prefix AUTH, the account is
+# named AUTH_12345678 (i.e., path is /v1/AUTH_12345678/...).
+# Several prefixes are allowed by specifying a comma-separated list
+# as in: "reseller_prefix = AUTH, SERVICE". The empty string indicates a
+# single blank/empty prefix. If an empty prefix is required in a list of
+# prefixes, a value of '' (two single quote characters) indicates a
+# blank/empty prefix. Except for the blank/empty prefix, an underscore ('_')
+# character is appended to the value unless already present.
+# reseller_prefix = AUTH
+#
+# The user must have at least one role named by operator_roles on a
+# project in order to create, delete and modify containers and objects
+# and to set and read privileged headers such as ACLs.
+# If there are several reseller prefix items, you can prefix the
+# parameter so it applies only to those accounts (for example
+# the parameter SERVICE_operator_roles applies to the /v1/SERVICE_<project>
+# path). If you omit the prefix, the option applies to all reseller
+# prefix items. For the blank/empty prefix, prefix with '' (do not put
+# underscore after the two single quote characters).
 # operator_roles = admin, swiftoperator
+#
 # The reseller admin role has the ability to create and delete accounts
 # reseller_admin_role = ResellerAdmin
+#
+# This allows middleware higher in the WSGI pipeline to override auth
+# processing, useful for middleware such as tempurl and formpost. If you know
+# you're not going to use such middleware and you want a bit of extra security,
+# you can set this to false.
+# allow_overrides = true
+#
+# If is_admin is true, a user whose username is the same as the project name
+# and who has any role on the project will have access rights elevated to be
+# the same as if the user had an operator role. Note that the condition
+# compares names rather than UUIDs. This option is deprecated.
+# is_admin = false
+#
+# If the service_roles parameter is present, an X-Service-Token must be
+# present in the request that when validated, grants at least one role listed
+# in the parameter. The X-Service-Token may be scoped to any project.
+# If there are several reseller prefix items, you can prefix the
+# parameter so it applies only to those accounts (for example
+# the parameter SERVICE_service_roles applies to the /v1/SERVICE_<project>
+# path). If you omit the prefix, the option applies to all reseller
+# prefix items. For the blank/empty prefix, prefix with '' (do not put
+# underscore after the two single quote characters).
+# By default, no service_roles are required.
+# service_roles =
+#
 # For backwards compatibility, keystoneauth will match names in cross-tenant
 # access control lists (ACLs) when both the requesting user and the tenant
 # are in the default domain i.e the domain to which existing tenants are
 # migrated. The default_domain_id value configured here should be the same as
 # the value used during migration of tenants to keystone domains.
 # default_domain_id = default
+#
 # For a new installation, or an installation in which keystone projects may
 # move between domains, you should disable backwards compatible name matching
 # in ACLs by setting allow_names_in_acls to false:
@@ -334,6 +399,8 @@ use = egg:swift#memcache
 #
 # Sets the maximum number of connections to each memcached server per worker
 # memcache_max_connections = 2
+#
+# More options documented in memcache.conf-sample
 
 [filter:ratelimit]
 use = egg:swift#ratelimit
@@ -361,6 +428,9 @@ use = egg:swift#ratelimit
 # account_ratelimit of 0 means disabled
 # account_ratelimit = 0
 
+# DEPRECATED- these will continue to work but will be replaced
+# by the X-Account-Sysmeta-Global-Write-Ratelimit flag.
+# Please see ratelimiting docs for details.
 # these are comma separated lists of account names
 # account_whitelist = a,b
 # account_blacklist = c,d
@@ -532,10 +602,6 @@ use = egg:swift#bulk
 
 # delete_container_retry_count = 0
 
-# Note: Put after auth in the pipeline.
-[filter:container-quotas]
-use = egg:swift#container_quotas
-
 # Note: Put after auth and staticweb in the pipeline.
 [filter:slo]
 use = egg:swift#slo
@@ -568,6 +634,11 @@ use = egg:swift#dlo
 # Time limit on GET requests (seconds)
 # max_get_time = 86400
 
+# Note: Put after auth in the pipeline.
+[filter:container-quotas]
+use = egg:swift#container_quotas
+
+# Note: Put after auth in the pipeline.
 [filter:account-quotas]
 use = egg:swift#account_quotas
 
@@ -591,7 +662,7 @@ use = egg:swift#container_sync
 # Set this to specify this clusters //realm/cluster as "current" in /info
 # current = //REALM/CLUSTER
 
-# Note: Put it at the beginning of the pipleline to profile all middleware. But
+# Note: Put it at the beginning of the pipeline to profile all middleware. But
 # it is safer to put this after catch_errors, gatekeeper and healthcheck.
 [filter:xprofile]
 use = egg:swift#xprofile

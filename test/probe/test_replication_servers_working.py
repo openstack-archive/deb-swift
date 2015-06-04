@@ -14,19 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest import main, TestCase
+from unittest import main
 from uuid import uuid4
 import os
 import time
 import shutil
 
 from swiftclient import client
-from swift.common.storage_policy import POLICIES
 from swift.obj.diskfile import get_data_dir
 
-from test.probe.common import kill_servers, reset_environment
+from test.probe.common import ReplProbeTest
 from swift.common.utils import readconf
-from swift.common.manager import Manager
 
 
 def collect_info(path_list):
@@ -68,7 +66,7 @@ def find_max_occupancy_node(dir_list):
     return number
 
 
-class TestReplicatorFunctions(TestCase):
+class TestReplicatorFunctions(ReplProbeTest):
     """
     Class for testing replicators and replication servers.
 
@@ -77,19 +75,6 @@ class TestReplicatorFunctions(TestCase):
     ring's files using set_info command or new ring's files with
     different port values.
     """
-    def setUp(self):
-        """
-        Reset all environment and start all servers.
-        """
-        (self.pids, self.port2server, self.account_ring, self.container_ring,
-         self.object_ring, self.policy, self.url, self.token,
-         self.account, self.configs) = reset_environment()
-
-    def tearDown(self):
-        """
-        Stop all servers.
-        """
-        kill_servers(self.port2server, self.pids)
 
     def test_main(self):
         # Create one account, container and object file.
@@ -102,7 +87,7 @@ class TestReplicatorFunctions(TestCase):
         # Delete file "hashes.pkl".
         # Check, that all files were replicated.
         path_list = []
-        data_dir = get_data_dir(POLICIES.default.idx)
+        data_dir = get_data_dir(self.policy)
         # Figure out where the devices are
         for node_id in range(1, 5):
             conf = readconf(self.configs['object-server'][node_id])
@@ -114,7 +99,9 @@ class TestReplicatorFunctions(TestCase):
 
         # Put data to storage nodes
         container = 'container-%s' % uuid4()
-        client.put_container(self.url, self.token, container)
+        client.put_container(self.url, self.token, container,
+                             headers={'X-Storage-Policy':
+                                      self.policy.name})
 
         obj = 'object-%s' % uuid4()
         client.put_object(self.url, self.token, container, obj, 'VERIFY')
@@ -133,8 +120,7 @@ class TestReplicatorFunctions(TestCase):
                 test_node_dir_list.append(d)
         # Run all replicators
         try:
-            Manager(['object-replicator', 'container-replicator',
-                     'account-replicator']).start()
+            self.replicators.start()
 
             # Delete some files
             for directory in os.listdir(test_node):
@@ -208,8 +194,7 @@ class TestReplicatorFunctions(TestCase):
                         raise
                     time.sleep(1)
         finally:
-            Manager(['object-replicator', 'container-replicator',
-                     'account-replicator']).stop()
+            self.replicators.stop()
 
 
 if __name__ == '__main__':

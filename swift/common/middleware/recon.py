@@ -53,6 +53,8 @@ class ReconMiddleware(object):
                                                   'container.recon')
         self.account_recon_cache = os.path.join(self.recon_cache_path,
                                                 'account.recon')
+        self.drive_recon_cache = os.path.join(self.recon_cache_path,
+                                              'drive.recon')
         self.account_ring_path = os.path.join(swift_dir, 'account.ring.gz')
         self.container_ring_path = os.path.join(swift_dir, 'container.ring.gz')
         self.rings = [self.account_ring_path, self.container_ring_path]
@@ -123,6 +125,11 @@ class ReconMiddleware(object):
         """get # of async pendings"""
         return self._from_recon_cache(['async_pending'],
                                       self.object_recon_cache)
+
+    def get_driveaudit_error(self):
+        """get # of drive audit errors"""
+        return self._from_recon_cache(['drive_audit_errors'],
+                                      self.drive_recon_cache)
 
     def get_replication_info(self, recon_type):
         """get replication info"""
@@ -266,15 +273,28 @@ class ReconMiddleware(object):
 
     def get_quarantine_count(self):
         """get obj/container/account quarantine counts"""
-        qcounts = {"objects": 0, "containers": 0, "accounts": 0}
+        qcounts = {"objects": 0, "containers": 0, "accounts": 0,
+                   "policies": {}}
         qdir = "quarantined"
         for device in os.listdir(self.devices):
-            for qtype in qcounts:
-                qtgt = os.path.join(self.devices, device, qdir, qtype)
-                if os.path.exists(qtgt):
+            qpath = os.path.join(self.devices, device, qdir)
+            if os.path.exists(qpath):
+                for qtype in os.listdir(qpath):
+                    qtgt = os.path.join(qpath, qtype)
                     linkcount = os.lstat(qtgt).st_nlink
                     if linkcount > 2:
-                        qcounts[qtype] += linkcount - 2
+                        if qtype.startswith('objects'):
+                            if '-' in qtype:
+                                pkey = qtype.split('-', 1)[1]
+                            else:
+                                pkey = '0'
+                            qcounts['policies'].setdefault(pkey,
+                                                           {'objects': 0})
+                            qcounts['policies'][pkey]['objects'] \
+                                += linkcount - 2
+                            qcounts['objects'] += linkcount - 2
+                        else:
+                            qcounts[qtype] += linkcount - 2
         return qcounts
 
     def get_socket_info(self, openr=open):
@@ -346,6 +366,8 @@ class ReconMiddleware(object):
             content = self.get_socket_info()
         elif rcheck == "version":
             content = self.get_version()
+        elif rcheck == "driveaudit":
+            content = self.get_driveaudit_error()
         else:
             content = "Invalid path: %s" % req.path
             return Response(request=req, status="404 Not Found",

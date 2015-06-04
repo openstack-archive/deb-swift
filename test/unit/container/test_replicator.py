@@ -34,44 +34,6 @@ from test.unit import patch_policies
 from contextlib import contextmanager
 
 
-class TestReplicator(unittest.TestCase):
-
-    def setUp(self):
-        self.orig_ring = replicator.db_replicator.ring.Ring
-        replicator.db_replicator.ring.Ring = lambda *args, **kwargs: None
-
-    def tearDown(self):
-        replicator.db_replicator.ring.Ring = self.orig_ring
-
-    def test_report_up_to_date(self):
-        repl = replicator.ContainerReplicator({})
-        info = {'put_timestamp': Timestamp(1).internal,
-                'delete_timestamp': Timestamp(0).internal,
-                'object_count': 0,
-                'bytes_used': 0,
-                'reported_put_timestamp': Timestamp(1).internal,
-                'reported_delete_timestamp': Timestamp(0).internal,
-                'reported_object_count': 0,
-                'reported_bytes_used': 0}
-        self.assertTrue(repl.report_up_to_date(info))
-        info['delete_timestamp'] = Timestamp(2).internal
-        self.assertFalse(repl.report_up_to_date(info))
-        info['reported_delete_timestamp'] = Timestamp(2).internal
-        self.assertTrue(repl.report_up_to_date(info))
-        info['object_count'] = 1
-        self.assertFalse(repl.report_up_to_date(info))
-        info['reported_object_count'] = 1
-        self.assertTrue(repl.report_up_to_date(info))
-        info['bytes_used'] = 1
-        self.assertFalse(repl.report_up_to_date(info))
-        info['reported_bytes_used'] = 1
-        self.assertTrue(repl.report_up_to_date(info))
-        info['put_timestamp'] = Timestamp(3).internal
-        self.assertFalse(repl.report_up_to_date(info))
-        info['reported_put_timestamp'] = Timestamp(3).internal
-        self.assertTrue(repl.report_up_to_date(info))
-
-
 @patch_policies
 class TestReplicatorSync(test_db_replicator.TestReplicatorSync):
 
@@ -79,6 +41,46 @@ class TestReplicatorSync(test_db_replicator.TestReplicatorSync):
     datadir = server.DATADIR
     replicator_daemon = replicator.ContainerReplicator
     replicator_rpc = replicator.ContainerReplicatorRpc
+
+    def test_report_up_to_date(self):
+        broker = self._get_broker('a', 'c', node_index=0)
+        broker.initialize(Timestamp(1).internal, int(POLICIES.default))
+        info = broker.get_info()
+        broker.reported(info['put_timestamp'],
+                        info['delete_timestamp'],
+                        info['object_count'],
+                        info['bytes_used'])
+        full_info = broker.get_replication_info()
+        expected_info = {'put_timestamp': Timestamp(1).internal,
+                         'delete_timestamp': '0',
+                         'count': 0,
+                         'bytes_used': 0,
+                         'reported_put_timestamp': Timestamp(1).internal,
+                         'reported_delete_timestamp': '0',
+                         'reported_object_count': 0,
+                         'reported_bytes_used': 0}
+        for key, value in expected_info.items():
+            msg = 'expected value for %r, %r != %r' % (
+                key, full_info[key], value)
+            self.assertEqual(full_info[key], value, msg)
+        repl = replicator.ContainerReplicator({})
+        self.assertTrue(repl.report_up_to_date(full_info))
+        full_info['delete_timestamp'] = Timestamp(2).internal
+        self.assertFalse(repl.report_up_to_date(full_info))
+        full_info['reported_delete_timestamp'] = Timestamp(2).internal
+        self.assertTrue(repl.report_up_to_date(full_info))
+        full_info['count'] = 1
+        self.assertFalse(repl.report_up_to_date(full_info))
+        full_info['reported_object_count'] = 1
+        self.assertTrue(repl.report_up_to_date(full_info))
+        full_info['bytes_used'] = 1
+        self.assertFalse(repl.report_up_to_date(full_info))
+        full_info['reported_bytes_used'] = 1
+        self.assertTrue(repl.report_up_to_date(full_info))
+        full_info['put_timestamp'] = Timestamp(3).internal
+        self.assertFalse(repl.report_up_to_date(full_info))
+        full_info['reported_put_timestamp'] = Timestamp(3).internal
+        self.assertTrue(repl.report_up_to_date(full_info))
 
     def test_sync_remote_in_sync(self):
         # setup a local container
@@ -166,7 +168,8 @@ class TestReplicatorSync(test_db_replicator.TestReplicatorSync):
 
         # replicate
         part, local_node = self._get_broker_part_node(broker)
-        node = random.choice([n for n in self._ring.devs if n != local_node])
+        node = random.choice([n for n in self._ring.devs
+                              if n['id'] != local_node['id']])
         info = broker.get_replication_info()
         success = daemon._repl_to_node(node, broker, part, info)
         self.assertFalse(success)
@@ -182,7 +185,7 @@ class TestReplicatorSync(test_db_replicator.TestReplicatorSync):
         # add a row to "local" db
         broker.put_object('/a/c/o', time.time(), 0, 'content-type', 'etag',
                           storage_policy_index=broker.storage_policy_index)
-        #replicate
+        # replicate
         node = {'device': 'sdc', 'replication_ip': '127.0.0.1'}
         daemon = replicator.ContainerReplicator({})
 
@@ -306,6 +309,53 @@ class TestReplicatorSync(test_db_replicator.TestReplicatorSync):
             self.assertEqual(remote_info[k], v,
                              "mismatch remote %s %r != %r" % (
                                  k, remote_info[k], v))
+
+    def test_diff_capped_sync(self):
+        ts = (Timestamp(t).internal for t in
+              itertools.count(int(time.time())))
+        put_timestamp = next(ts)
+        # start off with with a local db that is way behind
+        broker = self._get_broker('a', 'c', node_index=0)
+        broker.initialize(put_timestamp, POLICIES.default.idx)
+        for i in range(50):
+            broker.put_object(
+                'o%s' % i, next(ts), 0, 'content-type-old', 'etag',
+                storage_policy_index=broker.storage_policy_index)
+        # remote primary db has all the new bits...
+        remote_broker = self._get_broker('a', 'c', node_index=1)
+        remote_broker.initialize(put_timestamp, POLICIES.default.idx)
+        for i in range(100):
+            remote_broker.put_object(
+                'o%s' % i, next(ts), 0, 'content-type-new', 'etag',
+                storage_policy_index=remote_broker.storage_policy_index)
+        # except there's *one* tiny thing in our local broker that's newer
+        broker.put_object(
+            'o101', next(ts), 0, 'content-type-new', 'etag',
+            storage_policy_index=broker.storage_policy_index)
+
+        # setup daemon with smaller per_diff and max_diffs
+        part, node = self._get_broker_part_node(broker)
+        daemon = self._get_daemon(node, conf_updates={'per_diff': 10,
+                                                      'max_diffs': 3})
+        self.assertEqual(daemon.per_diff, 10)
+        self.assertEqual(daemon.max_diffs, 3)
+        # run once and verify diff capped
+        self._run_once(node, daemon=daemon)
+        self.assertEqual(1, daemon.stats['diff'])
+        self.assertEqual(1, daemon.stats['diff_capped'])
+        # run again and verify fully synced
+        self._run_once(node, daemon=daemon)
+        self.assertEqual(1, daemon.stats['diff'])
+        self.assertEqual(0, daemon.stats['diff_capped'])
+        # now that we're synced the new item should be in remote db
+        remote_names = set()
+        for item in remote_broker.list_objects_iter(500, '', '', '', ''):
+            name, ts, size, content_type, etag = item
+            remote_names.add(name)
+            self.assertEqual(content_type, 'content-type-new')
+        self.assert_('o101' in remote_names)
+        self.assertEqual(len(remote_names), 101)
+        self.assertEqual(remote_broker.get_info()['object_count'], 101)
 
     def test_sync_status_change(self):
         # setup a local container
@@ -744,7 +794,7 @@ class TestReplicatorSync(test_db_replicator.TestReplicatorSync):
         self.assertEqual(remote_broker.get_info()['object_count'], 1)
         self.assertEqual([], remote_broker.get_misplaced_since(-1, 1))
 
-        #replicate
+        # replicate
         part, node = self._get_broker_part_node(broker)
         daemon = self._run_once(node)
         # since our local broker has no rows to push it logs as no_change

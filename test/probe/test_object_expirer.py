@@ -13,26 +13,25 @@
 # limitations under the License.
 
 import random
-import unittest
 import uuid
+import unittest
 
 from nose import SkipTest
 
 from swift.common.internal_client import InternalClient
 from swift.common.manager import Manager
-from swift.common.storage_policy import POLICIES
 from swift.common.utils import Timestamp
 
-from test.probe.common import reset_environment, get_to_final_state
+from test.probe.common import ReplProbeTest, ENABLED_POLICIES
 from test.probe.test_container_merge_policy_index import BrainSplitter
 
 from swiftclient import client
 
 
-class TestObjectExpirer(unittest.TestCase):
+class TestObjectExpirer(ReplProbeTest):
 
     def setUp(self):
-        if len(POLICIES) < 2:
+        if len(ENABLED_POLICIES) < 2:
             raise SkipTest('Need more than one policy')
 
         self.expirer = Manager(['object-expirer'])
@@ -47,17 +46,16 @@ class TestObjectExpirer(unittest.TestCase):
         conf_file = conf_files[0]
         self.client = InternalClient(conf_file, 'probe-test', 3)
 
-        (self.pids, self.port2server, self.account_ring, self.container_ring,
-         self.object_ring, self.policy, self.url, self.token,
-         self.account, self.configs) = reset_environment()
+        super(TestObjectExpirer, self).setUp()
         self.container_name = 'container-%s' % uuid.uuid4()
         self.object_name = 'object-%s' % uuid.uuid4()
         self.brain = BrainSplitter(self.url, self.token, self.container_name,
                                    self.object_name)
 
     def test_expirer_object_split_brain(self):
-        old_policy = random.choice(list(POLICIES))
-        wrong_policy = random.choice([p for p in POLICIES if p != old_policy])
+        old_policy = random.choice(ENABLED_POLICIES)
+        wrong_policy = random.choice([p for p in ENABLED_POLICIES
+                                      if p != old_policy])
         # create an expiring object and a container with the wrong policy
         self.brain.stop_primary_half()
         self.brain.put_container(int(old_policy))
@@ -81,7 +79,7 @@ class TestObjectExpirer(unittest.TestCase):
         self.expirer.once()
 
         self.brain.start_handoff_half()
-        get_to_final_state()
+        self.get_to_final_state()
 
         # validate object is expired
         found_in_policy = None
@@ -114,7 +112,7 @@ class TestObjectExpirer(unittest.TestCase):
 
         # and validate object is tombstoned
         found_in_policy = None
-        for policy in POLICIES:
+        for policy in ENABLED_POLICIES:
             metadata = self.client.get_object_metadata(
                 self.account, self.container_name, self.object_name,
                 acceptable_statuses=(4,),

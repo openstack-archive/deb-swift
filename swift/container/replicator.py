@@ -22,7 +22,7 @@ from eventlet import Timeout
 from swift.container.backend import ContainerBroker, DATADIR
 from swift.container.reconciler import (
     MISPLACED_OBJECTS_ACCOUNT, incorrect_policy_index,
-    get_reconciler_container_name, get_row_to_q_entry_translater)
+    get_reconciler_container_name, get_row_to_q_entry_translator)
 from swift.common import db_replicator
 from swift.common.storage_policy import POLICIES
 from swift.common.exceptions import DeviceUnavailable
@@ -39,9 +39,14 @@ class ContainerReplicator(db_replicator.Replicator):
     default_port = 6001
 
     def report_up_to_date(self, full_info):
-        for key in ('put_timestamp', 'delete_timestamp', 'object_count',
-                    'bytes_used'):
-            if full_info['reported_' + key] != full_info[key]:
+        reported_key_map = {
+            'reported_put_timestamp': 'put_timestamp',
+            'reported_delete_timestamp': 'delete_timestamp',
+            'reported_bytes_used': 'bytes_used',
+            'reported_object_count': 'count',
+        }
+        for reported, value_key in reported_key_map.items():
+            if full_info[reported] != full_info[value_key]:
                 return False
         return True
 
@@ -155,20 +160,20 @@ class ContainerReplicator(db_replicator.Replicator):
         :param broker: the container broker with misplaced objects
         :param point: the last verified ``reconciler_sync_point``
 
-        :returns: the last successfull enqueued rowid
+        :returns: the last successful enqueued rowid
         """
         max_sync = broker.get_max_row()
         misplaced = broker.get_misplaced_since(point, self.per_diff)
         if not misplaced:
             return max_sync
-        translater = get_row_to_q_entry_translater(broker)
+        translator = get_row_to_q_entry_translator(broker)
         errors = False
         low_sync = point
         while misplaced:
             batches = defaultdict(list)
             for item in misplaced:
                 container = get_reconciler_container_name(item['created_at'])
-                batches[container].append(translater(item))
+                batches[container].append(translator(item))
             for container, item_list in batches.items():
                 success = self.feed_reconciler(container, item_list)
                 if not success:

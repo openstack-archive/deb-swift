@@ -76,7 +76,7 @@ use = egg:swift#object
 # slow = 0
 #
 # Objects smaller than this are not evicted from the buffercache once read
-# keep_cache_size = 5424880
+# keep_cache_size = 5242880
 #
 # If true, objects for authenticated GET requests may be kept in buffer cache
 # if small enough
@@ -210,6 +210,29 @@ use = egg:swift#recon
 # than or equal to this number. By default(auto), handoff partitions will be
 # removed  when it has successfully replicated to all the canonical nodes.
 # handoff_delete = auto
+
+[object-reconstructor]
+# You can override the default log routing for this app here (don't use set!):
+# Unless otherwise noted, each setting below has the same meaning as described
+# in the [object-replicator] section, however these settings apply to the EC
+# reconstructor
+#
+# log_name = object-reconstructor
+# log_facility = LOG_LOCAL0
+# log_level = INFO
+# log_address = /dev/log
+#
+# daemonize = on
+# run_pause = 30
+# concurrency = 1
+# stats_interval = 300
+# node_timeout = 10
+# http_timeout = 60
+# lockup_timeout = 1800
+# reclaim_age = 604800
+# ring_check_interval = 15
+# recon_cache_path = /var/cache/swift
+# handoffs_first = False
 
 [object-updater]
 # You can override the default log routing for this app here (don't use set!):

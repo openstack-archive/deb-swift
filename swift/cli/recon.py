@@ -109,6 +109,34 @@ class Scout(object):
         url, content, status = self.scout_host(base_url, self.recon_type)
         return url, content, status
 
+    def scout_server_type(self, host):
+        """
+        Obtain Server header by calling OPTIONS.
+
+        :param host: host to check
+        :returns: Server type, status
+        """
+        try:
+            url = "http://%s:%s/" % (host[0], host[1])
+            req = urllib2.Request(url)
+            req.get_method = lambda: 'OPTIONS'
+            conn = urllib2.urlopen(req)
+            header = conn.info().getheader('Server')
+            server_header = header.split('/')
+            content = server_header[0]
+            status = 200
+        except urllib2.HTTPError as err:
+            if not self.suppress_errors or self.verbose:
+                print("-> %s: %s" % (url, err))
+            content = err
+            status = err.code
+        except urllib2.URLError as err:
+            if not self.suppress_errors or self.verbose:
+                print("-> %s: %s" % (url, err))
+            content = err
+            status = -1
+        return url, content, status
+
 
 class SwiftRecon(object):
     """
@@ -302,6 +330,27 @@ class SwiftRecon(object):
             print("[async_pending] - No hosts returned valid data.")
         print("=" * 79)
 
+    def driveaudit_check(self, hosts):
+        """
+        Obtain and print drive audit error statistics
+
+        :param hosts: set of hosts to check. in the format of:
+            set([('127.0.0.1', 6020), ('127.0.0.2', 6030)]
+        """
+        scan = {}
+        recon = Scout("driveaudit", self.verbose, self.suppress_errors,
+                      self.timeout)
+        print("[%s] Checking drive-audit errors" % self._ptime())
+        for url, response, status in self.pool.imap(recon.scout, hosts):
+            if status == 200:
+                scan[url] = response['drive_audit_errors']
+        stats = self._gen_stats(scan.values(), 'drive_audit_errors')
+        if stats['reported'] > 0:
+            self._print_stats(stats)
+        else:
+            print("[drive_audit_errors] - No hosts returned valid data.")
+        print("=" * 79)
+
     def umount_check(self, hosts):
         """
         Check for and print unmounted drives
@@ -332,6 +381,29 @@ class SwiftRecon(object):
             node = urlparse(host).netloc
             for entry in errors[host]:
                 print("Device errors: %s on %s" % (entry, node))
+        print("=" * 79)
+
+    def server_type_check(self, hosts):
+        """
+        Check for server types on the ring
+
+        :param hosts: set of hosts to check. in the format of:
+            set([('127.0.0.1', 6020), ('127.0.0.2', 6030)])
+        """
+        errors = {}
+        recon = Scout("server_type_check", self.verbose, self.suppress_errors,
+                      self.timeout)
+        print("[%s] Validating server type '%s' on %s hosts..." %
+              (self._ptime(), self.server_type, len(hosts)))
+        for url, response, status in self.pool.imap(
+                recon.scout_server_type, hosts):
+            if status == 200:
+                if response != self.server_type + '-server':
+                    errors[url] = response
+        print("%s/%s hosts ok, %s error[s] while checking hosts." % (
+            len(hosts) - len(errors), len(hosts), len(errors)))
+        for host in errors:
+            print("Invalid: %s is %s" % (host, errors[host]))
         print("=" * 79)
 
     def expirer_check(self, hosts):
@@ -692,6 +764,7 @@ class SwiftRecon(object):
         objq = {}
         conq = {}
         acctq = {}
+        stats = {}
         recon = Scout("quarantined", self.verbose, self.suppress_errors,
                       self.timeout)
         print("[%s] Checking quarantine" % self._ptime())
@@ -700,7 +773,12 @@ class SwiftRecon(object):
                 objq[url] = response['objects']
                 conq[url] = response['containers']
                 acctq[url] = response['accounts']
-        stats = {"objects": objq, "containers": conq, "accounts": acctq}
+                if response['policies']:
+                    for key in response['policies']:
+                        pkey = "objects_%s" % key
+                        stats.setdefault(pkey, {})
+                        stats[pkey][url] = response['policies'][key]['objects']
+        stats.update({"objects": objq, "containers": conq, "accounts": acctq})
         for item in stats:
             if len(stats[item]) > 0:
                 computed = self._gen_stats(stats[item].values(),
@@ -743,7 +821,7 @@ class SwiftRecon(object):
                 print("No hosts returned valid data.")
         print("=" * 79)
 
-    def disk_usage(self, hosts, top=0, human_readable=False):
+    def disk_usage(self, hosts, top=0, lowest=0, human_readable=False):
         """
         Obtain and print disk usage statistics
 
@@ -757,6 +835,7 @@ class SwiftRecon(object):
         raw_total_avail = []
         percents = {}
         top_percents = [(None, 0)] * top
+        low_percents = [(None, 100)] * lowest
         recon = Scout("diskusage", self.verbose, self.suppress_errors,
                       self.timeout)
         print("[%s] Checking disk usage now" % self._ptime())
@@ -779,6 +858,13 @@ class SwiftRecon(object):
                                     (url + ' ' + entry['device'], used))
                                 top_percents.sort(key=lambda x: -x[1])
                                 top_percents.pop()
+                                break
+                        for ident, oused in low_percents:
+                            if oused > used:
+                                low_percents.append(
+                                    (url + ' ' + entry['device'], used))
+                                low_percents.sort(key=lambda x: x[1])
+                                low_percents.pop()
                                 break
                 stats[url] = hostusage
 
@@ -825,6 +911,13 @@ class SwiftRecon(object):
                     url, device = ident.split()
                     host = urlparse(url).netloc.split(':')[0]
                     print('%.02f%%  %s' % (used, '%-15s %s' % (host, device)))
+        if low_percents:
+            print('LOWEST %s' % lowest)
+            for ident, used in low_percents:
+                if ident:
+                    url, device = ident.split()
+                    host = urlparse(url).netloc.split(':')[0]
+                    print('%.02f%%  %s' % (used, '%-15s %s' % (host, device)))
 
     def main(self):
         """
@@ -866,16 +959,23 @@ class SwiftRecon(object):
                         help="Get cluster load average stats")
         args.add_option('--quarantined', '-q', action="store_true",
                         help="Get cluster quarantine stats")
+        args.add_option('--validate-servers', action="store_true",
+                        help="Validate servers on the ring")
         args.add_option('--md5', action="store_true",
                         help="Get md5sum of servers ring and compare to "
                         "local copy")
         args.add_option('--sockstat', action="store_true",
                         help="Get cluster socket usage stats")
+        args.add_option('--driveaudit', action="store_true",
+                        help="Get drive audit error stats")
         args.add_option('--top', type='int', metavar='COUNT', default=0,
                         help='Also show the top COUNT entries in rank order.')
+        args.add_option('--lowest', type='int', metavar='COUNT', default=0,
+                        help='Also show the lowest COUNT entries in rank \
+                        order.')
         args.add_option('--all', action="store_true",
-                        help="Perform all checks. Equal to -arudlq --md5 "
-                        "--sockstat")
+                        help="Perform all checks. Equal to \t\t\t-arudlq "
+                        "--md5 --sockstat --auditor --updater --expirer")
         args.add_option('--region', type="int",
                         help="Only query servers in specified region")
         args.add_option('--zone', '-z', type="int",
@@ -928,10 +1028,13 @@ class SwiftRecon(object):
                 self.auditor_check(hosts)
             self.umount_check(hosts)
             self.load_check(hosts)
-            self.disk_usage(hosts, options.top, options.human_readable)
+            self.disk_usage(hosts, options.top, options.lowest,
+                            options.human_readable)
             self.get_ringmd5(hosts, swift_dir)
             self.quarantine_check(hosts)
             self.socket_usage(hosts)
+            self.server_type_check(hosts)
+            self.driveaudit_check(hosts)
         else:
             if options.async:
                 if self.server_type == 'object':
@@ -960,10 +1063,13 @@ class SwiftRecon(object):
                     self.expirer_check(hosts)
                 else:
                     print("Error: Can't check expired on non object servers.")
+            if options.validate_servers:
+                self.server_type_check(hosts)
             if options.loadstats:
                 self.load_check(hosts)
             if options.diskusage:
-                self.disk_usage(hosts, options.top, options.human_readable)
+                self.disk_usage(hosts, options.top, options.lowest,
+                                options.human_readable)
             if options.md5:
                 self.get_ringmd5(hosts, swift_dir)
                 self.get_swiftconfmd5(hosts)
@@ -971,6 +1077,8 @@ class SwiftRecon(object):
                 self.quarantine_check(hosts)
             if options.sockstat:
                 self.socket_usage(hosts)
+            if options.driveaudit:
+                self.driveaudit_check(hosts)
 
 
 def main():

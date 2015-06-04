@@ -21,6 +21,7 @@ import ctypes
 import errno
 import eventlet
 import eventlet.event
+import functools
 import grp
 import logging
 import os
@@ -28,6 +29,7 @@ import mock
 import random
 import re
 import socket
+import stat
 import sys
 import json
 import math
@@ -55,7 +57,7 @@ from mock import MagicMock, patch
 from swift.common.exceptions import (Timeout, MessageTimeout,
                                      ConnectionTimeout, LockTimeout,
                                      ReplicationLockTimeout,
-                                     MimeInvalid)
+                                     MimeInvalid, ThreadPoolDead)
 from swift.common import utils
 from swift.common.container_sync_realms import ContainerSyncRealms
 from swift.common.swob import Request, Response
@@ -143,14 +145,28 @@ class MockSys(object):
 def reset_loggers():
     if hasattr(utils.get_logger, 'handler4logger'):
         for logger, handler in utils.get_logger.handler4logger.items():
-            logger.thread_locals = (None, None)
             logger.removeHandler(handler)
         delattr(utils.get_logger, 'handler4logger')
     if hasattr(utils.get_logger, 'console_handler4logger'):
         for logger, h in utils.get_logger.console_handler4logger.items():
-            logger.thread_locals = (None, None)
             logger.removeHandler(h)
         delattr(utils.get_logger, 'console_handler4logger')
+    # Reset the LogAdapter class thread local state. Use get_logger() here
+    # to fetch a LogAdapter instance because the items from
+    # get_logger.handler4logger above are the underlying logger instances,
+    # not the LogAdapter.
+    utils.get_logger(None).thread_locals = (None, None)
+
+
+def reset_logger_state(f):
+    @functools.wraps(f)
+    def wrapper(self, *args, **kwargs):
+        reset_loggers()
+        try:
+            return f(self, *args, **kwargs)
+        finally:
+            reset_loggers()
+    return wrapper
 
 
 class TestTimestamp(unittest.TestCase):
@@ -162,6 +178,21 @@ class TestTimestamp(unittest.TestCase):
     def test_invalid_string_conversion(self):
         t = utils.Timestamp(time.time())
         self.assertRaises(TypeError, str, t)
+
+    def test_offset_limit(self):
+        t = 1417462430.78693
+        # can't have a offset above MAX_OFFSET
+        self.assertRaises(ValueError, utils.Timestamp, t,
+                          offset=utils.MAX_OFFSET + 1)
+        # exactly max offset is fine
+        ts = utils.Timestamp(t, offset=utils.MAX_OFFSET)
+        self.assertEqual(ts.internal, '1417462430.78693_ffffffffffffffff')
+        # but you can't offset it further
+        self.assertRaises(ValueError, utils.Timestamp, ts.internal, offset=1)
+        # unless you start below it
+        ts = utils.Timestamp(t, offset=utils.MAX_OFFSET - 1)
+        self.assertEqual(utils.Timestamp(ts.internal, offset=1),
+                         '1417462430.78693_ffffffffffffffff')
 
     def test_normal_format_no_offset(self):
         expected = '1402436408.91203'
@@ -1012,54 +1043,58 @@ class TestUtils(unittest.TestCase):
         handler = logging.StreamHandler(sio)
         logger = logging.getLogger()
         logger.addHandler(handler)
-        lfo = utils.LoggerFileObject(logger)
+        lfo_stdout = utils.LoggerFileObject(logger)
+        lfo_stderr = utils.LoggerFileObject(logger)
+        lfo_stderr = utils.LoggerFileObject(logger, 'STDERR')
         print 'test1'
         self.assertEquals(sio.getvalue(), '')
-        sys.stdout = lfo
+        sys.stdout = lfo_stdout
         print 'test2'
         self.assertEquals(sio.getvalue(), 'STDOUT: test2\n')
-        sys.stderr = lfo
+        sys.stderr = lfo_stderr
         print >> sys.stderr, 'test4'
-        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDOUT: test4\n')
+        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDERR: test4\n')
         sys.stdout = orig_stdout
         print 'test5'
-        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDOUT: test4\n')
+        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDERR: test4\n')
         print >> sys.stderr, 'test6'
-        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDOUT: test4\n'
-                          'STDOUT: test6\n')
+        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDERR: test4\n'
+                          'STDERR: test6\n')
         sys.stderr = orig_stderr
         print 'test8'
-        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDOUT: test4\n'
-                          'STDOUT: test6\n')
-        lfo.writelines(['a', 'b', 'c'])
-        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDOUT: test4\n'
-                          'STDOUT: test6\nSTDOUT: a#012b#012c\n')
-        lfo.close()
-        lfo.write('d')
-        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDOUT: test4\n'
-                          'STDOUT: test6\nSTDOUT: a#012b#012c\nSTDOUT: d\n')
-        lfo.flush()
-        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDOUT: test4\n'
-                          'STDOUT: test6\nSTDOUT: a#012b#012c\nSTDOUT: d\n')
-        got_exc = False
-        try:
-            for line in lfo:
-                pass
-        except Exception:
-            got_exc = True
-        self.assert_(got_exc)
-        got_exc = False
-        try:
-            for line in lfo.xreadlines():
-                pass
-        except Exception:
-            got_exc = True
-        self.assert_(got_exc)
-        self.assertRaises(IOError, lfo.read)
-        self.assertRaises(IOError, lfo.read, 1024)
-        self.assertRaises(IOError, lfo.readline)
-        self.assertRaises(IOError, lfo.readline, 1024)
-        lfo.tell()
+        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDERR: test4\n'
+                          'STDERR: test6\n')
+        lfo_stdout.writelines(['a', 'b', 'c'])
+        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDERR: test4\n'
+                          'STDERR: test6\nSTDOUT: a#012b#012c\n')
+        lfo_stdout.close()
+        lfo_stderr.close()
+        lfo_stdout.write('d')
+        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDERR: test4\n'
+                          'STDERR: test6\nSTDOUT: a#012b#012c\nSTDOUT: d\n')
+        lfo_stdout.flush()
+        self.assertEquals(sio.getvalue(), 'STDOUT: test2\nSTDERR: test4\n'
+                          'STDERR: test6\nSTDOUT: a#012b#012c\nSTDOUT: d\n')
+        for lfo in (lfo_stdout, lfo_stderr):
+            got_exc = False
+            try:
+                for line in lfo:
+                    pass
+            except Exception:
+                got_exc = True
+            self.assert_(got_exc)
+            got_exc = False
+            try:
+                for line in lfo.xreadlines():
+                    pass
+            except Exception:
+                got_exc = True
+            self.assert_(got_exc)
+            self.assertRaises(IOError, lfo.read)
+            self.assertRaises(IOError, lfo.read, 1024)
+            self.assertRaises(IOError, lfo.readline)
+            self.assertRaises(IOError, lfo.readline, 1024)
+            lfo.tell()
 
     def test_parse_options(self):
         # Get a file that is definitely on disk
@@ -1225,6 +1260,7 @@ class TestUtils(unittest.TestCase):
         finally:
             utils.SysLogHandler = orig_sysloghandler
 
+    @reset_logger_state
     def test_clean_logger_exception(self):
         # setup stream logging
         sio = StringIO()
@@ -1314,8 +1350,8 @@ class TestUtils(unittest.TestCase):
 
         finally:
             logger.logger.removeHandler(handler)
-            reset_loggers()
 
+    @reset_logger_state
     def test_swift_log_formatter_max_line_length(self):
         # setup stream logging
         sio = StringIO()
@@ -1369,8 +1405,8 @@ class TestUtils(unittest.TestCase):
             self.assertEqual(strip_value(sio), '1234567890abcde\n')
         finally:
             logger.logger.removeHandler(handler)
-            reset_loggers()
 
+    @reset_logger_state
     def test_swift_log_formatter(self):
         # setup stream logging
         sio = StringIO()
@@ -1433,11 +1469,19 @@ class TestUtils(unittest.TestCase):
             self.assertEquals(strip_value(sio), 'test 1.2.3.4 test 12345\n')
         finally:
             logger.logger.removeHandler(handler)
-            reset_loggers()
 
     def test_storage_directory(self):
         self.assertEquals(utils.storage_directory('objects', '1', 'ABCDEF'),
                           'objects/1/DEF/ABCDEF')
+
+    def test_expand_ipv6(self):
+        expanded_ipv6 = "fe80::204:61ff:fe9d:f156"
+        upper_ipv6 = "fe80:0000:0000:0000:0204:61ff:fe9d:f156"
+        self.assertEqual(expanded_ipv6, utils.expand_ipv6(upper_ipv6))
+        omit_ipv6 = "fe80:0000:0000::0204:61ff:fe9d:f156"
+        self.assertEqual(expanded_ipv6, utils.expand_ipv6(omit_ipv6))
+        less_num_ipv6 = "fe80:0:00:000:0204:61ff:fe9d:f156"
+        self.assertEqual(expanded_ipv6, utils.expand_ipv6(less_num_ipv6))
 
     def test_whataremyips(self):
         myips = utils.whataremyips()
@@ -1681,6 +1725,7 @@ log_name = %(yarr)s'''
         for func in required_func_calls:
             self.assert_(utils.os.called_funcs[func])
 
+    @reset_logger_state
     def test_capture_stdio(self):
         # stubs
         logger = utils.get_logger(None, 'dummy')
@@ -1728,13 +1773,12 @@ log_name = %(yarr)s'''
                                         utils.LoggerFileObject))
             self.assertFalse(isinstance(utils.sys.stderr,
                                         utils.LoggerFileObject))
-            reset_loggers()
         finally:
             utils.sys = _orig_sys
             utils.os = _orig_os
 
+    @reset_logger_state
     def test_get_logger_console(self):
-        reset_loggers()
         logger = utils.get_logger(None)
         console_handlers = [h for h in logger.logger.handlers if
                             isinstance(h, logging.StreamHandler)]
@@ -1752,7 +1796,6 @@ log_name = %(yarr)s'''
         self.assertEquals(len(console_handlers), 1)
         new_handler = console_handlers[0]
         self.assertNotEquals(new_handler, old_handler)
-        reset_loggers()
 
     def verify_under_pseudo_time(
             self, func, target_runtime_ms=1, *args, **kwargs):
@@ -2147,13 +2190,14 @@ cluster_dfw1 = http://dfw1.host/v1/
         self.assertFalse(utils.streq_const_time('a', 'aaaaa'))
         self.assertFalse(utils.streq_const_time('ABC123', 'abc123'))
 
-    def test_quorum_size(self):
+    def test_replication_quorum_size(self):
         expected_sizes = {1: 1,
                           2: 2,
                           3: 2,
                           4: 3,
                           5: 3}
-        got_sizes = dict([(n, utils.quorum_size(n)) for n in expected_sizes])
+        got_sizes = dict([(n, utils.quorum_size(n))
+                          for n in expected_sizes])
         self.assertEqual(expected_sizes, got_sizes)
 
     def test_rsync_ip_ipv4_localhost(self):
@@ -2688,6 +2732,33 @@ cluster_dfw1 = http://dfw1.host/v1/
             utils.get_hmac('GET', '/path', 1, 'abc'),
             'b17f6ff8da0e251737aa9e3ee69a881e3e092e2f')
 
+    def test_get_policy_index(self):
+        # Account has no information about a policy
+        req = Request.blank(
+            '/sda1/p/a',
+            environ={'REQUEST_METHOD': 'GET'})
+        res = Response()
+        self.assertEquals(None, utils.get_policy_index(req.headers,
+                                                       res.headers))
+
+        # The policy of a container can be specified by the response header
+        req = Request.blank(
+            '/sda1/p/a/c',
+            environ={'REQUEST_METHOD': 'GET'})
+        res = Response(headers={'X-Backend-Storage-Policy-Index': '1'})
+        self.assertEquals('1', utils.get_policy_index(req.headers,
+                                                      res.headers))
+
+        # The policy of an object to be created can be specified by the request
+        # header
+        req = Request.blank(
+            '/sda1/p/a/c/o',
+            environ={'REQUEST_METHOD': 'PUT'},
+            headers={'X-Backend-Storage-Policy-Index': '2'})
+        res = Response()
+        self.assertEquals('2', utils.get_policy_index(req.headers,
+                                                      res.headers))
+
     def test_get_log_line(self):
         req = Request.blank(
             '/sda1/p/a/c/o',
@@ -2697,7 +2768,7 @@ cluster_dfw1 = http://dfw1.host/v1/
         additional_info = 'some information'
         server_pid = 1234
         exp_line = '1.2.3.4 - - [01/Jan/1970:02:46:41 +0000] "HEAD ' \
-            '/sda1/p/a/c/o" 200 - "-" "-" "-" 1.2000 "some information" 1234'
+            '/sda1/p/a/c/o" 200 - "-" "-" "-" 1.2000 "some information" 1234 -'
         with mock.patch(
                 'time.gmtime',
                 mock.MagicMock(side_effect=[time.gmtime(10001.0)])):
@@ -2738,6 +2809,293 @@ cluster_dfw1 = http://dfw1.host/v1/
         with mock.patch('swift.common.utils.logging', logger):
             self.assertEqual(None, utils.cache_from_env(env, True))
             self.assertEqual(0, len(logger.get_lines_for_level('error')))
+
+    def test_fsync_dir(self):
+
+        tempdir = None
+        fd = None
+        try:
+            tempdir = mkdtemp(dir='/tmp')
+            fd, temppath = tempfile.mkstemp(dir=tempdir)
+
+            _mock_fsync = mock.Mock()
+            _mock_close = mock.Mock()
+
+            with patch('swift.common.utils.fsync', _mock_fsync):
+                with patch('os.close', _mock_close):
+                    utils.fsync_dir(tempdir)
+            self.assertTrue(_mock_fsync.called)
+            self.assertTrue(_mock_close.called)
+            self.assertTrue(isinstance(_mock_fsync.call_args[0][0], int))
+            self.assertEqual(_mock_fsync.call_args[0][0],
+                             _mock_close.call_args[0][0])
+
+            # Not a directory - arg is file path
+            self.assertRaises(OSError, utils.fsync_dir, temppath)
+
+            logger = FakeLogger()
+
+            def _mock_fsync(fd):
+                raise OSError(errno.EBADF, os.strerror(errno.EBADF))
+
+            with patch('swift.common.utils.fsync', _mock_fsync):
+                with mock.patch('swift.common.utils.logging', logger):
+                    utils.fsync_dir(tempdir)
+            self.assertEqual(1, len(logger.get_lines_for_level('warning')))
+
+        finally:
+            if fd is not None:
+                os.close(fd)
+                os.unlink(temppath)
+            if tempdir:
+                os.rmdir(tempdir)
+
+    def test_renamer_with_fsync_dir(self):
+        tempdir = None
+        try:
+            tempdir = mkdtemp(dir='/tmp')
+            # Simulate part of object path already existing
+            part_dir = os.path.join(tempdir, 'objects/1234/')
+            os.makedirs(part_dir)
+            obj_dir = os.path.join(part_dir, 'aaa', 'a' * 32)
+            obj_path = os.path.join(obj_dir, '1425276031.12345.data')
+
+            # Object dir had to be created
+            _m_os_rename = mock.Mock()
+            _m_fsync_dir = mock.Mock()
+            with patch('os.rename', _m_os_rename):
+                with patch('swift.common.utils.fsync_dir', _m_fsync_dir):
+                    utils.renamer("fake_path", obj_path)
+            _m_os_rename.assert_called_once_with('fake_path', obj_path)
+            # fsync_dir on parents of all newly create dirs
+            self.assertEqual(_m_fsync_dir.call_count, 3)
+
+            # Object dir existed
+            _m_os_rename.reset_mock()
+            _m_fsync_dir.reset_mock()
+            with patch('os.rename', _m_os_rename):
+                with patch('swift.common.utils.fsync_dir', _m_fsync_dir):
+                    utils.renamer("fake_path", obj_path)
+            _m_os_rename.assert_called_once_with('fake_path', obj_path)
+            # fsync_dir only on the leaf dir
+            self.assertEqual(_m_fsync_dir.call_count, 1)
+        finally:
+            if tempdir:
+                shutil.rmtree(tempdir)
+
+    def test_renamer_when_fsync_is_false(self):
+        _m_os_rename = mock.Mock()
+        _m_fsync_dir = mock.Mock()
+        _m_makedirs_count = mock.Mock(return_value=2)
+        with patch('os.rename', _m_os_rename):
+            with patch('swift.common.utils.fsync_dir', _m_fsync_dir):
+                with patch('swift.common.utils.makedirs_count',
+                           _m_makedirs_count):
+                    utils.renamer("fake_path", "/a/b/c.data", fsync=False)
+        _m_makedirs_count.assert_called_once_with("/a/b")
+        _m_os_rename.assert_called_once_with('fake_path', "/a/b/c.data")
+        self.assertFalse(_m_fsync_dir.called)
+
+    def test_makedirs_count(self):
+        tempdir = None
+        fd = None
+        try:
+            tempdir = mkdtemp(dir='/tmp')
+            os.makedirs(os.path.join(tempdir, 'a/b'))
+            # 4 new dirs created
+            dirpath = os.path.join(tempdir, 'a/b/1/2/3/4')
+            ret = utils.makedirs_count(dirpath)
+            self.assertEqual(ret, 4)
+            # no new dirs created - dir already exists
+            ret = utils.makedirs_count(dirpath)
+            self.assertEqual(ret, 0)
+            # path exists and is a file
+            fd, temppath = tempfile.mkstemp(dir=dirpath)
+            os.close(fd)
+            self.assertRaises(OSError, utils.makedirs_count, temppath)
+        finally:
+            if tempdir:
+                shutil.rmtree(tempdir)
+
+
+class ResellerConfReader(unittest.TestCase):
+
+    def setUp(self):
+        self.default_rules = {'operator_roles': ['admin', 'swiftoperator'],
+                              'service_roles': [],
+                              'require_group': ''}
+
+    def test_defaults(self):
+        conf = {}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, ['AUTH_'])
+        self.assertEqual(options['AUTH_'], self.default_rules)
+
+    def test_same_as_default(self):
+        conf = {'reseller_prefix': 'AUTH',
+                'operator_roles': 'admin, swiftoperator'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, ['AUTH_'])
+        self.assertEqual(options['AUTH_'], self.default_rules)
+
+    def test_single_blank_reseller(self):
+        conf = {'reseller_prefix': ''}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, [''])
+        self.assertEqual(options[''], self.default_rules)
+
+    def test_single_blank_reseller_with_conf(self):
+        conf = {'reseller_prefix': '',
+                "''operator_roles": 'role1, role2'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, [''])
+        self.assertEqual(options[''].get('operator_roles'),
+                         ['role1', 'role2'])
+        self.assertEqual(options[''].get('service_roles'),
+                         self.default_rules.get('service_roles'))
+        self.assertEqual(options[''].get('require_group'),
+                         self.default_rules.get('require_group'))
+
+    def test_multiple_same_resellers(self):
+        conf = {'reseller_prefix': " '' , '' "}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, [''])
+
+        conf = {'reseller_prefix': '_, _'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, ['_'])
+
+        conf = {'reseller_prefix': 'AUTH, PRE2, AUTH, PRE2'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, ['AUTH_', 'PRE2_'])
+
+    def test_several_resellers_with_conf(self):
+        conf = {'reseller_prefix': 'PRE1, PRE2',
+                'PRE1_operator_roles': 'role1, role2',
+                'PRE1_service_roles': 'role3, role4',
+                'PRE2_operator_roles': 'role5',
+                'PRE2_service_roles': 'role6',
+                'PRE2_require_group': 'pre2_group'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, ['PRE1_', 'PRE2_'])
+
+        self.assertEquals(set(['role1', 'role2']),
+                          set(options['PRE1_'].get('operator_roles')))
+        self.assertEquals(['role5'],
+                          options['PRE2_'].get('operator_roles'))
+        self.assertEquals(set(['role3', 'role4']),
+                          set(options['PRE1_'].get('service_roles')))
+        self.assertEquals(['role6'], options['PRE2_'].get('service_roles'))
+        self.assertEquals('', options['PRE1_'].get('require_group'))
+        self.assertEquals('pre2_group', options['PRE2_'].get('require_group'))
+
+    def test_several_resellers_first_blank(self):
+        conf = {'reseller_prefix': " '' , PRE2",
+                "''operator_roles": 'role1, role2',
+                "''service_roles": 'role3, role4',
+                'PRE2_operator_roles': 'role5',
+                'PRE2_service_roles': 'role6',
+                'PRE2_require_group': 'pre2_group'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, ['', 'PRE2_'])
+
+        self.assertEquals(set(['role1', 'role2']),
+                          set(options[''].get('operator_roles')))
+        self.assertEquals(['role5'],
+                          options['PRE2_'].get('operator_roles'))
+        self.assertEquals(set(['role3', 'role4']),
+                          set(options[''].get('service_roles')))
+        self.assertEquals(['role6'], options['PRE2_'].get('service_roles'))
+        self.assertEquals('', options[''].get('require_group'))
+        self.assertEquals('pre2_group', options['PRE2_'].get('require_group'))
+
+    def test_several_resellers_with_blank_comma(self):
+        conf = {'reseller_prefix': "AUTH , '', PRE2",
+                "''operator_roles": 'role1, role2',
+                "''service_roles": 'role3, role4',
+                'PRE2_operator_roles': 'role5',
+                'PRE2_service_roles': 'role6',
+                'PRE2_require_group': 'pre2_group'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, ['AUTH_', '', 'PRE2_'])
+        self.assertEquals(set(['admin', 'swiftoperator']),
+                          set(options['AUTH_'].get('operator_roles')))
+        self.assertEquals(set(['role1', 'role2']),
+                          set(options[''].get('operator_roles')))
+        self.assertEquals(['role5'],
+                          options['PRE2_'].get('operator_roles'))
+        self.assertEquals([],
+                          options['AUTH_'].get('service_roles'))
+        self.assertEquals(set(['role3', 'role4']),
+                          set(options[''].get('service_roles')))
+        self.assertEquals(['role6'], options['PRE2_'].get('service_roles'))
+        self.assertEquals('', options['AUTH_'].get('require_group'))
+        self.assertEquals('', options[''].get('require_group'))
+        self.assertEquals('pre2_group', options['PRE2_'].get('require_group'))
+
+    def test_stray_comma(self):
+        conf = {'reseller_prefix': "AUTH ,, PRE2",
+                "''operator_roles": 'role1, role2',
+                "''service_roles": 'role3, role4',
+                'PRE2_operator_roles': 'role5',
+                'PRE2_service_roles': 'role6',
+                'PRE2_require_group': 'pre2_group'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, ['AUTH_', 'PRE2_'])
+        self.assertEquals(set(['admin', 'swiftoperator']),
+                          set(options['AUTH_'].get('operator_roles')))
+        self.assertEquals(['role5'],
+                          options['PRE2_'].get('operator_roles'))
+        self.assertEquals([],
+                          options['AUTH_'].get('service_roles'))
+        self.assertEquals(['role6'], options['PRE2_'].get('service_roles'))
+        self.assertEquals('', options['AUTH_'].get('require_group'))
+        self.assertEquals('pre2_group', options['PRE2_'].get('require_group'))
+
+    def test_multiple_stray_commas_resellers(self):
+        conf = {'reseller_prefix': ' , , ,'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, [''])
+        self.assertEqual(options[''], self.default_rules)
+
+    def test_unprefixed_options(self):
+        conf = {'reseller_prefix': "AUTH , '', PRE2",
+                "operator_roles": 'role1, role2',
+                "service_roles": 'role3, role4',
+                'require_group': 'auth_blank_group',
+                'PRE2_operator_roles': 'role5',
+                'PRE2_service_roles': 'role6',
+                'PRE2_require_group': 'pre2_group'}
+        prefixes, options = utils.config_read_reseller_options(
+            conf, self.default_rules)
+        self.assertEqual(prefixes, ['AUTH_', '', 'PRE2_'])
+        self.assertEquals(set(['role1', 'role2']),
+                          set(options['AUTH_'].get('operator_roles')))
+        self.assertEquals(set(['role1', 'role2']),
+                          set(options[''].get('operator_roles')))
+        self.assertEquals(['role5'],
+                          options['PRE2_'].get('operator_roles'))
+        self.assertEquals(set(['role3', 'role4']),
+                          set(options['AUTH_'].get('service_roles')))
+        self.assertEquals(set(['role3', 'role4']),
+                          set(options[''].get('service_roles')))
+        self.assertEquals(['role6'], options['PRE2_'].get('service_roles'))
+        self.assertEquals('auth_blank_group',
+                          options['AUTH_'].get('require_group'))
+        self.assertEquals('auth_blank_group', options[''].get('require_group'))
+        self.assertEquals('pre2_group', options['PRE2_'].get('require_group'))
 
 
 class TestSwiftInfo(unittest.TestCase):
@@ -2919,9 +3277,9 @@ class TestSwiftInfo(unittest.TestCase):
         utils._swift_info = {'swift': {'foo': 'bar'},
                              'cap1': cap1}
         # expect no exceptions
-        info = utils.get_swift_info(disallowed_sections=
-                                    ['cap2.cap1_foo', 'cap1.no_match',
-                                     'cap1.cap1_foo.no_match.no_match'])
+        info = utils.get_swift_info(
+            disallowed_sections=['cap2.cap1_foo', 'cap1.no_match',
+                                 'cap1.cap1_foo.no_match.no_match'])
         self.assertEquals(info['cap1'], cap1)
 
 
@@ -3650,19 +4008,21 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
         self.assertEquals('\xef\xbf\xbd\xef\xbf\xbd\xec\xbc\x9d\xef\xbf\xbd',
                           utils.get_valid_utf8_str(invalid_utf8_str))
 
+    @reset_logger_state
     def test_thread_locals(self):
         logger = utils.get_logger(None)
-        orig_thread_locals = logger.thread_locals
-        try:
-            self.assertEquals(logger.thread_locals, (None, None))
-            logger.txn_id = '1234'
-            logger.client_ip = '1.2.3.4'
-            self.assertEquals(logger.thread_locals, ('1234', '1.2.3.4'))
-            logger.txn_id = '5678'
-            logger.client_ip = '5.6.7.8'
-            self.assertEquals(logger.thread_locals, ('5678', '5.6.7.8'))
-        finally:
-            logger.thread_locals = orig_thread_locals
+        # test the setter
+        logger.thread_locals = ('id', 'ip')
+        self.assertEquals(logger.thread_locals, ('id', 'ip'))
+        # reset
+        logger.thread_locals = (None, None)
+        self.assertEquals(logger.thread_locals, (None, None))
+        logger.txn_id = '1234'
+        logger.client_ip = '1.2.3.4'
+        self.assertEquals(logger.thread_locals, ('1234', '1.2.3.4'))
+        logger.txn_id = '5678'
+        logger.client_ip = '5.6.7.8'
+        self.assertEquals(logger.thread_locals, ('5678', '5.6.7.8'))
 
     def test_no_fdatasync(self):
         called = []
@@ -3732,7 +4092,28 @@ class TestStatsdLoggingDelegation(unittest.TestCase):
                 self.assertEquals(called, [12345])
 
 
-class TestThreadpool(unittest.TestCase):
+class TestThreadPool(unittest.TestCase):
+
+    def setUp(self):
+        self.tp = None
+
+    def tearDown(self):
+        if self.tp:
+            self.tp.terminate()
+
+    def _pipe_count(self):
+        # Counts the number of pipes that this process owns.
+        fd_dir = "/proc/%d/fd" % os.getpid()
+
+        def is_pipe(path):
+            try:
+                stat_result = os.stat(path)
+                return stat.S_ISFIFO(stat_result.st_mode)
+            except OSError:
+                return False
+
+        return len([fd for fd in os.listdir(fd_dir)
+                    if is_pipe(os.path.join(fd_dir, fd))])
 
     def _thread_id(self):
         return threading.current_thread().ident
@@ -3744,7 +4125,7 @@ class TestThreadpool(unittest.TestCase):
         return int('fishcakes')
 
     def test_run_in_thread_with_threads(self):
-        tp = utils.ThreadPool(1)
+        tp = self.tp = utils.ThreadPool(1)
 
         my_id = self._thread_id()
         other_id = tp.run_in_thread(self._thread_id)
@@ -3763,7 +4144,7 @@ class TestThreadpool(unittest.TestCase):
 
     def test_force_run_in_thread_with_threads(self):
         # with nthreads > 0, force_run_in_thread looks just like run_in_thread
-        tp = utils.ThreadPool(1)
+        tp = self.tp = utils.ThreadPool(1)
 
         my_id = self._thread_id()
         other_id = tp.force_run_in_thread(self._thread_id)
@@ -3813,7 +4194,7 @@ class TestThreadpool(unittest.TestCase):
         def alpha():
             return beta()
 
-        tp = utils.ThreadPool(1)
+        tp = self.tp = utils.ThreadPool(1)
         try:
             tp.run_in_thread(alpha)
         except ZeroDivisionError:
@@ -3830,6 +4211,44 @@ class TestThreadpool(unittest.TestCase):
         # included, not the exact names of helper methods
         self.assertEqual(tb_func[1], "run_in_thread")
         self.assertEqual(tb_func[0], "test_preserving_stack_trace_from_thread")
+
+    def test_terminate(self):
+        initial_thread_count = threading.activeCount()
+        initial_pipe_count = self._pipe_count()
+
+        tp = utils.ThreadPool(4)
+        # do some work to ensure any lazy initialization happens
+        tp.run_in_thread(os.path.join, 'foo', 'bar')
+        tp.run_in_thread(os.path.join, 'baz', 'quux')
+
+        # 4 threads in the ThreadPool, plus one pipe for IPC; this also
+        # serves as a sanity check that we're actually allocating some
+        # resources to free later
+        self.assertEqual(initial_thread_count, threading.activeCount() - 4)
+        self.assertEqual(initial_pipe_count, self._pipe_count() - 2)
+
+        tp.terminate()
+        self.assertEqual(initial_thread_count, threading.activeCount())
+        self.assertEqual(initial_pipe_count, self._pipe_count())
+
+    def test_cant_run_after_terminate(self):
+        tp = utils.ThreadPool(0)
+        tp.terminate()
+        self.assertRaises(ThreadPoolDead, tp.run_in_thread, lambda: 1)
+        self.assertRaises(ThreadPoolDead, tp.force_run_in_thread, lambda: 1)
+
+    def test_double_terminate_doesnt_crash(self):
+        tp = utils.ThreadPool(0)
+        tp.terminate()
+        tp.terminate()
+
+        tp = utils.ThreadPool(1)
+        tp.terminate()
+        tp.terminate()
+
+    def test_terminate_no_threads_doesnt_crash(self):
+        tp = utils.ThreadPool(0)
+        tp.terminate()
 
 
 class TestAuditLocationGenerator(unittest.TestCase):
@@ -4175,6 +4594,22 @@ class TestLRUCache(unittest.TestCase):
         self.assertEqual(f.size(), 4)
 
 
+class TestParseContentRange(unittest.TestCase):
+    def test_good(self):
+        start, end, total = utils.parse_content_range("bytes 100-200/300")
+        self.assertEqual(start, 100)
+        self.assertEqual(end, 200)
+        self.assertEqual(total, 300)
+
+    def test_bad(self):
+        self.assertRaises(ValueError, utils.parse_content_range,
+                          "100-300/500")
+        self.assertRaises(ValueError, utils.parse_content_range,
+                          "bytes 100-200/aardvark")
+        self.assertRaises(ValueError, utils.parse_content_range,
+                          "bytes bulbous-bouffant/4994801")
+
+
 class TestParseContentDisposition(unittest.TestCase):
 
     def test_basic_content_type(self):
@@ -4204,7 +4639,8 @@ class TestIterMultipartMimeDocuments(unittest.TestCase):
             it.next()
         except MimeInvalid as err:
             exc = err
-        self.assertEquals(str(exc), 'invalid starting boundary')
+        self.assertTrue('invalid starting boundary' in str(exc))
+        self.assertTrue('--unique' in str(exc))
 
     def test_empty(self):
         it = utils.iter_multipart_mime_documents(StringIO('--unique'),

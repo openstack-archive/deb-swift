@@ -22,7 +22,8 @@ import subprocess
 import sys
 from ConfigParser import ConfigParser
 
-from swift.common.utils import backward, get_logger
+from swift.common.utils import backward, get_logger, dump_recon_cache, \
+    config_true_value
 
 
 def get_devices(device_dir, logger):
@@ -54,7 +55,7 @@ def get_devices(device_dir, logger):
     return devices
 
 
-def get_errors(error_re, log_file_pattern, minutes):
+def get_errors(error_re, log_file_pattern, minutes, logger):
     # Assuming log rotation is being used, we need to examine
     # recently rotated files in case the rotation occurred
     # just before the script is being run - the data we are
@@ -125,7 +126,9 @@ def comment_fstab(mount_point):
         with open('/etc/fstab.new', 'w') as new_fstab:
             for line in fstab:
                 parts = line.split()
-                if len(parts) > 2 and line.split()[1] == mount_point:
+                if len(parts) > 2 \
+                    and parts[1] == mount_point \
+                        and not line.startswith('#'):
                     new_fstab.write('#' + line)
                 else:
                     new_fstab.write(line)
@@ -146,8 +149,10 @@ if __name__ == '__main__':
     device_dir = conf.get('device_dir', '/srv/node')
     minutes = int(conf.get('minutes', 60))
     error_limit = int(conf.get('error_limit', 1))
+    recon_cache_path = conf.get('recon_cache_path', "/var/cache/swift")
     log_file_pattern = conf.get('log_file_pattern',
                                 '/var/log/kern.*[!.][!g][!z]')
+    log_to_console = config_true_value(conf.get('log_to_console', False))
     error_re = []
     for conf_key in conf:
         if conf_key.startswith('regex_pattern_'):
@@ -164,12 +169,17 @@ if __name__ == '__main__':
             re.compile(r'\b(sd[a-z]{1,2}\d?)\b.*\berror\b'),
         ]
     conf['log_name'] = conf.get('log_name', 'drive-audit')
-    logger = get_logger(conf, log_route='drive-audit')
+    logger = get_logger(conf, log_to_console=log_to_console,
+                        log_route='drive-audit')
     devices = get_devices(device_dir, logger)
     logger.debug("Devices found: %s" % str(devices))
     if not devices:
         logger.error("Error: No devices found!")
-    errors = get_errors(error_re, log_file_pattern, minutes)
+    recon_errors = {}
+    total_errors = 0
+    for device in devices:
+        recon_errors[device['mount_point']] = 0
+    errors = get_errors(error_re, log_file_pattern, minutes, logger)
     logger.debug("Errors found: %s" % str(errors))
     unmounts = 0
     for kernel_device, count in errors.items():
@@ -179,12 +189,20 @@ if __name__ == '__main__':
             if device:
                 mount_point = device[0]['mount_point']
                 if mount_point.startswith(device_dir):
-                    logger.info("Unmounting %s with %d errors" %
-                                (mount_point, count))
-                    subprocess.call(['umount', '-fl', mount_point])
-                    logger.info("Commenting out %s from /etc/fstab" %
-                                (mount_point))
-                    comment_fstab(mount_point)
-                    unmounts += 1
+                    if config_true_value(conf.get('unmount_failed_device',
+                                                  True)):
+                        logger.info("Unmounting %s with %d errors" %
+                                    (mount_point, count))
+                        subprocess.call(['umount', '-fl', mount_point])
+                        logger.info("Commenting out %s from /etc/fstab" %
+                                    (mount_point))
+                        comment_fstab(mount_point)
+                        unmounts += 1
+                    recon_errors[mount_point] = count
+                    total_errors += count
+    recon_file = recon_cache_path + "/drive.recon"
+    dump_recon_cache(recon_errors, recon_file, logger)
+    dump_recon_cache({'drive_audit_errors': total_errors}, recon_file, logger)
+
     if unmounts == 0:
         logger.info("No drives were unmounted")

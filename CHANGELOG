@@ -1,3 +1,169 @@
+swift (2.3.0)
+
+    * Erasure Code support (beta)
+
+      Swift now supports an erasure-code (EC) storage policy type. This allows
+      deployers to achieve very high durability with less raw capacity as used
+      in replicated storage. However, EC requires more CPU and network
+      resources, so it is not good for every use case. EC is great for storing
+      large, infrequently accessed data in a single region.
+
+      Swift's implementation of erasure codes is meant to be transparent to
+      end users. There is no API difference between replicated storage and
+      EC storage.
+
+      To support erasure codes, Swift now depends on PyECLib and
+      liberasurecode. liberasurecode is a pluggable library that allows for
+      the actual EC algorithm to be implemented in a library of your choosing.
+
+      As a beta release, EC support is nearly fully feature complete, but it
+      is lacking support for some features (like multi-range reads) and has
+      not had a full performance characterization. This feature relies on
+      ssync for durability. Deployers are urged to do extensive testing and
+      not deploy production data using an erasure code storage policy.
+
+      Full docs are at http://swift.openstack.org/overview_erasure_code.html
+
+    * Add support for container TempURL Keys.
+
+    * Make more memcache options configurable. connection_timeout,
+      pool_timeout, tries, and io_timeout are all now configurable.
+
+    * Swift now supports composite tokens. This allows another service to
+      act on behalf of a user, but only with that user's consent.
+      See http://swift.openstack.org/overview_auth.html for more details.
+
+    * Multi-region replication was improved. When replicating data to a
+      different region, only one replica will be pushed per replication
+      cycle. This gives the remote region a chance to replicate the data
+      locally instead of pushing more data over the inter-region network.
+
+    * Internal requests from the ratelimit middleware now properly log a
+      swift_source. See http://swift.openstack.org/logs.html for details.
+
+    * Improved storage policy support for quarantine stats in swift-recon.
+
+    * The proxy log line now includes the request's storage policy index.
+
+    * Ring checker has been added to swift-recon to validate if rings are
+      built correctly. As part of this feature, storage servers have learned
+      the OPTIONS verb.
+
+    * Add support of x-remove- headers for container-sync.
+
+    * Rings now support hostnames instead of just IP addresses.
+
+    * Swift now enforces that the API version on a request is valid. Valid
+      versions are configured via the valid_api_versions setting in swift.conf
+
+    * Various other minor bug fixes and improvements.
+
+swift (2.2.2)
+
+    * Data placement changes
+
+      This release has several major changes to data placement in Swift in
+      order to better handle different deployment patterns. First, with an
+      unbalance-able ring, less partitions will move if the movement doesn't
+      result in any better dispersion across failure domains. Also, empty
+      (partition weight of zero) devices will no longer keep partitions after
+      rebalancing when there is an unbalance-able ring.
+
+      Second, the notion of "overload" has been added to Swift's rings. This
+      allows devices to take some extra partitions (more than would normally
+      be allowed by the device weight) so that smaller and unbalanced clusters
+      will have less data movement between servers, zones, or regions if there
+      is a failure in the cluster.
+
+      Finally, rings have a new metric called "dispersion". This is the
+      percentage of partitions in the ring that have too many replicas in a
+      particular failure domain. For example, if you have three servers in a
+      cluster but two replicas for a partition get placed onto the same
+      server, that partition will count towards the dispersion metric. A
+      lower value is better, and the value can be used to find the proper
+      value for "overload".
+
+      The overload and dispersion metrics have been exposed in the
+      swift-ring-build CLI tools.
+
+      See http://docs.openstack.org/developer/swift/overview_ring.html
+      for more info on how data placement works now.
+
+    * Improve replication of large out-of-sync, out-of-date containers.
+
+    * Added console logging to swift-drive-audit with a new log_to_console
+      config option (default False).
+
+    * Optimize replication when a device and/or partition is specified.
+
+    * Fix dynamic large object manifests getting versioned. This was not
+      intended and did not work. Now it is properly prevented.
+
+    * Fix the GET's response code when there is a missing segment in a
+      large object manifest.
+
+    * Change black/white listing in ratelimit middleware to use sysmeta.
+      Instead of using the config option, operators can set
+      "X-Account-Sysmeta-Global-Write-Ratelimit: WHITELIST" or
+      "X-Account-Sysmeta-Global-Write-Ratelimit: BLACKLIST" on an account to
+      whitelist or blacklist it for ratelimiting. Note: the existing
+      config options continue to work.
+
+    * Use TCP_NODELAY on outgoing connections.
+
+    * Improve object-replicator startup time.
+
+    * Implement OPTIONS verb for storage nodes.
+
+    * Various other minor bug fixes and improvements.
+
+swift (2.2.1)
+
+    * Swift now rejects object names with Unicode surrogates.
+
+    * Return 403 (instead of 413) on unauthorized upload when over account
+      quota.
+
+    * Fix a rare condition when a rebalance could cause swift-ring-builder
+      to crash. This would only happen on old ring files when "rebalance"
+      was the first command run.
+
+    * Storage node error limits now survive a ring reload.
+
+    * Speed up reading and writing xattrs for object metadata by using larger
+      xattr value sizes. The change is moving from 254 byte values to 64KiB
+      values. There is no migration issue with this.
+
+    * Deleted containers beyond the reclaim age are now properly reclaimed.
+
+    * Full Simplified Chinese translation (zh_CN locale) for errors and logs.
+
+    * Container quota is now properly enforced during cross-account COPY.
+
+    * ssync replication now properly uses the configured replication_ip.
+
+    * Fixed issue were ssync did not replicate custom object headers.
+
+    * swift-drive-audit now has the 'unmount_failed_device' config option
+      (default to True) that controls if the process will unmount failed
+      drives or not.
+
+    * swift-drive-audit will now dump drive error rates to a recon file.
+      The file location is controlled by the 'recon_cache_path' config value
+      and it includes each drive and its associated number of errors.
+
+    * When a filesystem does't support xattr, the object server now returns
+      a 507 Insufficient Storage error to the proxy server.
+
+    * Clean up empty account and container partitions directories if they
+      are empty. This keeps the system healthy and prevents a large number
+      of empty directories from slowing down the replication process.
+
+    * Show the sum of every policy's amount of async pendings in swift-recon.
+
+    * Various other minor bug fixes and improvements.
+
+
 swift (2.2.0)
 
     * Added support for Keystone v3 auth.

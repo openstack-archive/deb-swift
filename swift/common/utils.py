@@ -87,8 +87,6 @@ _posix_fadvise = None
 _libc_socket = None
 _libc_bind = None
 _libc_accept = None
-_libc_splice = None
-_libc_tee = None
 
 # If set to non-zero, fallocate routines will fail based on free space
 # available being at or below this amount, in bytes.
@@ -293,6 +291,72 @@ def config_auto_int_value(value, default):
     return value
 
 
+def append_underscore(prefix):
+    if prefix and prefix[-1] != '_':
+        prefix += '_'
+    return prefix
+
+
+def config_read_reseller_options(conf, defaults):
+    """
+    Read reseller_prefix option and associated options from configuration
+
+    Reads the reseller_prefix option, then reads options that may be
+    associated with a specific reseller prefix. Reads options such that an
+    option without a prefix applies to all reseller prefixes unless an option
+    has an explicit prefix.
+
+    :param conf: the configuration
+    :param defaults: a dict of default values. The key is the option
+                     name. The value is either an array of strings or a string
+    :return: tuple of an array of reseller prefixes and a dict of option values
+    """
+    reseller_prefix_opt = conf.get('reseller_prefix', 'AUTH').split(',')
+    reseller_prefixes = []
+    for prefix in [pre.strip() for pre in reseller_prefix_opt if pre.strip()]:
+        if prefix == "''":
+            prefix = ''
+        prefix = append_underscore(prefix)
+        if prefix not in reseller_prefixes:
+            reseller_prefixes.append(prefix)
+    if len(reseller_prefixes) == 0:
+        reseller_prefixes.append('')
+
+    # Get prefix-using config options
+    associated_options = {}
+    for prefix in reseller_prefixes:
+        associated_options[prefix] = dict(defaults)
+        associated_options[prefix].update(
+            config_read_prefixed_options(conf, '', defaults))
+        prefix_name = prefix if prefix != '' else "''"
+        associated_options[prefix].update(
+            config_read_prefixed_options(conf, prefix_name, defaults))
+    return reseller_prefixes, associated_options
+
+
+def config_read_prefixed_options(conf, prefix_name, defaults):
+    """
+    Read prefixed options from configuration
+
+    :param conf: the configuration
+    :param prefix_name: the prefix (including, if needed, an underscore)
+    :param defaults: a dict of default values. The dict supplies the
+                     option name and type (string or comma separated string)
+    :return: a dict containing the options
+    """
+    params = {}
+    for option_name in defaults.keys():
+        value = conf.get('%s%s' % (prefix_name, option_name))
+        if value:
+            if isinstance(defaults.get(option_name), list):
+                params[option_name] = []
+                for role in value.lower().split(','):
+                    params[option_name].append(role.strip())
+            else:
+                params[option_name] = value.strip()
+    return params
+
+
 def noop_libc_function(*args):
     return 0
 
@@ -331,6 +395,21 @@ def generate_trans_id(trans_id_suffix):
         uuid.uuid4().hex[:21], time.time(), quote(trans_id_suffix))
 
 
+def get_policy_index(req_headers, res_headers):
+    """
+    Returns the appropriate index of the storage policy for the request from
+    a proxy server
+
+    :param req: dict of the request headers.
+    :param res: dict of the response headers.
+
+    :returns: string index of storage policy, or None
+    """
+    header = 'X-Backend-Storage-Policy-Index'
+    policy_index = res_headers.get(header, req_headers.get(header))
+    return str(policy_index) if policy_index is not None else None
+
+
 def get_log_line(req, res, trans_time, additional_info):
     """
     Make a line for logging that matches the documented log line format
@@ -344,14 +423,15 @@ def get_log_line(req, res, trans_time, additional_info):
     :returns: a properly formated line for logging.
     """
 
-    return '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %.4f "%s" %d' % (
+    policy_index = get_policy_index(req.headers, res.headers)
+    return '%s - - [%s] "%s %s" %s %s "%s" "%s" "%s" %.4f "%s" %d %s' % (
         req.remote_addr,
         time.strftime('%d/%b/%Y:%H:%M:%S +0000', time.gmtime()),
         req.method, req.path, res.status.split()[0],
         res.content_length or '-', req.referer or '-',
         req.headers.get('x-trans-id', '-'),
         req.user_agent or '-', trans_time, additional_info or '-',
-        os.getpid())
+        os.getpid(), policy_index or '-')
 
 
 def get_trans_id_time(trans_id):
@@ -565,6 +645,27 @@ def fdatasync(fd):
         fsync(fd)
 
 
+def fsync_dir(dirpath):
+    """
+    Sync directory entries to disk.
+
+    :param dirpath: Path to the directory to be synced.
+    """
+    dirfd = None
+    try:
+        dirfd = os.open(dirpath, os.O_DIRECTORY | os.O_RDONLY)
+        fsync(dirfd)
+    except OSError as err:
+        if err.errno == errno.ENOTDIR:
+            # Raise error if someone calls fsync_dir on a non-directory
+            raise
+        logging.warn(_("Unable to perform fsync() on directory %s: %s"),
+                     dirpath, os.strerror(err.errno))
+    finally:
+        if dirfd:
+            os.close(dirfd)
+
+
 def drop_buffer_cache(fd, offset, length):
     """
     Drop 'buffer' cache for the given range of the given file.
@@ -587,6 +688,7 @@ def drop_buffer_cache(fd, offset, length):
 
 NORMAL_FORMAT = "%016.05f"
 INTERNAL_FORMAT = NORMAL_FORMAT + '_%016x'
+MAX_OFFSET = (16 ** 16) - 1
 # Setting this to True will cause the internal format to always display
 # extended digits - even when the value is equivalent to the normalized form.
 # This isn't ideal during an upgrade when some servers might not understand
@@ -647,6 +749,8 @@ class Timestamp(object):
             self.offset += offset
         else:
             raise ValueError('offset must be non-negative')
+        if self.offset > MAX_OFFSET:
+            raise ValueError('offset must be smaller than %d' % MAX_OFFSET)
 
     def __repr__(self):
         return INTERNAL_FORMAT % (self.timestamp, self.offset)
@@ -773,20 +877,66 @@ def mkdirs(path):
                 raise
 
 
-def renamer(old, new):
+def makedirs_count(path, count=0):
+    """
+    Same as os.makedirs() except that this method returns the number of
+    new directories that had to be created.
+
+    Also, this does not raise an error if target directory already exists.
+    This behaviour is similar to Python 3.x's os.makedirs() called with
+    exist_ok=True. Also similar to swift.common.utils.mkdirs()
+
+    https://hg.python.org/cpython/file/v3.4.2/Lib/os.py#l212
+    """
+    head, tail = os.path.split(path)
+    if not tail:
+        head, tail = os.path.split(head)
+    if head and tail and not os.path.exists(head):
+        count = makedirs_count(head, count)
+        if tail == os.path.curdir:
+            return
+    try:
+        os.mkdir(path)
+    except OSError as e:
+        # EEXIST may also be raised if path exists as a file
+        # Do not let that pass.
+        if e.errno != errno.EEXIST or not os.path.isdir(path):
+            raise
+    else:
+        count += 1
+    return count
+
+
+def renamer(old, new, fsync=True):
     """
     Attempt to fix / hide race conditions like empty object directories
     being removed by backend processes during uploads, by retrying.
 
+    The containing directory of 'new' and of all newly created directories are
+    fsync'd by default. This _will_ come at a performance penalty. In cases
+    where these additional fsyncs are not necessary, it is expected that the
+    caller of renamer() turn it off explicitly.
+
     :param old: old path to be renamed
     :param new: new path to be renamed to
+    :param fsync: fsync on containing directory of new and also all
+                  the newly created directories.
     """
+    dirpath = os.path.dirname(new)
     try:
-        mkdirs(os.path.dirname(new))
+        count = makedirs_count(dirpath)
         os.rename(old, new)
     except OSError:
-        mkdirs(os.path.dirname(new))
+        count = makedirs_count(dirpath)
         os.rename(old, new)
+    if fsync:
+        # If count=0, no new directories were created. But we still need to
+        # fsync leaf dir after os.rename().
+        # If count>0, starting from leaf dir, fsync parent dirs of all
+        # directories created by makedirs_count()
+        for i in range(0, count + 1):
+            fsync_dir(dirpath)
+            dirpath = os.path.dirname(dirpath)
 
 
 def split_path(path, minsegs=1, maxsegs=None, rest_with_last=False):
@@ -845,16 +995,9 @@ def validate_device_partition(device, partition):
     :param partition: partition to validate
     :raises: ValueError if given an invalid device or partition
     """
-    invalid_device = False
-    invalid_partition = False
     if not device or '/' in device or device in ['.', '..']:
-        invalid_device = True
-    if not partition or '/' in partition or partition in ['.', '..']:
-        invalid_partition = True
-
-    if invalid_device:
         raise ValueError('Invalid device: %s' % quote(device or ''))
-    elif invalid_partition:
+    if not partition or '/' in partition or partition in ['.', '..']:
         raise ValueError('Invalid partition: %s' % quote(partition or ''))
 
 
@@ -913,25 +1056,27 @@ class NullLogger(object):
     """A no-op logger for eventlet wsgi."""
 
     def write(self, *args):
-        #"Logs" the args to nowhere
+        # "Logs" the args to nowhere
         pass
 
 
 class LoggerFileObject(object):
 
-    def __init__(self, logger):
+    def __init__(self, logger, log_type='STDOUT'):
         self.logger = logger
+        self.log_type = log_type
 
     def write(self, value):
         value = value.strip()
         if value:
             if 'Connection reset by peer' in value:
-                self.logger.error(_('STDOUT: Connection reset by peer'))
+                self.logger.error(
+                    _('%s: Connection reset by peer'), self.log_type)
             else:
-                self.logger.error(_('STDOUT: %s'), value)
+                self.logger.error(_('%s: %s'), self.log_type, value)
 
     def writelines(self, values):
-        self.logger.error(_('STDOUT: %s'), '#012'.join(values))
+        self.logger.error(_('%s: %s'), self.log_type, '#012'.join(values))
 
     def close(self):
         pass
@@ -1075,6 +1220,7 @@ class LoggingHandlerWeakRef(weakref.ref):
     Like a weak reference, but passes through a couple methods that logging
     handlers need.
     """
+
     def close(self):
         referent = self()
         try:
@@ -1383,11 +1529,11 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
                 logger_hook(conf, name, log_to_console, log_route, fmt,
                             logger, adapted_logger)
             except (AttributeError, ImportError):
-                print(
-                    'Error calling custom handler [%s]' % hook,
-                    file=sys.stderr)
+                print('Error calling custom handler [%s]' % hook,
+                      file=sys.stderr)
             except ValueError:
-                print('Invalid custom handler format [%s]' % hook, sys.stderr)
+                print('Invalid custom handler format [%s]' % hook,
+                      file=sys.stderr)
 
     # Python 2.6 has the undesirable property of keeping references to all log
     # handlers around forever in logging._handlers and logging._handlerList.
@@ -1497,7 +1643,7 @@ def capture_stdio(logger, **kwargs):
     if kwargs.pop('capture_stdout', True):
         sys.stdout = LoggerFileObject(logger)
     if kwargs.pop('capture_stderr', True):
-        sys.stderr = LoggerFileObject(logger)
+        sys.stderr = LoggerFileObject(logger, 'STDERR')
 
 
 def parse_options(parser=None, once=False, test_args=None):
@@ -1548,6 +1694,17 @@ def parse_options(parser=None, once=False, test_args=None):
     return config, options
 
 
+def expand_ipv6(address):
+    """
+    Expand ipv6 address.
+    :param address: a string indicating valid ipv6 address
+    :returns: a string indicating fully expanded ipv6 address
+
+    """
+    packed_ip = socket.inet_pton(socket.AF_INET6, address)
+    return socket.inet_ntop(socket.AF_INET6, packed_ip)
+
+
 def whataremyips():
     """
     Get the machine's ip addresses
@@ -1567,7 +1724,7 @@ def whataremyips():
                     # If we have an ipv6 address remove the
                     # %ether_interface at the end
                     if family == netifaces.AF_INET6:
-                        addr = addr.split('%')[0]
+                        addr = expand_ipv6(addr.split('%')[0])
                     addresses.append(addr)
         except ValueError:
             pass
@@ -2079,11 +2236,16 @@ class GreenAsyncPile(object):
 
     Correlating results with jobs (if necessary) is left to the caller.
     """
-    def __init__(self, size):
+    def __init__(self, size_or_pool):
         """
-        :param size: size pool of green threads to use
+        :param size_or_pool: thread pool size or a pool to use
         """
-        self._pool = GreenPool(size)
+        if isinstance(size_or_pool, GreenPool):
+            self._pool = size_or_pool
+            size = self._pool.size
+        else:
+            self._pool = GreenPool(size_or_pool)
+            size = size_or_pool
         self._responses = eventlet.queue.LightQueue(size)
         self._inflight = 0
 
@@ -2394,7 +2556,7 @@ def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
                 if existing_entry:
                     cache_entry = json.loads(existing_entry)
             except ValueError:
-                #file doesn't have a valid entry, we'll recreate it
+                # file doesn't have a valid entry, we'll recreate it
                 pass
             for cache_key, cache_value in cache_dict.items():
                 put_recon_cache_entry(cache_entry, cache_key, cache_value)
@@ -2402,7 +2564,7 @@ def dump_recon_cache(cache_dict, cache_file, logger, lock_timeout=2):
                 with NamedTemporaryFile(dir=os.path.dirname(cache_file),
                                         delete=False) as tf:
                     tf.write(json.dumps(cache_entry) + '\n')
-                os.rename(tf.name, cache_file)
+                renamer(tf.name, cache_file, fsync=False)
             finally:
                 try:
                     os.unlink(tf.name)
@@ -2489,6 +2651,10 @@ def public(func):
 
 def quorum_size(n):
     """
+    quorum size as it applies to services that use 'replication' for data
+    integrity  (Account/Container services).  Object quorum_size is defined
+    on a storage policy basis.
+
     Number of successful backend requests needed for the proxy to consider
     the client request successful.
     """
@@ -2730,19 +2896,21 @@ def tpool_reraise(func, *args, **kwargs):
 
 
 class ThreadPool(object):
-    BYTE = 'a'.encode('utf-8')
-
     """
     Perform blocking operations in background threads.
 
     Call its methods from within greenlets to green-wait for results without
     blocking the eventlet reactor (hopefully).
     """
+
+    BYTE = 'a'.encode('utf-8')
+
     def __init__(self, nthreads=2):
         self.nthreads = nthreads
         self._run_queue = Queue()
         self._result_queue = Queue()
         self._threads = []
+        self._alive = True
 
         if nthreads <= 0:
             return
@@ -2790,6 +2958,8 @@ class ThreadPool(object):
         """
         while True:
             item = work_queue.get()
+            if item is None:
+                break
             ev, func, args, kwargs = item
             try:
                 result = func(*args, **kwargs)
@@ -2844,6 +3014,9 @@ class ThreadPool(object):
         :returns: result of calling func
         :raises: whatever func raises
         """
+        if not self._alive:
+            raise swift.common.exceptions.ThreadPoolDead()
+
         if self.nthreads <= 0:
             result = func(*args, **kwargs)
             sleep()
@@ -2888,10 +3061,37 @@ class ThreadPool(object):
         :returns: result of calling func
         :raises: whatever func raises
         """
+        if not self._alive:
+            raise swift.common.exceptions.ThreadPoolDead()
+
         if self.nthreads <= 0:
             return self._run_in_eventlet_tpool(func, *args, **kwargs)
         else:
             return self.run_in_thread(func, *args, **kwargs)
+
+    def terminate(self):
+        """
+        Releases the threadpool's resources (OS threads, greenthreads, pipes,
+        etc.) and renders it unusable.
+
+        Don't call run_in_thread() or force_run_in_thread() after calling
+        terminate().
+        """
+        self._alive = False
+        if self.nthreads <= 0:
+            return
+
+        for _junk in range(self.nthreads):
+            self._run_queue.put(None)
+        for thr in self._threads:
+            thr.join()
+        self._threads = []
+        self.nthreads = 0
+
+        greenthread.kill(self._consumer_coro)
+
+        self.rpipe.close()
+        os.close(self.wpipe)
 
 
 def ismount(path):
@@ -2947,6 +3147,26 @@ _rfc_token = r'[^()<>@,;:\"/\[\]?={}\x00-\x20\x7f]+'
 _rfc_extension_pattern = re.compile(
     r'(?:\s*;\s*(' + _rfc_token + r")\s*(?:=\s*(" + _rfc_token +
     r'|"(?:[^"\\]|\\.)*"))?)')
+
+_content_range_pattern = re.compile(r'^bytes (\d+)-(\d+)/(\d+)$')
+
+
+def parse_content_range(content_range):
+    """
+    Parse a content-range header into (first_byte, last_byte, total_size).
+
+    See RFC 7233 section 4.2 for details on the header format, but it's
+    basically "Content-Range: bytes ${start}-${end}/${total}".
+
+    :param content_range: Content-Range header value to parse,
+        e.g. "bytes 100-1249/49004"
+    :returns: 3-tuple (start, end, total)
+    :raises: ValueError if malformed
+    """
+    found = re.search(_content_range_pattern, content_range)
+    if not found:
+        raise ValueError("malformed Content-Range %r" % (content_range,))
+    return tuple(int(x) for x in found.groups())
 
 
 def parse_content_type(content_type):
@@ -3102,8 +3322,11 @@ def iter_multipart_mime_documents(wsgi_input, boundary, read_chunk_size=4096):
     :raises: MimeInvalid if the document is malformed
     """
     boundary = '--' + boundary
-    if wsgi_input.readline(len(boundary + '\r\n')).strip() != boundary:
-        raise swift.common.exceptions.MimeInvalid('invalid starting boundary')
+    blen = len(boundary) + 2  # \r\n
+    got = wsgi_input.readline(blen)
+    if got.strip() != boundary:
+        raise swift.common.exceptions.MimeInvalid(
+            'invalid starting boundary: wanted %r, got %r', (boundary, got))
     boundary = '\r\n' + boundary
     input_buffer = ''
     done = False
@@ -3222,65 +3445,3 @@ def get_md5_socket():
         raise IOError(ctypes.get_errno(), "Failed to accept MD5 socket")
 
     return md5_sockfd
-
-
-# Flags for splice() and tee()
-SPLICE_F_MOVE = 1
-SPLICE_F_NONBLOCK = 2
-SPLICE_F_MORE = 4
-SPLICE_F_GIFT = 8
-
-
-def splice(fd_in, off_in, fd_out, off_out, length, flags):
-    """
-    Calls splice - a Linux-specific syscall for zero-copy data movement.
-
-    On success, returns the number of bytes moved.
-
-    On failure where errno is EWOULDBLOCK, returns None.
-
-    On all other failures, raises IOError.
-    """
-    global _libc_splice
-    if _libc_splice is None:
-        _libc_splice = load_libc_function('splice', fail_if_missing=True)
-
-    ret = _libc_splice(ctypes.c_int(fd_in), ctypes.c_long(off_in),
-                       ctypes.c_int(fd_out), ctypes.c_long(off_out),
-                       ctypes.c_int(length), ctypes.c_int(flags))
-    if ret < 0:
-        err = ctypes.get_errno()
-        if err == errno.EWOULDBLOCK:
-            return None
-        else:
-            raise IOError(err, "splice() failed: %s" % os.strerror(err))
-    return ret
-
-
-def tee(fd_in, fd_out, length, flags):
-    """
-    Calls tee - a Linux-specific syscall to let pipes share data.
-
-    On success, returns the number of bytes "copied".
-
-    On failure, raises IOError.
-    """
-    global _libc_tee
-    if _libc_tee is None:
-        _libc_tee = load_libc_function('tee', fail_if_missing=True)
-
-    ret = _libc_tee(ctypes.c_int(fd_in), ctypes.c_int(fd_out),
-                    ctypes.c_int(length), ctypes.c_int(flags))
-    if ret < 0:
-        err = ctypes.get_errno()
-        raise IOError(err, "tee() failed: %s" % os.strerror(err))
-    return ret
-
-
-def system_has_splice():
-    global _libc_splice
-    try:
-        _libc_splice = load_libc_function('splice', fail_if_missing=True)
-        return True
-    except AttributeError:
-        return False

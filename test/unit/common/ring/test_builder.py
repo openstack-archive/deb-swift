@@ -19,6 +19,7 @@ import operator
 import os
 import unittest
 import cPickle as pickle
+from array import array
 from collections import defaultdict
 from math import ceil
 from tempfile import mkdtemp
@@ -36,6 +37,17 @@ class TestRingBuilder(unittest.TestCase):
 
     def tearDown(self):
         rmtree(self.testdir, ignore_errors=1)
+
+    def _partition_counts(self, builder):
+        """
+        Returns a dictionary mapping (device ID) to (number of partitions
+        assigned to that device).
+        """
+        counts = {}
+        for part2dev_id in builder._replica2part2dev:
+            for dev_id in part2dev_id:
+                counts[dev_id] = counts.get(dev_id, 0) + 1
+        return counts
 
     def _get_population_by_region(self, builder):
         """
@@ -172,7 +184,7 @@ class TestRingBuilder(unittest.TestCase):
                              'ip': '127.0.0.1', 'port': 6000})
         self.assertEquals(rb.devs[0]['id'], 0)
         self.assertEqual(dev_id, 0)
-        #test add another dev with no id
+        # test add another dev with no id
         dev_id = rb.add_dev({'zone': 3, 'region': 2, 'weight': 1,
                              'ip': '127.0.0.1', 'port': 6000})
         self.assertEquals(rb.devs[1]['id'], 1)
@@ -656,6 +668,58 @@ class TestRingBuilder(unittest.TestCase):
 
         rb.rebalance()
 
+    def test_remove_last_partition_from_zero_weight(self):
+        rb = ring.RingBuilder(4, 3, 1)
+        rb.add_dev({'id': 0, 'region': 0, 'zone': 1, 'weight': 1.0,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 1, 'region': 0, 'zone': 2, 'weight': 2.0,
+                    'ip': '127.0.0.2', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 2, 'region': 0, 'zone': 3, 'weight': 3.0,
+                    'ip': '127.0.0.3', 'port': 10000, 'device': 'sda'})
+
+        rb.add_dev({'id': 3, 'region': 0, 'zone': 3, 'weight': 0.5,
+                    'ip': '127.0.0.3', 'port': 10001, 'device': 'zero'})
+
+        zero_weight_dev = 3
+
+        rb.rebalance()
+
+        # We want at least one partition with replicas only in zone 2 and 3
+        # due to device weights. It would *like* to spread out into zone 1,
+        # but can't, due to device weight.
+        #
+        # Also, we want such a partition to have a replica on device 3,
+        # which we will then reduce to zero weight. This should cause the
+        # removal of the replica from device 3.
+        #
+        # Getting this to happen by chance is hard, so let's just set up a
+        # builder so that it's in the state we want. This is a synthetic
+        # example; while the bug has happened on a real cluster, that
+        # builder file had a part_power of 16, so its contents are much too
+        # big to include here.
+        rb._replica2part2dev = [
+            #                            these are the relevant ones
+            #                                   |  |  |  |
+            #                                   v  v  v  v
+            array('H', [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
+            array('H', [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2]),
+            array('H', [0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 2, 2, 2, 2])]
+
+        rb.set_dev_weight(zero_weight_dev, 0.0)
+        rb.pretend_min_part_hours_passed()
+        rb.rebalance(seed=1)
+
+        node_counts = defaultdict(int)
+        for part2dev_id in rb._replica2part2dev:
+            for dev_id in part2dev_id:
+                node_counts[dev_id] += 1
+        self.assertEqual(node_counts[zero_weight_dev], 0)
+
+        # it's as balanced as it gets, so nothing moves anymore
+        rb.pretend_min_part_hours_passed()
+        parts_moved, _balance = rb.rebalance(seed=1)
+        self.assertEqual(parts_moved, 0)
+
     def test_region_fullness_with_balanceable_ring(self):
         rb = ring.RingBuilder(8, 3, 1)
         rb.add_dev({'id': 0, 'region': 0, 'zone': 0, 'weight': 1,
@@ -838,6 +902,41 @@ class TestRingBuilder(unittest.TestCase):
         rb.rebalance()  # this would crash since parts_wanted was not set
         rb.validate()
 
+    def test_rebalance_post_upgrade(self):
+        rb = ring.RingBuilder(8, 3, 1)
+        # 5 devices: 5 is the smallest number that does not divide 3 * 2^8,
+        # which forces some rounding to happen.
+        rb.add_dev({'id': 0, 'region': 0, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 1, 'region': 0, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sdb'})
+        rb.add_dev({'id': 2, 'region': 0, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sdc'})
+        rb.add_dev({'id': 3, 'region': 0, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sdd'})
+        rb.add_dev({'id': 4, 'region': 0, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sde'})
+        rb.rebalance()
+        rb.validate()
+
+        # Older versions of the ring builder code would round down when
+        # computing parts_wanted, while the new code rounds up. Make sure we
+        # can handle a ring built by the old method.
+        #
+        # This code mimics the old _set_parts_wanted.
+        weight_of_one_part = rb.weight_of_one_part()
+        for dev in rb._iter_devs():
+            if not dev['weight']:
+                dev['parts_wanted'] = -rb.parts * rb.replicas
+            else:
+                dev['parts_wanted'] = (
+                    int(weight_of_one_part * dev['weight']) -
+                    dev['parts'])
+
+        rb.pretend_min_part_hours_passed()
+        rb.rebalance()  # this crashes unless rebalance resets parts_wanted
+        rb.validate()
+
     def test_add_replicas_then_rebalance_respects_weight(self):
         rb = ring.RingBuilder(8, 3, 1)
         rb.add_dev({'id': 0, 'region': 0, 'region': 0, 'zone': 0, 'weight': 3,
@@ -896,6 +995,168 @@ class TestRingBuilder(unittest.TestCase):
                                    8: 192, 9: 192,
                                    10: 64, 11: 64})
 
+    def test_overload(self):
+        rb = ring.RingBuilder(8, 3, 1)
+        rb.add_dev({'id': 0, 'region': 0, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 1, 'region': 0, 'region': 0, 'zone': 1, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10001, 'device': 'sdb'})
+        rb.add_dev({'id': 2, 'region': 0, 'region': 0, 'zone': 2, 'weight': 2,
+                    'ip': '127.0.0.2', 'port': 10002, 'device': 'sdc'})
+        rb.rebalance(seed=12345)
+
+        # sanity check: balance respects weights, so default
+        part_counts = self._partition_counts(rb)
+        self.assertEqual(part_counts[0], 192)
+        self.assertEqual(part_counts[1], 192)
+        self.assertEqual(part_counts[2], 384)
+
+        # Devices 0 and 1 take 10% more than their fair shares by weight since
+        # overload is 10% (0.1).
+        rb.set_overload(0.1)
+        for _ in range(2):
+            rb.pretend_min_part_hours_passed()
+            rb.rebalance(seed=12345)
+
+        part_counts = self._partition_counts(rb)
+        self.assertEqual(part_counts[0], 212)
+        self.assertEqual(part_counts[1], 212)
+        self.assertEqual(part_counts[2], 344)
+
+        # Now, devices 0 and 1 take 50% more than their fair shares by
+        # weight.
+        rb.set_overload(0.5)
+        for _ in range(3):
+            rb.pretend_min_part_hours_passed()
+            rb.rebalance(seed=12345)
+
+        part_counts = self._partition_counts(rb)
+        self.assertEqual(part_counts[0], 256)
+        self.assertEqual(part_counts[1], 256)
+        self.assertEqual(part_counts[2], 256)
+
+        # Devices 0 and 1 may take up to 75% over their fair share, but the
+        # placement algorithm only wants to spread things out evenly between
+        # all drives, so the devices stay at 50% more.
+        rb.set_overload(0.75)
+        for _ in range(3):
+            rb.pretend_min_part_hours_passed()
+            rb.rebalance(seed=12345)
+
+        part_counts = self._partition_counts(rb)
+        self.assertEqual(part_counts[0], 256)
+        self.assertEqual(part_counts[1], 256)
+        self.assertEqual(part_counts[2], 256)
+
+    def test_overload_keeps_balanceable_things_balanced_initially(self):
+        rb = ring.RingBuilder(8, 3, 1)
+        rb.add_dev({'id': 0, 'region': 0, 'region': 0, 'zone': 0, 'weight': 8,
+                    'ip': '10.0.0.1', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 1, 'region': 0, 'region': 0, 'zone': 0, 'weight': 8,
+                    'ip': '10.0.0.1', 'port': 10000, 'device': 'sdb'})
+
+        rb.add_dev({'id': 2, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.2', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 3, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.2', 'port': 10000, 'device': 'sdb'})
+
+        rb.add_dev({'id': 4, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.3', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 5, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.3', 'port': 10000, 'device': 'sdb'})
+
+        rb.add_dev({'id': 6, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.4', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 7, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.4', 'port': 10000, 'device': 'sdb'})
+
+        rb.add_dev({'id': 8, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.5', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 9, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.5', 'port': 10000, 'device': 'sdb'})
+
+        rb.set_overload(99999)
+        rb.rebalance(seed=12345)
+
+        part_counts = self._partition_counts(rb)
+        self.assertEqual(part_counts, {
+            0: 128,
+            1: 128,
+            2: 64,
+            3: 64,
+            4: 64,
+            5: 64,
+            6: 64,
+            7: 64,
+            8: 64,
+            9: 64,
+        })
+
+    def test_overload_keeps_balanceable_things_balanced_on_rebalance(self):
+        rb = ring.RingBuilder(8, 3, 1)
+        rb.add_dev({'id': 0, 'region': 0, 'region': 0, 'zone': 0, 'weight': 8,
+                    'ip': '10.0.0.1', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 1, 'region': 0, 'region': 0, 'zone': 0, 'weight': 8,
+                    'ip': '10.0.0.1', 'port': 10000, 'device': 'sdb'})
+
+        rb.add_dev({'id': 2, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.2', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 3, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.2', 'port': 10000, 'device': 'sdb'})
+
+        rb.add_dev({'id': 4, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.3', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 5, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.3', 'port': 10000, 'device': 'sdb'})
+
+        rb.add_dev({'id': 6, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.4', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 7, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.4', 'port': 10000, 'device': 'sdb'})
+
+        rb.add_dev({'id': 8, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.5', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 9, 'region': 0, 'region': 0, 'zone': 0, 'weight': 4,
+                    'ip': '10.0.0.5', 'port': 10000, 'device': 'sdb'})
+
+        rb.set_overload(99999)
+
+        rb.rebalance(seed=123)
+        part_counts = self._partition_counts(rb)
+        self.assertEqual(part_counts, {
+            0: 128,
+            1: 128,
+            2: 64,
+            3: 64,
+            4: 64,
+            5: 64,
+            6: 64,
+            7: 64,
+            8: 64,
+            9: 64,
+        })
+
+        # swap weights between 10.0.0.1 and 10.0.0.2
+        rb.set_dev_weight(0, 4)
+        rb.set_dev_weight(1, 4)
+        rb.set_dev_weight(2, 8)
+        rb.set_dev_weight(1, 8)
+
+        rb.rebalance(seed=456)
+        part_counts = self._partition_counts(rb)
+        self.assertEqual(part_counts, {
+            0: 128,
+            1: 128,
+            2: 64,
+            3: 64,
+            4: 64,
+            5: 64,
+            6: 64,
+            7: 64,
+            8: 64,
+            9: 64,
+        })
+
     def test_load(self):
         rb = ring.RingBuilder(8, 3, 1)
         devs = [{'id': 0, 'region': 0, 'zone': 0, 'weight': 1,
@@ -925,7 +1186,7 @@ class TestRingBuilder(unittest.TestCase):
         io_error_generic = IOError()
         io_error_generic.errno = errno.EOPNOTSUPP
         try:
-            #test a legit builder
+            # test a legit builder
             fake_pickle = mock.Mock(return_value=rb)
             pickle.load = fake_pickle
             builder = ring.RingBuilder.load('fake.builder', open=fake_open)
@@ -934,7 +1195,7 @@ class TestRingBuilder(unittest.TestCase):
             self.assertEquals(builder, rb)
             fake_pickle.reset_mock()
 
-            #test old style builder
+            # test old style builder
             fake_pickle.return_value = rb.to_dict()
             pickle.load = fake_pickle
             builder = ring.RingBuilder.load('fake.builder', open=fake_open)
@@ -942,7 +1203,7 @@ class TestRingBuilder(unittest.TestCase):
             self.assertEquals(builder.devs, rb.devs)
             fake_pickle.reset_mock()
 
-            #test old devs but no meta
+            # test old devs but no meta
             no_meta_builder = rb
             for dev in no_meta_builder.devs:
                 del(dev['meta'])
@@ -952,21 +1213,21 @@ class TestRingBuilder(unittest.TestCase):
             fake_open.assert_has_calls([mock.call('fake.builder', 'rb')])
             self.assertEquals(builder.devs, rb.devs)
 
-            #test an empty builder
+            # test an empty builder
             fake_pickle.side_effect = EOFError
             pickle.load = fake_pickle
             self.assertRaises(exceptions.UnPicklingError,
                               ring.RingBuilder.load, 'fake.builder',
                               open=fake_open)
 
-            #test a corrupted builder
+            # test a corrupted builder
             fake_pickle.side_effect = pickle.UnpicklingError
             pickle.load = fake_pickle
             self.assertRaises(exceptions.UnPicklingError,
                               ring.RingBuilder.load, 'fake.builder',
                               open=fake_open)
 
-            #test some error
+            # test some error
             fake_pickle.side_effect = AttributeError
             pickle.load = fake_pickle
             self.assertRaises(exceptions.UnPicklingError,
@@ -975,19 +1236,19 @@ class TestRingBuilder(unittest.TestCase):
         finally:
             pickle.load = real_pickle
 
-        #test non existent builder file
+        # test non existent builder file
         fake_open.side_effect = io_error_not_found
         self.assertRaises(exceptions.FileNotFoundError,
                           ring.RingBuilder.load, 'fake.builder',
                           open=fake_open)
 
-        #test non accessible builder file
+        # test non accessible builder file
         fake_open.side_effect = io_error_no_perm
         self.assertRaises(exceptions.PermissionError,
                           ring.RingBuilder.load, 'fake.builder',
                           open=fake_open)
 
-        #test an error other then ENOENT and ENOPERM
+        # test an error other then ENOENT and ENOPERM
         fake_open.side_effect = io_error_generic
         self.assertRaises(IOError,
                           ring.RingBuilder.load, 'fake.builder',
@@ -1011,6 +1272,7 @@ class TestRingBuilder(unittest.TestCase):
                  'ip': '127.0.0.3', 'port': 10003,
                  'replication_ip': '127.0.0.3', 'replication_port': 10003,
                  'device': 'sdd1', 'meta': ''}]
+        rb.set_overload(3.14159)
         for d in devs:
             rb.add_dev(d)
         rb.rebalance()
@@ -1019,6 +1281,7 @@ class TestRingBuilder(unittest.TestCase):
         loaded_rb = ring.RingBuilder.load(builder_file)
         self.maxDiff = None
         self.assertEquals(loaded_rb.to_dict(), rb.to_dict())
+        self.assertEquals(loaded_rb.overload, 3.14159)
 
     @mock.patch('__builtin__.open', autospec=True)
     @mock.patch('swift.common.ring.builder.pickle.dump', autospec=True)
@@ -1203,6 +1466,70 @@ class TestRingBuilder(unittest.TestCase):
         part_devs = sorted(rb.get_part_devices(255),
                            key=operator.itemgetter('id'))
         self.assertEqual(part_devs, [rb.devs[0], rb.devs[1]])
+
+    def test_dispersion_with_zero_weight_devices(self):
+        rb = ring.RingBuilder(8, 3.0, 0)
+        # add two devices to a single server in a single zone
+        rb.add_dev({'id': 0, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 1, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sdb'})
+        # and a zero weight device
+        rb.add_dev({'id': 2, 'region': 0, 'zone': 0, 'weight': 0,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sdc'})
+        rb.rebalance()
+        self.assertEqual(rb.dispersion, 0.0)
+        self.assertEqual(rb._dispersion_graph, {
+            (0,): [0, 0, 0, 256],
+            (0, 0): [0, 0, 0, 256],
+            (0, 0, '127.0.0.1:10000'): [0, 0, 0, 256],
+            (0, 0, '127.0.0.1:10000', 0): [0, 128, 128, 0],
+            (0, 0, '127.0.0.1:10000', 1): [0, 128, 128, 0],
+        })
+
+    def test_dispersion_with_zero_weight_devices_with_parts(self):
+        rb = ring.RingBuilder(8, 3.0, 1)
+        # add three devices to a single server in a single zone
+        rb.add_dev({'id': 0, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sda'})
+        rb.add_dev({'id': 1, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sdb'})
+        rb.add_dev({'id': 2, 'region': 0, 'zone': 0, 'weight': 1,
+                    'ip': '127.0.0.1', 'port': 10000, 'device': 'sdc'})
+        rb.rebalance(seed=1)
+        self.assertEqual(rb.dispersion, 0.0)
+        self.assertEqual(rb._dispersion_graph, {
+            (0,): [0, 0, 0, 256],
+            (0, 0): [0, 0, 0, 256],
+            (0, 0, '127.0.0.1:10000'): [0, 0, 0, 256],
+            (0, 0, '127.0.0.1:10000', 0): [0, 256, 0, 0],
+            (0, 0, '127.0.0.1:10000', 1): [0, 256, 0, 0],
+            (0, 0, '127.0.0.1:10000', 2): [0, 256, 0, 0],
+        })
+        # now mark a device 2 for decom
+        rb.set_dev_weight(2, 0.0)
+        # we'll rebalance but can't move any parts
+        rb.rebalance(seed=1)
+        # zero weight tier has one copy of *every* part
+        self.assertEqual(rb.dispersion, 100.0)
+        self.assertEqual(rb._dispersion_graph, {
+            (0,): [0, 0, 0, 256],
+            (0, 0): [0, 0, 0, 256],
+            (0, 0, '127.0.0.1:10000'): [0, 0, 0, 256],
+            (0, 0, '127.0.0.1:10000', 0): [0, 256, 0, 0],
+            (0, 0, '127.0.0.1:10000', 1): [0, 256, 0, 0],
+            (0, 0, '127.0.0.1:10000', 2): [0, 256, 0, 0],
+        })
+        rb.pretend_min_part_hours_passed()
+        rb.rebalance(seed=3)
+        self.assertEqual(rb.dispersion, 0.0)
+        self.assertEqual(rb._dispersion_graph, {
+            (0,): [0, 0, 0, 256],
+            (0, 0): [0, 0, 0, 256],
+            (0, 0, '127.0.0.1:10000'): [0, 0, 0, 256],
+            (0, 0, '127.0.0.1:10000', 0): [0, 128, 128, 0],
+            (0, 0, '127.0.0.1:10000', 1): [0, 128, 128, 0],
+        })
 
 
 if __name__ == '__main__':
