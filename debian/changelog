@@ -4,6 +4,8 @@ swift (2.3.0-1) unstable; urgency=medium
   * Added python-pyeclib as (build-)depends, bumped eventlet required version
     to 0.16.1, and removed a few versions already provided by Jessie.
   * Standards-Version is now 3.9.6.
+  * Removed applied upstream patch:
+    - CVE-2015-1856_Prevent-unauthorized-delete-in-versioned-container.patch
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 04 Jun 2015 09:49:04 +0200
 
