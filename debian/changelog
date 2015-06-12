@@ -7,6 +7,9 @@ swift (2.3.0-1) unstable; urgency=medium
   * Removed applied upstream patch:
     - CVE-2015-1856_Prevent-unauthorized-delete-in-versioned-container.patch
   * Added usr/bin/swift-object-reconstructor to swift-object.
+  * Added startup scripts for swift-container-reconciler and
+    swift-object-reconstructor. Thanks to <ondrej.novy@firma.seznam.cz> for the
+    bug report and patch (Closes: #788450).
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 04 Jun 2015 09:49:04 +0200
 

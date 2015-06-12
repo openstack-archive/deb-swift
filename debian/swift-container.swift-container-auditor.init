@@ -14,7 +14,7 @@ set -e
 SERVICE_NAME="swift-container-auditor"
 DAEMON="/usr/bin/${SERVICE_NAME}"
 DAEMON_ARGS="/etc/swift/container-server.conf"
-PRINT_NAME="Swift countainer auditor"
+PRINT_NAME="Swift container auditor"
 SWIFT_USER=swift
 SWIFT_GRP=swift
 PID_FILE=/var/run/swift/${SERVICE_NAME}.pid
