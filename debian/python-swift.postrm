@@ -2,18 +2,9 @@
 
 set -e
 
-case "$1" in
-    purge)
-        # Remove swift user if possible                                                                                                    
-        userdel swift || true
-    ;;
-    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
-    ;;
-    *)
-        echo "postrm called with unknown argument \`$1'" >&2
-        exit 1
-    ;;
-esac
+if [ "${1}" = "purge" ] ; then
+	rm -rf /var/cache/swift
+fi
 
 #DEBHELPER#                                                                                                                                
 

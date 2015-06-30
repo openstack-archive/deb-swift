@@ -2,14 +2,34 @@
 
 set -e
 
-#DEBHELPER#
+pkgos_adduser () {
+	local VAR_UG_PKG_NAME
+	VAR_UG_PKG_NAME=${1}
 
-if ! getent passwd swift > /dev/null ; then
-  adduser --system --quiet --disabled-login --disabled-password --no-create-home --group --shell /bin/false swift
+	# Create user and groups if they don't exist
+	if ! getent group ${VAR_UG_PKG_NAME} > /dev/null 2>&1 ; then
+		addgroup --quiet --system ${VAR_UG_PKG_NAME}
+	fi
+	if ! getent passwd ${VAR_UG_PKG_NAME} > /dev/null 2>&1 ; then
+		adduser --system \
+			--home /var/lib/${VAR_UG_PKG_NAME} \
+			--no-create-home \
+			--quiet \
+			--disabled-password \
+			--shell /bin/bash \
+			--group ${VAR_UG_PKG_NAME}
+	fi
+	usermod -G adm ${VAR_UG_PKG_NAME}
+}
+
+
+if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
+	pkgos_adduser swift
+
+	mkdir /var/cache/swift
+	chown swift:swift /var/cache/swift
 fi
 
-usermod -G adm swift
-
-chown swift:swift /var/cache/swift
+#DEBHELPER#
 
 exit 0

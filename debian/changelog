@@ -13,6 +13,12 @@ swift (2.3.0-1) unstable; urgency=medium
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 04 Jun 2015 09:49:04 +0200
 
+swift (2.2.0-3) unstable; urgency=medium
+
+  * Fixed swift user creation (standardized on pkgos way).
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 30 Jun 2015 17:03:05 +0200
+
 swift (2.2.0-2) unstable; urgency=high
 
   * CVE-2015-1856 & OSSA 2015-006: Unauthorized delete of versioned Swift
