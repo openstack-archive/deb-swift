@@ -64,3 +64,4 @@ override_dh_installinit:
 	dh_installinit --no-start -pswift-object --name=swift-object-replicator
 	dh_installinit --no-start -pswift-object --name=swift-object-auditor
 	dh_installinit --no-start -pswift-object --name=swift-object-updater
+	dh_installinit --no-start -pswift-object --name=swift-object-reconstructor
