@@ -9,7 +9,7 @@
 # Description:       Object expirer daemon for swift.
 ### END INIT INFO
 
-SERVICE_NAME="object-server-expirer"
+SERVICE_NAME="object-expirer"
 PRINT_NAME="object expirer daemon"
 
 . /lib/lsb/init-functions
