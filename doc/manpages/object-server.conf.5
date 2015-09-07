@@ -129,6 +129,8 @@ Logging address. The default is /dev/log.
 Request timeout to external services. The default is 3 seconds.
 .IP \fBconn_timeout\fR
 Connection timeout to external services. The default is 0.5 seconds.
+.IP \fBcontainer_update_timeout\fR
+Time to wait while sending a container update on object update. The default is 1 second.
 .RE
 .PD
 
@@ -187,7 +189,9 @@ Logging address. The default is /dev/log.
 Indicates that you are using a VM environment. The default is no.
 .IP \fBdaemonize\fR
 Whether or not to run replication as a daemon. The default is yes.
-.IP \fBrun_pause\fR
+.IP "\fBrun_pause [deprecated]\fR"
+Time in seconds to wait between replication passes. The default is 30.
+.IP \fBinterval\fR
 Time in seconds to wait between replication passes. The default is 30.
 .IP \fBconcurrency\fR
 Number of replication workers to spawn. The default is 1.

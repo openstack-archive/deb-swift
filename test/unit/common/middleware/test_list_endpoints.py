@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import array
+import json
 import unittest
 from tempfile import mkdtemp
 from shutil import rmtree
@@ -21,7 +22,7 @@ from shutil import rmtree
 import os
 import mock
 from swift.common import ring, utils
-from swift.common.utils import json, split_path
+from swift.common.utils import split_path
 from swift.common.swob import Request, Response
 from swift.common.middleware import list_endpoints
 from swift.common.storage_policy import StoragePolicy, POLICIES
@@ -104,7 +105,8 @@ class TestListEndpoints(unittest.TestCase):
     def FakeGetInfo(self, env, app, swift_source=None):
         info = {'status': 0, 'sync_key': None, 'meta': {},
                 'cors': {'allow_origin': None, 'expose_headers': None,
-                'max_age': None}, 'sysmeta': {}, 'read_acl': None,
+                         'max_age': None},
+                'sysmeta': {}, 'read_acl': None,
                 'object_count': None, 'write_acl': None, 'versions': None,
                 'bytes': None}
         info['storage_policy'] = self.policy_to_test

@@ -129,13 +129,21 @@ class Sender(object):
             self.connection.putheader('Transfer-Encoding', 'chunked')
             self.connection.putheader('X-Backend-Storage-Policy-Index',
                                       int(self.job['policy']))
-            self.connection.putheader('X-Backend-Ssync-Frag-Index',
-                                      self.node['index'])
+            # a sync job must use the node's index for the frag_index of the
+            # rebuilt fragments instead of the frag_index from the job which
+            # will be rebuilding them
+            self.connection.putheader(
+                'X-Backend-Ssync-Frag-Index', self.node.get(
+                    'index', self.job.get('frag_index', '')))
+            # a revert job to a handoff will not have a node index
+            self.connection.putheader('X-Backend-Ssync-Node-Index',
+                                      self.node.get('index', ''))
             self.connection.endheaders()
         with exceptions.MessageTimeout(
                 self.daemon.node_timeout, 'connect receive'):
             self.response = self.connection.getresponse()
             if self.response.status != http.HTTP_OK:
+                self.response.read()
                 raise exceptions.ReplicationException(
                     'Expected status %s; got %s' %
                     (http.HTTP_OK, self.response.status))
@@ -203,8 +211,10 @@ class Sender(object):
             self.job['policy'], self.suffixes,
             frag_index=self.job.get('frag_index'))
         if self.remote_check_objs is not None:
-            hash_gen = ifilter(lambda (path, object_hash, timestamp):
-                               object_hash in self.remote_check_objs, hash_gen)
+            hash_gen = ifilter(
+                lambda path_objhash_timestamp:
+                path_objhash_timestamp[1] in
+                self.remote_check_objs, hash_gen)
         for path, object_hash, timestamp in hash_gen:
             self.available_map[object_hash] = timestamp
             with exceptions.MessageTimeout(
@@ -325,7 +335,7 @@ class Sender(object):
         """
         msg = ['PUT ' + url_path, 'Content-Length: ' + str(df.content_length)]
         # Sorted to make it easier to test.
-        for key, value in sorted(df.get_metadata().iteritems()):
+        for key, value in sorted(df.get_metadata().items()):
             if key not in ('name', 'Content-Length'):
                 msg.append('%s: %s' % (key, value))
         msg = '\r\n'.join(msg) + '\r\n\r\n'

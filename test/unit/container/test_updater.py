@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import cPickle as pickle
+import six.moves.cPickle as pickle
 import mock
 import os
 import unittest
@@ -66,13 +66,13 @@ class TestContainerUpdater(unittest.TestCase):
             'concurrency': '2',
             'node_timeout': '5',
         })
-        self.assert_(hasattr(cu, 'logger'))
-        self.assert_(cu.logger is not None)
-        self.assertEquals(cu.devices, self.devices_dir)
-        self.assertEquals(cu.interval, 1)
-        self.assertEquals(cu.concurrency, 2)
-        self.assertEquals(cu.node_timeout, 5)
-        self.assert_(cu.get_account_ring() is not None)
+        self.assertTrue(hasattr(cu, 'logger'))
+        self.assertTrue(cu.logger is not None)
+        self.assertEqual(cu.devices, self.devices_dir)
+        self.assertEqual(cu.interval, 1)
+        self.assertEqual(cu.concurrency, 2)
+        self.assertEqual(cu.node_timeout, 5)
+        self.assertTrue(cu.get_account_ring() is not None)
 
     def test_run_once(self):
         cu = container_updater.ContainerUpdater({
@@ -88,7 +88,7 @@ class TestContainerUpdater(unittest.TestCase):
         containers_dir = os.path.join(self.sda1, DATADIR)
         os.mkdir(containers_dir)
         cu.run_once()
-        self.assert_(os.path.exists(containers_dir))
+        self.assertTrue(os.path.exists(containers_dir))
         subdir = os.path.join(containers_dir, 'subdir')
         os.mkdir(subdir)
         cb = ContainerBroker(os.path.join(subdir, 'hash.db'), account='a',
@@ -96,19 +96,19 @@ class TestContainerUpdater(unittest.TestCase):
         cb.initialize(normalize_timestamp(1), 0)
         cu.run_once()
         info = cb.get_info()
-        self.assertEquals(info['object_count'], 0)
-        self.assertEquals(info['bytes_used'], 0)
-        self.assertEquals(info['reported_object_count'], 0)
-        self.assertEquals(info['reported_bytes_used'], 0)
+        self.assertEqual(info['object_count'], 0)
+        self.assertEqual(info['bytes_used'], 0)
+        self.assertEqual(info['reported_object_count'], 0)
+        self.assertEqual(info['reported_bytes_used'], 0)
 
         cb.put_object('o', normalize_timestamp(2), 3, 'text/plain',
                       '68b329da9893e34099c7d8ad5cb9c940')
         cu.run_once()
         info = cb.get_info()
-        self.assertEquals(info['object_count'], 1)
-        self.assertEquals(info['bytes_used'], 3)
-        self.assertEquals(info['reported_object_count'], 0)
-        self.assertEquals(info['reported_bytes_used'], 0)
+        self.assertEqual(info['object_count'], 1)
+        self.assertEqual(info['bytes_used'], 3)
+        self.assertEqual(info['reported_object_count'], 0)
+        self.assertEqual(info['reported_bytes_used'], 0)
 
         def accept(sock, addr, return_code):
             try:
@@ -118,18 +118,18 @@ class TestContainerUpdater(unittest.TestCase):
                     out.write('HTTP/1.1 %d OK\r\nContent-Length: 0\r\n\r\n' %
                               return_code)
                     out.flush()
-                    self.assertEquals(inc.readline(),
-                                      'PUT /sda1/0/a/c HTTP/1.1\r\n')
+                    self.assertEqual(inc.readline(),
+                                     'PUT /sda1/0/a/c HTTP/1.1\r\n')
                     headers = {}
                     line = inc.readline()
                     while line and line != '\r\n':
                         headers[line.split(':')[0].lower()] = \
                             line.split(':')[1].strip()
                         line = inc.readline()
-                    self.assert_('x-put-timestamp' in headers)
-                    self.assert_('x-delete-timestamp' in headers)
-                    self.assert_('x-object-count' in headers)
-                    self.assert_('x-bytes-used' in headers)
+                    self.assertTrue('x-put-timestamp' in headers)
+                    self.assertTrue('x-delete-timestamp' in headers)
+                    self.assertTrue('x-object-count' in headers)
+                    self.assertTrue('x-bytes-used' in headers)
             except BaseException as err:
                 import traceback
                 traceback.print_exc()
@@ -139,7 +139,7 @@ class TestContainerUpdater(unittest.TestCase):
 
         def spawn_accepts():
             events = []
-            for _junk in xrange(2):
+            for _junk in range(2):
                 sock, addr = bindsock.accept()
                 events.append(spawn(accept, sock, addr, 201))
             return events
@@ -154,10 +154,10 @@ class TestContainerUpdater(unittest.TestCase):
             if err:
                 raise err
         info = cb.get_info()
-        self.assertEquals(info['object_count'], 1)
-        self.assertEquals(info['bytes_used'], 3)
-        self.assertEquals(info['reported_object_count'], 1)
-        self.assertEquals(info['reported_bytes_used'], 3)
+        self.assertEqual(info['object_count'], 1)
+        self.assertEqual(info['bytes_used'], 3)
+        self.assertEqual(info['reported_object_count'], 1)
+        self.assertEqual(info['reported_bytes_used'], 3)
 
     @mock.patch('os.listdir')
     def test_listdir_with_exception(self, mock_listdir):
@@ -234,7 +234,7 @@ class TestContainerUpdater(unittest.TestCase):
 
         def spawn_accepts():
             events = []
-            for _junk in xrange(2):
+            for _junk in range(2):
                 with Timeout(3):
                     sock, addr = bindsock.accept()
                     events.append(spawn(accept, sock, addr))
@@ -250,10 +250,10 @@ class TestContainerUpdater(unittest.TestCase):
             if err:
                 raise err
         info = cb.get_info()
-        self.assertEquals(info['object_count'], 1)
-        self.assertEquals(info['bytes_used'], 3)
-        self.assertEquals(info['reported_object_count'], 1)
-        self.assertEquals(info['reported_bytes_used'], 3)
+        self.assertEqual(info['object_count'], 1)
+        self.assertEqual(info['bytes_used'], 3)
+        self.assertEqual(info['reported_object_count'], 1)
+        self.assertEqual(info['reported_bytes_used'], 3)
 
 
 if __name__ == '__main__':

@@ -65,6 +65,9 @@ required_filters = [
                                else [])},
     {'name': 'dlo', 'after_fn': lambda _junk: [
         'staticweb', 'tempauth', 'keystoneauth',
+        'catch_errors', 'gatekeeper', 'proxy_logging']},
+    {'name': 'versioned_writes', 'after_fn': lambda _junk: [
+        'staticweb', 'tempauth', 'keystoneauth',
         'catch_errors', 'gatekeeper', 'proxy_logging']}]
 
 
@@ -378,6 +381,7 @@ class Application(object):
                 allowed_methods = getattr(controller, 'allowed_methods', set())
                 return HTTPMethodNotAllowed(
                     request=req, headers={'Allow': ', '.join(allowed_methods)})
+            old_authorize = None
             if 'swift.authorize' in req.environ:
                 # We call authorize before the handler, always. If authorized,
                 # we remove the swift.authorize hook so isn't ever called
@@ -388,7 +392,7 @@ class Application(object):
                 if not resp and not req.headers.get('X-Copy-From-Account') \
                         and not req.headers.get('Destination-Account'):
                     # No resp means authorized, no delayed recheck required.
-                    del req.environ['swift.authorize']
+                    old_authorize = req.environ['swift.authorize']
                 else:
                     # Response indicates denial, but we might delay the denial
                     # and recheck later. If not delayed, return the error now.
@@ -398,7 +402,13 @@ class Application(object):
             # gets mutated during handling.  This way logging can display the
             # method the client actually sent.
             req.environ['swift.orig_req_method'] = req.method
-            return handler(req)
+            try:
+                if old_authorize:
+                    req.environ.pop('swift.authorize', None)
+                return handler(req)
+            finally:
+                if old_authorize:
+                    req.environ['swift.authorize'] = old_authorize
         except HTTPException as error_response:
             return error_response
         except (Exception, Timeout):
@@ -569,11 +579,11 @@ class Application(object):
         else:
             log = self.logger.exception
         log(_('ERROR with %(type)s server %(ip)s:%(port)s/%(device)s'
-              ' re: %(info)s'), {
-                  'type': typ, 'ip': node['ip'], 'port':
-                  node['port'], 'device': node['device'],
-                  'info': additional_info
-              }, **kwargs)
+              ' re: %(info)s'),
+            {'type': typ, 'ip': node['ip'],
+             'port': node['port'], 'device': node['device'],
+             'info': additional_info},
+            **kwargs)
 
     def modify_wsgi_pipeline(self, pipe):
         """

@@ -53,7 +53,7 @@ class Body(object):
         return self.chunk
 
     def __next__(self):
-        return self.next()
+        return next(self)
 
 
 class TestReconstructorPropDurable(ECProbeTest):
@@ -95,7 +95,7 @@ class TestReconstructorPropDurable(ECProbeTest):
             if e.errno != errno.ENOENT:
                 raise
 
-        # fire up reconstructor to propogate the .durable
+        # fire up reconstructor to propagate the .durable
         self.reconstructor.once()
 
         # fragment is still exactly as it was before!

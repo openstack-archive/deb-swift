@@ -35,70 +35,71 @@ class TestAccountFailures(ReplProbeTest):
 
         # Assert account level sees them
         headers, containers = client.get_account(self.url, self.token)
-        self.assertEquals(headers['x-account-container-count'], '2')
-        self.assertEquals(headers['x-account-object-count'], '0')
-        self.assertEquals(headers['x-account-bytes-used'], '0')
+        self.assertEqual(headers['x-account-container-count'], '2')
+        self.assertEqual(headers['x-account-object-count'], '0')
+        self.assertEqual(headers['x-account-bytes-used'], '0')
         found1 = False
         found2 = False
         for container in containers:
             if container['name'] == container1:
                 found1 = True
-                self.assertEquals(container['count'], 0)
-                self.assertEquals(container['bytes'], 0)
+                self.assertEqual(container['count'], 0)
+                self.assertEqual(container['bytes'], 0)
             elif container['name'] == container2:
                 found2 = True
-                self.assertEquals(container['count'], 0)
-                self.assertEquals(container['bytes'], 0)
-        self.assert_(found1)
-        self.assert_(found2)
+                self.assertEqual(container['count'], 0)
+                self.assertEqual(container['bytes'], 0)
+        self.assertTrue(found1)
+        self.assertTrue(found2)
 
         # Create container2/object1
         client.put_object(self.url, self.token, container2, 'object1', '1234')
 
         # Assert account level doesn't see it yet
         headers, containers = client.get_account(self.url, self.token)
-        self.assertEquals(headers['x-account-container-count'], '2')
-        self.assertEquals(headers['x-account-object-count'], '0')
-        self.assertEquals(headers['x-account-bytes-used'], '0')
+        self.assertEqual(headers['x-account-container-count'], '2')
+        self.assertEqual(headers['x-account-object-count'], '0')
+        self.assertEqual(headers['x-account-bytes-used'], '0')
         found1 = False
         found2 = False
         for container in containers:
             if container['name'] == container1:
                 found1 = True
-                self.assertEquals(container['count'], 0)
-                self.assertEquals(container['bytes'], 0)
+                self.assertEqual(container['count'], 0)
+                self.assertEqual(container['bytes'], 0)
             elif container['name'] == container2:
                 found2 = True
-                self.assertEquals(container['count'], 0)
-                self.assertEquals(container['bytes'], 0)
-        self.assert_(found1)
-        self.assert_(found2)
+                self.assertEqual(container['count'], 0)
+                self.assertEqual(container['bytes'], 0)
+        self.assertTrue(found1)
+        self.assertTrue(found2)
 
         # Get to final state
         self.get_to_final_state()
 
         # Assert account level now sees the container2/object1
         headers, containers = client.get_account(self.url, self.token)
-        self.assertEquals(headers['x-account-container-count'], '2')
-        self.assertEquals(headers['x-account-object-count'], '1')
-        self.assertEquals(headers['x-account-bytes-used'], '4')
+        self.assertEqual(headers['x-account-container-count'], '2')
+        self.assertEqual(headers['x-account-object-count'], '1')
+        self.assertEqual(headers['x-account-bytes-used'], '4')
         found1 = False
         found2 = False
         for container in containers:
             if container['name'] == container1:
                 found1 = True
-                self.assertEquals(container['count'], 0)
-                self.assertEquals(container['bytes'], 0)
+                self.assertEqual(container['count'], 0)
+                self.assertEqual(container['bytes'], 0)
             elif container['name'] == container2:
                 found2 = True
-                self.assertEquals(container['count'], 1)
-                self.assertEquals(container['bytes'], 4)
-        self.assert_(found1)
-        self.assert_(found2)
+                self.assertEqual(container['count'], 1)
+                self.assertEqual(container['bytes'], 4)
+        self.assertTrue(found1)
+        self.assertTrue(found2)
 
         apart, anodes = self.account_ring.get_nodes(self.account)
-        kill_nonprimary_server(anodes, self.port2server, self.pids)
-        kill_server(anodes[0]['port'], self.port2server, self.pids)
+        kill_nonprimary_server(anodes, self.ipport2server, self.pids)
+        kill_server((anodes[0]['ip'], anodes[0]['port']),
+                    self.ipport2server, self.pids)
         # Kill account servers excepting two of the primaries
 
         # Delete container1
@@ -110,9 +111,9 @@ class TestAccountFailures(ReplProbeTest):
         # Assert account level knows container1 is gone but doesn't know about
         #   container2/object2 yet
         headers, containers = client.get_account(self.url, self.token)
-        self.assertEquals(headers['x-account-container-count'], '1')
-        self.assertEquals(headers['x-account-object-count'], '1')
-        self.assertEquals(headers['x-account-bytes-used'], '4')
+        self.assertEqual(headers['x-account-container-count'], '1')
+        self.assertEqual(headers['x-account-object-count'], '1')
+        self.assertEqual(headers['x-account-bytes-used'], '4')
         found1 = False
         found2 = False
         for container in containers:
@@ -120,19 +121,19 @@ class TestAccountFailures(ReplProbeTest):
                 found1 = True
             elif container['name'] == container2:
                 found2 = True
-                self.assertEquals(container['count'], 1)
-                self.assertEquals(container['bytes'], 4)
-        self.assert_(not found1)
-        self.assert_(found2)
+                self.assertEqual(container['count'], 1)
+                self.assertEqual(container['bytes'], 4)
+        self.assertFalse(found1)
+        self.assertTrue(found2)
 
         # Run container updaters
         Manager(['container-updater']).once()
 
         # Assert account level now knows about container2/object2
         headers, containers = client.get_account(self.url, self.token)
-        self.assertEquals(headers['x-account-container-count'], '1')
-        self.assertEquals(headers['x-account-object-count'], '2')
-        self.assertEquals(headers['x-account-bytes-used'], '9')
+        self.assertEqual(headers['x-account-container-count'], '1')
+        self.assertEqual(headers['x-account-object-count'], '2')
+        self.assertEqual(headers['x-account-bytes-used'], '9')
         found1 = False
         found2 = False
         for container in containers:
@@ -140,21 +141,22 @@ class TestAccountFailures(ReplProbeTest):
                 found1 = True
             elif container['name'] == container2:
                 found2 = True
-                self.assertEquals(container['count'], 2)
-                self.assertEquals(container['bytes'], 9)
-        self.assert_(not found1)
-        self.assert_(found2)
+                self.assertEqual(container['count'], 2)
+                self.assertEqual(container['bytes'], 9)
+        self.assertFalse(found1)
+        self.assertTrue(found2)
 
         # Restart other primary account server
-        start_server(anodes[0]['port'], self.port2server, self.pids)
+        start_server((anodes[0]['ip'], anodes[0]['port']),
+                     self.ipport2server, self.pids)
 
         # Assert that server doesn't know about container1's deletion or the
         #   new container2/object2 yet
         headers, containers = \
             direct_client.direct_get_account(anodes[0], apart, self.account)
-        self.assertEquals(headers['x-account-container-count'], '2')
-        self.assertEquals(headers['x-account-object-count'], '1')
-        self.assertEquals(headers['x-account-bytes-used'], '4')
+        self.assertEqual(headers['x-account-container-count'], '2')
+        self.assertEqual(headers['x-account-object-count'], '1')
+        self.assertEqual(headers['x-account-bytes-used'], '4')
         found1 = False
         found2 = False
         for container in containers:
@@ -162,10 +164,10 @@ class TestAccountFailures(ReplProbeTest):
                 found1 = True
             elif container['name'] == container2:
                 found2 = True
-                self.assertEquals(container['count'], 1)
-                self.assertEquals(container['bytes'], 4)
-        self.assert_(found1)
-        self.assert_(found2)
+                self.assertEqual(container['count'], 1)
+                self.assertEqual(container['bytes'], 4)
+        self.assertTrue(found1)
+        self.assertTrue(found2)
 
         # Get to final state
         self.get_to_final_state()
@@ -173,9 +175,9 @@ class TestAccountFailures(ReplProbeTest):
         # Assert that server is now up to date
         headers, containers = \
             direct_client.direct_get_account(anodes[0], apart, self.account)
-        self.assertEquals(headers['x-account-container-count'], '1')
-        self.assertEquals(headers['x-account-object-count'], '2')
-        self.assertEquals(headers['x-account-bytes-used'], '9')
+        self.assertEqual(headers['x-account-container-count'], '1')
+        self.assertEqual(headers['x-account-object-count'], '2')
+        self.assertEqual(headers['x-account-bytes-used'], '9')
         found1 = False
         found2 = False
         for container in containers:
@@ -183,10 +185,11 @@ class TestAccountFailures(ReplProbeTest):
                 found1 = True
             elif container['name'] == container2:
                 found2 = True
-                self.assertEquals(container['count'], 2)
+                self.assertEqual(container['count'], 2)
+                self.assertEqual(container['bytes'], 9)
                 self.assertEquals(container['bytes'], 9)
-        self.assert_(not found1)
-        self.assert_(found2)
+        self.assertFalse(found1)
+        self.assertTrue(found2)
 
 
 if __name__ == '__main__':

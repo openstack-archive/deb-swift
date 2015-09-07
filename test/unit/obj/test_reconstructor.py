@@ -17,13 +17,14 @@ import unittest
 import os
 from hashlib import md5
 import mock
-import cPickle as pickle
+import six.moves.cPickle as pickle
 import tempfile
 import time
 import shutil
 import re
 import random
-from eventlet import Timeout
+import struct
+from eventlet import Timeout, sleep
 
 from contextlib import closing, nested, contextmanager
 from gzip import GzipFile
@@ -73,14 +74,8 @@ def make_ec_archive_bodies(policy, test_body):
         fragment_payloads.append(fragments)
 
     # join up the fragment payloads per node
-    ec_archive_bodies = [''.join(fragments)
-                         for fragments in zip(*fragment_payloads)]
+    ec_archive_bodies = [''.join(frags) for frags in zip(*fragment_payloads)]
     return ec_archive_bodies
-
-
-def _ips():
-    return ['127.0.0.1']
-object_reconstructor.whataremyips = _ips
 
 
 def _create_test_rings(path):
@@ -124,6 +119,14 @@ def count_stats(logger, key, metric):
         if re.match(metric, m):
             count += 1
     return count
+
+
+def get_header_frag_index(self, body):
+    metadata = self.policy.pyeclib_driver.get_metadata(body)
+    frag_index = struct.unpack('h', metadata[:2])[0]
+    return {
+        'X-Object-Sysmeta-Ec-Frag-Index': frag_index,
+    }
 
 
 @patch_policies([StoragePolicy(0, name='zero', is_default=True),
@@ -582,7 +585,7 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
                         except AssertionError as e:
                             extra_info = \
                                 '\n\n... for %r in part num %s job %r' % (
-                                k, part_num, job_key)
+                                    k, part_num, job_key)
                             raise AssertionError(str(e) + extra_info)
                 else:
                     self.fail(
@@ -596,10 +599,74 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
             self.assertFalse(jobs)  # that should be all of them
         check_jobs(part_num)
 
-    def test_run_once(self):
-        with mocked_http_conn(*[200] * 12, body=pickle.dumps({})):
+    def _run_once(self, http_count, extra_devices, override_devices=None):
+        ring_devs = list(self.policy.object_ring.devs)
+        for device, parts in extra_devices.items():
+            device_path = os.path.join(self.devices, device)
+            os.mkdir(device_path)
+            for part in range(parts):
+                os.makedirs(os.path.join(device_path, 'objects-1', str(part)))
+            # we update the ring to make is_local happy
+            devs = [dict(d) for d in ring_devs]
+            for d in devs:
+                d['device'] = device
+            self.policy.object_ring.devs.extend(devs)
+        self.reconstructor.stats_interval = 0
+        self.process_job = lambda j: sleep(0)
+        with mocked_http_conn(*[200] * http_count, body=pickle.dumps({})):
             with mock_ssync_sender():
-                self.reconstructor.run_once()
+                self.reconstructor.run_once(devices=override_devices)
+
+    def test_run_once(self):
+        # sda1: 3 is done in setup
+        extra_devices = {
+            'sdb1': 4,
+            'sdc1': 1,
+            'sdd1': 0,
+        }
+        self._run_once(18, extra_devices)
+        stats_lines = set()
+        for line in self.logger.get_lines_for_level('info'):
+            if 'devices reconstructed in' not in line:
+                continue
+            stat_line = line.split('of', 1)[0].strip()
+            stats_lines.add(stat_line)
+        acceptable = set([
+            '0/3 (0.00%) partitions',
+            '8/8 (100.00%) partitions',
+        ])
+        matched = stats_lines & acceptable
+        self.assertEqual(matched, acceptable,
+                         'missing some expected acceptable:\n%s' % (
+                             '\n'.join(sorted(acceptable - matched))))
+        self.assertEqual(self.reconstructor.reconstruction_device_count, 4)
+        self.assertEqual(self.reconstructor.reconstruction_part_count, 8)
+        self.assertEqual(self.reconstructor.part_count, 8)
+
+    def test_run_once_override_devices(self):
+        # sda1: 3 is done in setup
+        extra_devices = {
+            'sdb1': 4,
+            'sdc1': 1,
+            'sdd1': 0,
+        }
+        self._run_once(2, extra_devices, 'sdc1')
+        stats_lines = set()
+        for line in self.logger.get_lines_for_level('info'):
+            if 'devices reconstructed in' not in line:
+                continue
+            stat_line = line.split('of', 1)[0].strip()
+            stats_lines.add(stat_line)
+        acceptable = set([
+            '1/1 (100.00%) partitions',
+        ])
+        matched = stats_lines & acceptable
+        self.assertEqual(matched, acceptable,
+                         'missing some expected acceptable:\n%s' % (
+                             '\n'.join(sorted(acceptable - matched))))
+        self.assertEqual(self.reconstructor.reconstruction_device_count, 1)
+        self.assertEqual(self.reconstructor.reconstruction_part_count, 1)
+        self.assertEqual(self.reconstructor.part_count, 1)
 
     def test_get_response(self):
         part = self.part_nums[0]
@@ -618,6 +685,7 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
 
     def test_reconstructor_skips_bogus_partition_dirs(self):
         # A directory in the wrong place shouldn't crash the reconstructor
+        self.reconstructor._reset_stats()
         rmtree(self.objects_1)
         os.mkdir(self.objects_1)
 
@@ -696,6 +764,7 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
         self.assertEqual(expected_partners, sorted(got_partners))
 
     def test_collect_parts(self):
+        self.reconstructor._reset_stats()
         parts = []
         for part_info in self.reconstructor.collect_parts():
             parts.append(part_info['partition'])
@@ -706,6 +775,7 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
         def blowup_mkdirs(path):
             raise OSError('Ow!')
 
+        self.reconstructor._reset_stats()
         with mock.patch.object(object_reconstructor, 'mkdirs', blowup_mkdirs):
             rmtree(self.objects_1, ignore_errors=1)
             parts = []
@@ -714,7 +784,7 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
             error_lines = self.logger.get_lines_for_level('error')
             self.assertEqual(len(error_lines), 1)
             log_args, log_kwargs = self.logger.log_dict['error'][0]
-            self.assertEquals(str(log_kwargs['exc_info'][1]), 'Ow!')
+            self.assertEqual(str(log_kwargs['exc_info'][1]), 'Ow!')
 
     def test_removes_zbf(self):
         # After running xfs_repair, a partition directory could become a
@@ -731,6 +801,7 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
         # since our collect_parts job is a generator, that yields directly
         # into build_jobs and then spawns it's safe to do the remove_files
         # without making reconstructor startup slow
+        self.reconstructor._reset_stats()
         for part_info in self.reconstructor.collect_parts():
             self.assertNotEqual(pol_1_part_1_path, part_info['part_path'])
         self.assertFalse(os.path.exists(pol_1_part_1_path))
@@ -932,7 +1003,7 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
     def test_process_job_all_insufficient_storage(self):
         self.reconstructor._reset_stats()
         with mock_ssync_sender():
-            with mocked_http_conn(*[507] * 10):
+            with mocked_http_conn(*[507] * 8):
                 found_jobs = []
                 for part_info in self.reconstructor.collect_parts():
                     jobs = self.reconstructor.build_reconstruction_jobs(
@@ -954,7 +1025,7 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
     def test_process_job_all_client_error(self):
         self.reconstructor._reset_stats()
         with mock_ssync_sender():
-            with mocked_http_conn(*[400] * 10):
+            with mocked_http_conn(*[400] * 8):
                 found_jobs = []
                 for part_info in self.reconstructor.collect_parts():
                     jobs = self.reconstructor.build_reconstruction_jobs(
@@ -976,7 +1047,7 @@ class TestGlobalSetupObjectReconstructor(unittest.TestCase):
     def test_process_job_all_timeout(self):
         self.reconstructor._reset_stats()
         with mock_ssync_sender():
-            with nested(mocked_http_conn(*[Timeout()] * 10)):
+            with nested(mocked_http_conn(*[Timeout()] * 8)):
                 found_jobs = []
                 for part_info in self.reconstructor.collect_parts():
                     jobs = self.reconstructor.build_reconstruction_jobs(
@@ -1001,6 +1072,7 @@ class TestObjectReconstructor(unittest.TestCase):
 
     def setUp(self):
         self.policy = POLICIES.default
+        self.policy.object_ring._rtime = time.time() + 3600
         self.testdir = tempfile.mkdtemp()
         self.devices = os.path.join(self.testdir, 'devices')
         self.local_dev = self.policy.object_ring.devs[0]
@@ -1009,9 +1081,17 @@ class TestObjectReconstructor(unittest.TestCase):
         self.conf = {
             'devices': self.devices,
             'mount_check': False,
+            'bind_ip': self.ip,
             'bind_port': self.port,
         }
         self.logger = debug_logger('object-reconstructor')
+        self._configure_reconstructor()
+        self.policy.object_ring.max_more_nodes = \
+            self.policy.object_ring.replicas
+        self.ts_iter = make_timestamp_iter()
+
+    def _configure_reconstructor(self, **kwargs):
+        self.conf.update(kwargs)
         self.reconstructor = object_reconstructor.ObjectReconstructor(
             self.conf, logger=self.logger)
         self.reconstructor._reset_stats()
@@ -1019,11 +1099,9 @@ class TestObjectReconstructor(unittest.TestCase):
         # directly, so you end up with a /0 when you try to show the
         # percentage of complete jobs as ratio of the total job count
         self.reconstructor.job_count = 1
-        self.policy.object_ring.max_more_nodes = \
-            self.policy.object_ring.replicas
-        self.ts_iter = make_timestamp_iter()
 
     def tearDown(self):
+        self.reconstructor._reset_stats()
         self.reconstructor.stats_line()
         shutil.rmtree(self.testdir)
 
@@ -1038,9 +1116,7 @@ class TestObjectReconstructor(unittest.TestCase):
                 utils.mkdirs(os.path.join(
                     self.devices, self.local_dev['device'],
                     datadir, str(part)))
-        with mock.patch('swift.obj.reconstructor.whataremyips',
-                        return_value=[self.ip]):
-            part_infos = list(self.reconstructor.collect_parts())
+        part_infos = list(self.reconstructor.collect_parts())
         found_parts = sorted(int(p['partition']) for p in part_infos)
         self.assertEqual(found_parts, sorted(stub_parts))
         for part_info in part_infos:
@@ -1052,10 +1128,112 @@ class TestObjectReconstructor(unittest.TestCase):
                                           diskfile.get_data_dir(self.policy),
                                           str(part_info['partition'])))
 
+    def test_collect_parts_skips_non_local_devs_servers_per_port(self):
+        self._configure_reconstructor(devices=self.devices, mount_check=False,
+                                      bind_ip=self.ip, bind_port=self.port,
+                                      servers_per_port=2)
+
+        device_parts = {
+            'sda': (374,),
+            'sdb': (179, 807),  # w/one-serv-per-port, same IP alone is local
+            'sdc': (363, 468, 843),
+            'sdd': (912,),  # "not local" via different IP
+        }
+        for policy in POLICIES:
+            datadir = diskfile.get_data_dir(policy)
+            for dev, parts in device_parts.items():
+                for part in parts:
+                    utils.mkdirs(os.path.join(
+                        self.devices, dev,
+                        datadir, str(part)))
+
+        # we're only going to add sda and sdc into the ring
+        local_devs = ('sda', 'sdb', 'sdc')
+        stub_ring_devs = [{
+            'device': dev,
+            'replication_ip': self.ip,
+            'replication_port': self.port + 1 if dev == 'sdb' else self.port,
+        } for dev in local_devs]
+        stub_ring_devs.append({
+            'device': 'sdd',
+            'replication_ip': '127.0.0.88',  # not local via IP
+            'replication_port': self.port,
+        })
+        self.reconstructor.bind_ip = '0.0.0.0'  # use whataremyips
+        with nested(mock.patch('swift.obj.reconstructor.whataremyips',
+                               return_value=[self.ip]),
+                    mock.patch.object(self.policy.object_ring, '_devs',
+                                      new=stub_ring_devs)):
+            part_infos = list(self.reconstructor.collect_parts())
+        found_parts = sorted(int(p['partition']) for p in part_infos)
+        expected_parts = sorted(itertools.chain(
+            *(device_parts[d] for d in local_devs)))
+        self.assertEqual(found_parts, expected_parts)
+        for part_info in part_infos:
+            self.assertEqual(part_info['policy'], self.policy)
+            self.assertTrue(part_info['local_dev'] in stub_ring_devs)
+            dev = part_info['local_dev']
+            self.assertEqual(part_info['part_path'],
+                             os.path.join(self.devices,
+                                          dev['device'],
+                                          diskfile.get_data_dir(self.policy),
+                                          str(part_info['partition'])))
+
+    def test_collect_parts_multi_device_skips_non_non_local_devs(self):
+        device_parts = {
+            'sda': (374,),
+            'sdb': (179, 807),  # "not local" via different port
+            'sdc': (363, 468, 843),
+            'sdd': (912,),  # "not local" via different IP
+        }
+        for policy in POLICIES:
+            datadir = diskfile.get_data_dir(policy)
+            for dev, parts in device_parts.items():
+                for part in parts:
+                    utils.mkdirs(os.path.join(
+                        self.devices, dev,
+                        datadir, str(part)))
+
+        # we're only going to add sda and sdc into the ring
+        local_devs = ('sda', 'sdc')
+        stub_ring_devs = [{
+            'device': dev,
+            'replication_ip': self.ip,
+            'replication_port': self.port,
+        } for dev in local_devs]
+        stub_ring_devs.append({
+            'device': 'sdb',
+            'replication_ip': self.ip,
+            'replication_port': self.port + 1,  # not local via port
+        })
+        stub_ring_devs.append({
+            'device': 'sdd',
+            'replication_ip': '127.0.0.88',  # not local via IP
+            'replication_port': self.port,
+        })
+        self.reconstructor.bind_ip = '0.0.0.0'  # use whataremyips
+        with nested(mock.patch('swift.obj.reconstructor.whataremyips',
+                               return_value=[self.ip]),
+                    mock.patch.object(self.policy.object_ring, '_devs',
+                                      new=stub_ring_devs)):
+            part_infos = list(self.reconstructor.collect_parts())
+        found_parts = sorted(int(p['partition']) for p in part_infos)
+        expected_parts = sorted(itertools.chain(
+            *(device_parts[d] for d in local_devs)))
+        self.assertEqual(found_parts, expected_parts)
+        for part_info in part_infos:
+            self.assertEqual(part_info['policy'], self.policy)
+            self.assertTrue(part_info['local_dev'] in stub_ring_devs)
+            dev = part_info['local_dev']
+            self.assertEqual(part_info['part_path'],
+                             os.path.join(self.devices,
+                                          dev['device'],
+                                          diskfile.get_data_dir(self.policy),
+                                          str(part_info['partition'])))
+
     def test_collect_parts_multi_device_skips_non_ring_devices(self):
         device_parts = {
             'sda': (374,),
-            'sdb': (179, 807),
             'sdc': (363, 468, 843),
         }
         for policy in POLICIES:
@@ -1071,8 +1249,9 @@ class TestObjectReconstructor(unittest.TestCase):
         stub_ring_devs = [{
             'device': dev,
             'replication_ip': self.ip,
-            'replication_port': self.port
+            'replication_port': self.port,
         } for dev in local_devs]
+        self.reconstructor.bind_ip = '0.0.0.0'  # use whataremyips
         with nested(mock.patch('swift.obj.reconstructor.whataremyips',
                                return_value=[self.ip]),
                     mock.patch.object(self.policy.object_ring, '_devs',
@@ -1115,16 +1294,16 @@ class TestObjectReconstructor(unittest.TestCase):
 
         paths = []
 
-        def fake_ismount(path):
-            paths.append(path)
+        def fake_check_mount(devices, device):
+            paths.append(os.path.join(devices, device))
             return False
 
         with nested(mock.patch('swift.obj.reconstructor.whataremyips',
                                return_value=[self.ip]),
                     mock.patch.object(self.policy.object_ring, '_devs',
                                       new=stub_ring_devs),
-                    mock.patch('swift.obj.reconstructor.ismount',
-                               fake_ismount)):
+                    mock.patch('swift.obj.diskfile.check_mount',
+                               fake_check_mount)):
             part_infos = list(self.reconstructor.collect_parts())
         self.assertEqual(2, len(part_infos))  # sanity, same jobs
         self.assertEqual(set(int(p['partition']) for p in part_infos),
@@ -1134,13 +1313,16 @@ class TestObjectReconstructor(unittest.TestCase):
         self.assertEqual(paths, [])
 
         # ... now with mount check
-        self.reconstructor.mount_check = True
+        self._configure_reconstructor(mount_check=True)
+        self.assertTrue(self.reconstructor.mount_check)
+        for policy in POLICIES:
+            self.assertTrue(self.reconstructor._df_router[policy].mount_check)
         with nested(mock.patch('swift.obj.reconstructor.whataremyips',
                                return_value=[self.ip]),
                     mock.patch.object(self.policy.object_ring, '_devs',
                                       new=stub_ring_devs),
-                    mock.patch('swift.obj.reconstructor.ismount',
-                               fake_ismount)):
+                    mock.patch('swift.obj.diskfile.check_mount',
+                               fake_check_mount)):
             part_infos = list(self.reconstructor.collect_parts())
         self.assertEqual([], part_infos)  # sanity, no jobs
 
@@ -1148,7 +1330,8 @@ class TestObjectReconstructor(unittest.TestCase):
         self.assertEqual(set(paths), set([
             os.path.join(self.devices, dev) for dev in local_devs]))
 
-        def fake_ismount(path):
+        def fake_check_mount(devices, device):
+            path = os.path.join(devices, device)
             if path.endswith('sda'):
                 return True
             else:
@@ -1158,8 +1341,8 @@ class TestObjectReconstructor(unittest.TestCase):
                                return_value=[self.ip]),
                     mock.patch.object(self.policy.object_ring, '_devs',
                                       new=stub_ring_devs),
-                    mock.patch('swift.obj.reconstructor.ismount',
-                               fake_ismount)):
+                    mock.patch('swift.obj.diskfile.check_mount',
+                               fake_check_mount)):
             part_infos = list(self.reconstructor.collect_parts())
         self.assertEqual(1, len(part_infos))  # only sda picked up (part 0)
         self.assertEqual(part_infos[0]['partition'], 0)
@@ -1171,6 +1354,8 @@ class TestObjectReconstructor(unittest.TestCase):
             'replication_ip': self.ip,
             'replication_port': self.port
         } for dev in local_devs]
+        for device in local_devs:
+            utils.mkdirs(os.path.join(self.devices, device))
         fake_unlink = mock.MagicMock()
         self.reconstructor.reclaim_age = 1000
         now = time.time()
@@ -2299,9 +2484,13 @@ class TestObjectReconstructor(unittest.TestCase):
 
         broken_body = ec_archive_bodies.pop(1)
 
-        responses = list((200, body) for body in ec_archive_bodies)
-        headers = {'X-Object-Sysmeta-Ec-Etag': etag}
-        codes, body_iter = zip(*responses)
+        responses = list()
+        for body in ec_archive_bodies:
+            headers = get_header_frag_index(self, body)
+            headers.update({'X-Object-Sysmeta-Ec-Etag': etag})
+            responses.append((200, body, headers))
+
+        codes, body_iter, headers = zip(*responses)
         with mocked_http_conn(*codes, body_iter=body_iter, headers=headers):
             df = self.reconstructor.reconstruct_fa(
                 job, node, metadata)
@@ -2329,17 +2518,21 @@ class TestObjectReconstructor(unittest.TestCase):
 
         broken_body = ec_archive_bodies.pop(4)
 
-        base_responses = list((200, body) for body in ec_archive_bodies)
+        base_responses = list()
+        for body in ec_archive_bodies:
+            headers = get_header_frag_index(self, body)
+            headers.update({'X-Object-Sysmeta-Ec-Etag': etag})
+            base_responses.append((200, body, headers))
+
         # since we're already missing a fragment a +2 scheme can only support
         # one additional failure at a time
         for error in (Timeout(), 404, Exception('kaboom!')):
-            responses = list(base_responses)
+            responses = base_responses
             error_index = random.randint(0, len(responses) - 1)
-            responses[error_index] = (error, '')
-            headers = {'X-Object-Sysmeta-Ec-Etag': etag}
-            codes, body_iter = zip(*responses)
+            responses[error_index] = (error, '', '')
+            codes, body_iter, headers_iter = zip(*responses)
             with mocked_http_conn(*codes, body_iter=body_iter,
-                                  headers=headers):
+                                  headers=headers_iter):
                 df = self.reconstructor.reconstruct_fa(
                     job, node, dict(metadata))
                 fixed_body = ''.join(df.reader())
@@ -2369,16 +2562,19 @@ class TestObjectReconstructor(unittest.TestCase):
         # the scheme is 10+4, so this gets a parity node
         broken_body = ec_archive_bodies.pop(-4)
 
-        base_responses = list((200, body) for body in ec_archive_bodies)
+        responses = list()
+        for body in ec_archive_bodies:
+            headers = get_header_frag_index(self, body)
+            headers.update({'X-Object-Sysmeta-Ec-Etag': etag})
+            responses.append((200, body, headers))
+
         for error in (Timeout(), 404, Exception('kaboom!')):
-            responses = list(base_responses)
             # grab a data node index
             error_index = random.randint(0, self.policy.ec_ndata - 1)
-            responses[error_index] = (error, '')
-            headers = {'X-Object-Sysmeta-Ec-Etag': etag}
-            codes, body_iter = zip(*responses)
+            responses[error_index] = (error, '', '')
+            codes, body_iter, headers_iter = zip(*responses)
             with mocked_http_conn(*codes, body_iter=body_iter,
-                                  headers=headers):
+                                  headers=headers_iter):
                 df = self.reconstructor.reconstruct_fa(
                     job, node, dict(metadata))
                 fixed_body = ''.join(df.reader())
@@ -2425,23 +2621,28 @@ class TestObjectReconstructor(unittest.TestCase):
         ec_archive_bodies = make_ec_archive_bodies(self.policy, test_data)
 
         broken_body = ec_archive_bodies.pop(1)
-
         ts = (utils.Timestamp(t) for t in itertools.count(int(time.time())))
         # bad response
-        bad_response = (200, '', {
+        bad_headers = {
             'X-Object-Sysmeta-Ec-Etag': 'some garbage',
             'X-Backend-Timestamp': next(ts).internal,
-        })
+        }
 
         # good responses
-        headers = {
-            'X-Object-Sysmeta-Ec-Etag': etag,
-            'X-Backend-Timestamp': next(ts).internal
-        }
-        responses = [(200, body, headers)
-                     for body in ec_archive_bodies]
+        responses = list()
+        t1 = next(ts).internal
+        for body in ec_archive_bodies:
+            headers = get_header_frag_index(self, body)
+            headers.update({'X-Object-Sysmeta-Ec-Etag': etag,
+                            'X-Backend-Timestamp': t1})
+            responses.append((200, body, headers))
+
         # mixed together
-        error_index = random.randint(0, len(responses) - 2)
+        error_index = random.randint(0, self.policy.ec_ndata)
+        error_headers = get_header_frag_index(self,
+                                              (responses[error_index])[1])
+        error_headers.update(bad_headers)
+        bad_response = (200, '', bad_headers)
         responses[error_index] = bad_response
         codes, body_iter, headers = zip(*responses)
         with mocked_http_conn(*codes, body_iter=body_iter, headers=headers):
@@ -2470,18 +2671,19 @@ class TestObjectReconstructor(unittest.TestCase):
         ec_archive_bodies = make_ec_archive_bodies(self.policy, test_data)
 
         broken_body = ec_archive_bodies.pop(1)
-
         ts = (utils.Timestamp(t) for t in itertools.count(int(time.time())))
+
         # good responses
-        headers = {
-            'X-Object-Sysmeta-Ec-Etag': etag,
-            'X-Backend-Timestamp': next(ts).internal
-        }
-        responses = [(200, body, headers)
-                     for body in ec_archive_bodies]
-        codes, body_iter, headers = zip(*responses)
+        responses = list()
+        t0 = next(ts).internal
+        for body in ec_archive_bodies:
+            headers = get_header_frag_index(self, body)
+            headers.update({'X-Object-Sysmeta-Ec-Etag': etag,
+                            'X-Backend-Timestamp': t0})
+            responses.append((200, body, headers))
 
         # sanity check before negative test
+        codes, body_iter, headers = zip(*responses)
         with mocked_http_conn(*codes, body_iter=body_iter, headers=headers):
             df = self.reconstructor.reconstruct_fa(
                 job, node, dict(metadata))
@@ -2491,16 +2693,99 @@ class TestObjectReconstructor(unittest.TestCase):
                              md5(broken_body).hexdigest())
 
         # one newer etag can spoil the bunch
-        new_response = (200, '', {
-            'X-Object-Sysmeta-Ec-Etag': 'some garbage',
-            'X-Backend-Timestamp': next(ts).internal,
-        })
         new_index = random.randint(0, len(responses) - self.policy.ec_nparity)
+        new_headers = get_header_frag_index(self, (responses[new_index])[1])
+        new_headers.update({'X-Object-Sysmeta-Ec-Etag': 'some garbage',
+                            'X-Backend-Timestamp': next(ts).internal})
+        new_response = (200, '', new_headers)
         responses[new_index] = new_response
         codes, body_iter, headers = zip(*responses)
         with mocked_http_conn(*codes, body_iter=body_iter, headers=headers):
             self.assertRaises(DiskFileError, self.reconstructor.reconstruct_fa,
                               job, node, dict(metadata))
+
+    def test_reconstruct_fa_finds_itself_does_not_fail(self):
+        job = {
+            'partition': 0,
+            'policy': self.policy,
+        }
+        part_nodes = self.policy.object_ring.get_part_nodes(0)
+        node = part_nodes[1]
+        metadata = {
+            'name': '/a/c/o',
+            'Content-Length': 0,
+            'ETag': 'etag',
+        }
+
+        test_data = ('rebuild' * self.policy.ec_segment_size)[:-777]
+        etag = md5(test_data).hexdigest()
+        ec_archive_bodies = make_ec_archive_bodies(self.policy, test_data)
+
+        # instead of popping the broken body, we'll just leave it in the list
+        # of responses and take away something else.
+        broken_body = ec_archive_bodies[1]
+        ec_archive_bodies = ec_archive_bodies[:-1]
+
+        def make_header(body):
+            metadata = self.policy.pyeclib_driver.get_metadata(body)
+            frag_index = struct.unpack('h', metadata[:2])[0]
+            return {
+                'X-Object-Sysmeta-Ec-Frag-Index': frag_index,
+                'X-Object-Sysmeta-Ec-Etag': etag,
+            }
+
+        responses = [(200, body, make_header(body))
+                     for body in ec_archive_bodies]
+        codes, body_iter, headers = zip(*responses)
+        with mocked_http_conn(*codes, body_iter=body_iter, headers=headers):
+            df = self.reconstructor.reconstruct_fa(
+                job, node, metadata)
+            fixed_body = ''.join(df.reader())
+            self.assertEqual(len(fixed_body), len(broken_body))
+            self.assertEqual(md5(fixed_body).hexdigest(),
+                             md5(broken_body).hexdigest())
+
+    def test_reconstruct_fa_finds_duplicate_does_not_fail(self):
+        job = {
+            'partition': 0,
+            'policy': self.policy,
+        }
+        part_nodes = self.policy.object_ring.get_part_nodes(0)
+        node = part_nodes[1]
+        metadata = {
+            'name': '/a/c/o',
+            'Content-Length': 0,
+            'ETag': 'etag',
+        }
+
+        test_data = ('rebuild' * self.policy.ec_segment_size)[:-777]
+        etag = md5(test_data).hexdigest()
+        ec_archive_bodies = make_ec_archive_bodies(self.policy, test_data)
+
+        broken_body = ec_archive_bodies.pop(1)
+        # add some duplicates
+        num_duplicates = self.policy.ec_nparity - 1
+        ec_archive_bodies = (ec_archive_bodies[:num_duplicates] +
+                             ec_archive_bodies)[:-num_duplicates]
+
+        def make_header(body):
+            metadata = self.policy.pyeclib_driver.get_metadata(body)
+            frag_index = struct.unpack('h', metadata[:2])[0]
+            return {
+                'X-Object-Sysmeta-Ec-Frag-Index': frag_index,
+                'X-Object-Sysmeta-Ec-Etag': etag,
+            }
+
+        responses = [(200, body, make_header(body))
+                     for body in ec_archive_bodies]
+        codes, body_iter, headers = zip(*responses)
+        with mocked_http_conn(*codes, body_iter=body_iter, headers=headers):
+            df = self.reconstructor.reconstruct_fa(
+                job, node, metadata)
+            fixed_body = ''.join(df.reader())
+            self.assertEqual(len(fixed_body), len(broken_body))
+            self.assertEqual(md5(fixed_body).hexdigest(),
+                             md5(broken_body).hexdigest())
 
 
 if __name__ == '__main__':

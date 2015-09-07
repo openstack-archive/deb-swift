@@ -18,7 +18,7 @@ Pluggable Back-end for Account Server
 
 from uuid import uuid4
 import time
-import cPickle as pickle
+import six.moves.cPickle as pickle
 
 import sqlite3
 
@@ -380,6 +380,7 @@ class AccountBroker(DatabaseBroker):
 
         :returns: list of tuples of (name, object_count, bytes_used, 0)
         """
+        delim_force_gte = False
         (marker, end_marker, prefix, delimiter) = utf8encode(
             marker, end_marker, prefix, delimiter)
         self._commit_puts_stale_ok()
@@ -392,12 +393,17 @@ class AccountBroker(DatabaseBroker):
                 query = """
                     SELECT name, object_count, bytes_used, 0
                     FROM container
-                    WHERE deleted = 0 AND """
+                    WHERE """
                 query_args = []
                 if end_marker:
                     query += ' name < ? AND'
                     query_args.append(end_marker)
-                if marker and marker >= prefix:
+                if delim_force_gte:
+                    query += ' name >= ? AND'
+                    query_args.append(marker)
+                    # Always set back to False
+                    delim_force_gte = False
+                elif marker and marker >= prefix:
                     query += ' name > ? AND'
                     query_args.append(marker)
                 elif prefix:
@@ -437,6 +443,8 @@ class AccountBroker(DatabaseBroker):
                     end = name.find(delimiter, len(prefix))
                     if end > 0:
                         marker = name[:end] + chr(ord(delimiter) + 1)
+                        # we want result to be inclusive of delim+1
+                        delim_force_gte = True
                         dir_name = name[:end + 1]
                         if dir_name != orig_marker:
                             results.append([dir_name, 0, 0, 1])
@@ -460,6 +468,7 @@ class AccountBroker(DatabaseBroker):
             max_rowid = -1
             curs = conn.cursor()
             for rec in item_list:
+                rec.setdefault('storage_policy_index', 0)  # legacy
                 record = [rec['name'], rec['put_timestamp'],
                           rec['delete_timestamp'], rec['object_count'],
                           rec['bytes_used'], rec['deleted'],
@@ -477,7 +486,7 @@ class AccountBroker(DatabaseBroker):
                 row = curs_row.fetchone()
                 if row:
                     row = list(row)
-                    for i in xrange(5):
+                    for i in range(5):
                         if record[i] is None and row[i] is not None:
                             record[i] = row[i]
                     if row[1] > record[1]:  # Keep newest put_timestamp

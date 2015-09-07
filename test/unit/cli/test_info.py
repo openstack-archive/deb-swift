@@ -15,10 +15,10 @@
 import os
 import unittest
 import mock
-from cStringIO import StringIO
 from shutil import rmtree
 from tempfile import mkdtemp
 
+from six.moves import cStringIO as StringIO
 from test.unit import patch_policies, write_fake_ring
 
 from swift.common import ring, utils
@@ -128,8 +128,8 @@ Metadata:
 No system metadata found in db file
   User Metadata: {'mydata': 'swift'}'''
 
-        self.assertEquals(sorted(out.getvalue().strip().split('\n')),
-                          sorted(exp_out.split('\n')))
+        self.assertEqual(sorted(out.getvalue().strip().split('\n')),
+                         sorted(exp_out.split('\n')))
 
         info = dict(
             account='acct',
@@ -175,8 +175,8 @@ Metadata:
   X-Container-Foo: bar
   System Metadata: {'mydata': 'swift'}
 No user metadata found in db file''' % POLICIES[0].name
-        self.assertEquals(sorted(out.getvalue().strip().split('\n')),
-                          sorted(exp_out.split('\n')))
+        self.assertEqual(sorted(out.getvalue().strip().split('\n')),
+                         sorted(exp_out.split('\n')))
 
     def test_print_ring_locations_invalid_args(self):
         self.assertRaises(ValueError, print_ring_locations,
@@ -306,7 +306,7 @@ No user metadata found in db file''' % POLICIES[0].name
         if exp_raised:
             exp_out = 'Does not appear to be a DB of type "account":' \
                 ' ./d49d0ecbb53be1fcc49624f2f7c7ccae.db'
-            self.assertEquals(out.getvalue().strip(), exp_out)
+            self.assertEqual(out.getvalue().strip(), exp_out)
         else:
             self.fail("Expected an InfoSystemExit exception to be raised")
 
@@ -334,8 +334,8 @@ class TestPrintObj(TestCliInfoBase):
         out = StringIO()
         with mock.patch('sys.stdout', out):
             self.assertRaises(InfoSystemExit, print_obj, datafile)
-            self.assertEquals(out.getvalue().strip(),
-                              'Invalid metadata')
+            self.assertEqual(out.getvalue().strip(),
+                             'Invalid metadata')
 
     def test_print_obj_valid(self):
         out = StringIO()
@@ -386,6 +386,23 @@ class TestPrintObjFullMeta(TestCliInfoBase):
             print_obj(self.datafile, swift_dir=self.testdir)
         self.assertTrue('/objects-1/' in out.getvalue())
 
+    def test_print_obj_policy_index(self):
+        # Check an output of policy index when current directory is in
+        # object-* directory
+        out = StringIO()
+        hash_dir = os.path.dirname(self.datafile)
+        file_name = os.path.basename(self.datafile)
+
+        # Change working directory to object hash dir
+        cwd = os.getcwd()
+        try:
+            os.chdir(hash_dir)
+            with mock.patch('sys.stdout', out):
+                print_obj(file_name, swift_dir=self.testdir)
+        finally:
+            os.chdir(cwd)
+        self.assertTrue('X-Backend-Storage-Policy-Index: 1' in out.getvalue())
+
     def test_print_obj_meta_and_ts_files(self):
         # verify that print_obj will also read from meta and ts files
         base = os.path.splitext(self.datafile)[0]
@@ -411,7 +428,7 @@ class TestPrintObjFullMeta(TestCliInfoBase):
         out = StringIO()
         with mock.patch('sys.stdout', out):
             print_obj(self.datafile, policy_name='two', swift_dir=self.testdir)
-        ring_alert_msg = 'Attention: Ring does not match policy'
+        ring_alert_msg = 'Warning: Ring does not match policy!'
         self.assertTrue(ring_alert_msg in out.getvalue())
 
     def test_valid_etag(self):
@@ -446,14 +463,14 @@ class TestPrintObjFullMeta(TestCliInfoBase):
         self.assertRaisesMessage(ValueError, 'Metadata is None',
                                  print_obj_metadata, [])
 
-        def reset_metadata():
+        def get_metadata(items):
             md = dict(name='/AUTH_admin/c/dummy')
             md['Content-Type'] = 'application/octet-stream'
             md['X-Timestamp'] = 106.3
-            md['X-Object-Meta-Mtime'] = '107.3'
+            md.update(items)
             return md
 
-        metadata = reset_metadata()
+        metadata = get_metadata({'X-Object-Meta-Mtime': '107.3'})
         out = StringIO()
         with mock.patch('sys.stdout', out):
             print_obj_metadata(metadata)
@@ -464,17 +481,93 @@ class TestPrintObjFullMeta(TestCliInfoBase):
   Object hash: 128fdf98bddd1b1e8695f4340e67a67a
 Content-Type: application/octet-stream
 Timestamp: 1970-01-01T00:01:46.300000 (%s)
-User Metadata: {'X-Object-Meta-Mtime': '107.3'}''' % (
+System Metadata:
+  No metadata found
+User Metadata:
+  X-Object-Meta-Mtime: 107.3
+Other Metadata:
+  No metadata found''' % (
             utils.Timestamp(106.3).internal)
 
-        self.assertEquals(out.getvalue().strip(), exp_out)
+        self.assertEqual(out.getvalue().strip(), exp_out)
 
-        metadata = reset_metadata()
+        metadata = get_metadata({
+            'X-Object-Sysmeta-Mtime': '107.3',
+            'X-Object-Sysmeta-Name': 'Obj name',
+        })
+        out = StringIO()
+        with mock.patch('sys.stdout', out):
+            print_obj_metadata(metadata)
+        exp_out = '''Path: /AUTH_admin/c/dummy
+  Account: AUTH_admin
+  Container: c
+  Object: dummy
+  Object hash: 128fdf98bddd1b1e8695f4340e67a67a
+Content-Type: application/octet-stream
+Timestamp: 1970-01-01T00:01:46.300000 (%s)
+System Metadata:
+  X-Object-Sysmeta-Mtime: 107.3
+  X-Object-Sysmeta-Name: Obj name
+User Metadata:
+  No metadata found
+Other Metadata:
+  No metadata found''' % (
+            utils.Timestamp(106.3).internal)
+
+        self.assertEqual(out.getvalue().strip(), exp_out)
+
+        metadata = get_metadata({
+            'X-Object-Meta-Mtime': '107.3',
+            'X-Object-Sysmeta-Mtime': '107.3',
+            'X-Object-Mtime': '107.3',
+        })
+        out = StringIO()
+        with mock.patch('sys.stdout', out):
+            print_obj_metadata(metadata)
+        exp_out = '''Path: /AUTH_admin/c/dummy
+  Account: AUTH_admin
+  Container: c
+  Object: dummy
+  Object hash: 128fdf98bddd1b1e8695f4340e67a67a
+Content-Type: application/octet-stream
+Timestamp: 1970-01-01T00:01:46.300000 (%s)
+System Metadata:
+  X-Object-Sysmeta-Mtime: 107.3
+User Metadata:
+  X-Object-Meta-Mtime: 107.3
+Other Metadata:
+  X-Object-Mtime: 107.3''' % (
+            utils.Timestamp(106.3).internal)
+
+        self.assertEqual(out.getvalue().strip(), exp_out)
+
+        metadata = get_metadata({})
+        out = StringIO()
+        with mock.patch('sys.stdout', out):
+            print_obj_metadata(metadata)
+        exp_out = '''Path: /AUTH_admin/c/dummy
+  Account: AUTH_admin
+  Container: c
+  Object: dummy
+  Object hash: 128fdf98bddd1b1e8695f4340e67a67a
+Content-Type: application/octet-stream
+Timestamp: 1970-01-01T00:01:46.300000 (%s)
+System Metadata:
+  No metadata found
+User Metadata:
+  No metadata found
+Other Metadata:
+  No metadata found''' % (
+            utils.Timestamp(106.3).internal)
+
+        self.assertEqual(out.getvalue().strip(), exp_out)
+
+        metadata = get_metadata({'X-Object-Meta-Mtime': '107.3'})
         metadata['name'] = '/a-s'
         self.assertRaisesMessage(ValueError, 'Path is invalid',
                                  print_obj_metadata, metadata)
 
-        metadata = reset_metadata()
+        metadata = get_metadata({'X-Object-Meta-Mtime': '107.3'})
         del metadata['name']
         out = StringIO()
         with mock.patch('sys.stdout', out):
@@ -482,12 +575,17 @@ User Metadata: {'X-Object-Meta-Mtime': '107.3'}''' % (
         exp_out = '''Path: Not found in metadata
 Content-Type: application/octet-stream
 Timestamp: 1970-01-01T00:01:46.300000 (%s)
-User Metadata: {'X-Object-Meta-Mtime': '107.3'}''' % (
+System Metadata:
+  No metadata found
+User Metadata:
+  X-Object-Meta-Mtime: 107.3
+Other Metadata:
+  No metadata found''' % (
             utils.Timestamp(106.3).internal)
 
-        self.assertEquals(out.getvalue().strip(), exp_out)
+        self.assertEqual(out.getvalue().strip(), exp_out)
 
-        metadata = reset_metadata()
+        metadata = get_metadata({'X-Object-Meta-Mtime': '107.3'})
         del metadata['Content-Type']
         out = StringIO()
         with mock.patch('sys.stdout', out):
@@ -499,12 +597,17 @@ User Metadata: {'X-Object-Meta-Mtime': '107.3'}''' % (
   Object hash: 128fdf98bddd1b1e8695f4340e67a67a
 Content-Type: Not found in metadata
 Timestamp: 1970-01-01T00:01:46.300000 (%s)
-User Metadata: {'X-Object-Meta-Mtime': '107.3'}''' % (
+System Metadata:
+  No metadata found
+User Metadata:
+  X-Object-Meta-Mtime: 107.3
+Other Metadata:
+  No metadata found''' % (
             utils.Timestamp(106.3).internal)
 
-        self.assertEquals(out.getvalue().strip(), exp_out)
+        self.assertEqual(out.getvalue().strip(), exp_out)
 
-        metadata = reset_metadata()
+        metadata = get_metadata({'X-Object-Meta-Mtime': '107.3'})
         del metadata['X-Timestamp']
         out = StringIO()
         with mock.patch('sys.stdout', out):
@@ -516,6 +619,29 @@ User Metadata: {'X-Object-Meta-Mtime': '107.3'}''' % (
   Object hash: 128fdf98bddd1b1e8695f4340e67a67a
 Content-Type: application/octet-stream
 Timestamp: Not found in metadata
-User Metadata: {'X-Object-Meta-Mtime': '107.3'}'''
+System Metadata:
+  No metadata found
+User Metadata:
+  X-Object-Meta-Mtime: 107.3
+Other Metadata:
+  No metadata found'''
 
-        self.assertEquals(out.getvalue().strip(), exp_out)
+        self.assertEqual(out.getvalue().strip(), exp_out)
+
+
+class TestPrintObjWeirdPath(TestPrintObjFullMeta):
+    def setUp(self):
+        super(TestPrintObjWeirdPath, self).setUp()
+        # device name is objects-0 instead of sda, this is weird.
+        self.datafile = os.path.join(self.testdir,
+                                     'objects-0', 'objects-1',
+                                     '1', 'ea8',
+                                     'db4449e025aca992307c7c804a67eea8',
+                                     '1402017884.18202.data')
+        utils.mkdirs(os.path.dirname(self.datafile))
+        with open(self.datafile, 'wb') as fp:
+            md = {'name': '/AUTH_admin/c/obj',
+                  'Content-Type': 'application/octet-stream',
+                  'ETag': 'd41d8cd98f00b204e9800998ecf8427e',
+                  'Content-Length': 0}
+            write_metadata(fp, md)

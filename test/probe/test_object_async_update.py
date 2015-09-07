@@ -41,18 +41,20 @@ class TestObjectAsyncUpdate(ReplProbeTest):
         # Kill container servers excepting two of the primaries
         cpart, cnodes = self.container_ring.get_nodes(self.account, container)
         cnode = cnodes[0]
-        kill_nonprimary_server(cnodes, self.port2server, self.pids)
-        kill_server(cnode['port'], self.port2server, self.pids)
+        kill_nonprimary_server(cnodes, self.ipport2server, self.pids)
+        kill_server((cnode['ip'], cnode['port']),
+                    self.ipport2server, self.pids)
 
         # Create container/obj
         obj = 'object-%s' % uuid4()
         client.put_object(self.url, self.token, container, obj, '')
 
         # Restart other primary server
-        start_server(cnode['port'], self.port2server, self.pids)
+        start_server((cnode['ip'], cnode['port']),
+                     self.ipport2server, self.pids)
 
         # Assert it does not know about container/obj
-        self.assert_(not direct_client.direct_get_container(
+        self.assertFalse(direct_client.direct_get_container(
             cnode, cpart, self.account, container)[1])
 
         # Run the object-updaters
@@ -61,7 +63,7 @@ class TestObjectAsyncUpdate(ReplProbeTest):
         # Assert the other primary server now knows about container/obj
         objs = [o['name'] for o in direct_client.direct_get_container(
             cnode, cpart, self.account, container)[1]]
-        self.assert_(obj in objs)
+        self.assertTrue(obj in objs)
 
 
 class TestUpdateOverrides(ReplProbeTest):

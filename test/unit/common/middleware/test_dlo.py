@@ -1,4 +1,4 @@
-#-*- coding:utf-8 -*-
+# coding: utf-8
 # Copyright (c) 2013 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +26,7 @@ import unittest
 
 from swift.common import exceptions, swob
 from swift.common.middleware import dlo
+from swift.common.utils import closing_if_possible
 from test.unit.common.middleware.helpers import FakeSwift
 
 
@@ -54,8 +55,10 @@ class DloTestCase(unittest.TestCase):
         body = ''
         caught_exc = None
         try:
-            for chunk in body_iter:
-                body += chunk
+            # appease the close-checker
+            with closing_if_possible(body_iter):
+                for chunk in body_iter:
+                    body += chunk
         except Exception as exc:
             if expect_exception:
                 caught_exc = exc
@@ -279,6 +282,9 @@ class TestDloHeadManifest(DloTestCase):
 
 
 class TestDloGetManifest(DloTestCase):
+    def tearDown(self):
+        self.assertEqual(self.app.unclosed_requests, {})
+
     def test_get_manifest(self):
         expected_etag = '"%s"' % md5hex(
             md5hex("aaaaa") + md5hex("bbbbb") + md5hex("ccccc") +
@@ -787,7 +793,7 @@ class TestDloGetManifest(DloTestCase):
     def test_get_with_auth_overridden(self):
         auth_got_called = [0]
 
-        def my_auth():
+        def my_auth(req):
             auth_got_called[0] += 1
             return None
 

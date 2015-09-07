@@ -185,7 +185,11 @@ class ContainerController(BaseStorageServer):
             return HTTPBadRequest(req=req)
 
         if account_partition:
-            updates = zip(account_hosts, account_devices)
+            # zip is lazy on py3, but we need a list, so force evaluation.
+            # On py2 it's an extra list copy, but the list is so small
+            # (one element per replica in account ring, usually 3) that it
+            # doesn't matter.
+            updates = list(zip(account_hosts, account_devices))
         else:
             updates = []
 
@@ -367,7 +371,7 @@ class ContainerController(BaseStorageServer):
             metadata = {}
             metadata.update(
                 (key, (value, req_timestamp.internal))
-                for key, value in req.headers.iteritems()
+                for key, value in req.headers.items()
                 if key.lower() in self.save_headers or
                 is_sys_or_user_meta('container', key))
             if 'X-Container-Sync-To' in metadata:
@@ -406,7 +410,7 @@ class ContainerController(BaseStorageServer):
             return HTTPNotFound(request=req, headers=headers)
         headers.update(
             (key, value)
-            for key, (value, timestamp) in broker.metadata.iteritems()
+            for key, (value, timestamp) in broker.metadata.items()
             if value != '' and (key.lower() in self.save_headers or
                                 is_sys_or_user_meta('container', key)))
         headers['Content-Type'] = out_content_type
@@ -473,7 +477,7 @@ class ContainerController(BaseStorageServer):
 
     def create_listing(self, req, out_content_type, info, resp_headers,
                        metadata, container_list, container):
-        for key, (value, timestamp) in metadata.iteritems():
+        for key, (value, timestamp) in metadata.items():
             if value and (key.lower() in self.save_headers or
                           is_sys_or_user_meta('container', key)):
                 resp_headers[key] = value
@@ -547,7 +551,7 @@ class ContainerController(BaseStorageServer):
         metadata = {}
         metadata.update(
             (key, (value, req_timestamp.internal))
-            for key, value in req.headers.iteritems()
+            for key, value in req.headers.items()
             if key.lower() in self.save_headers or
             is_sys_or_user_meta('container', key))
         if metadata:

@@ -8,7 +8,7 @@ Instructions for setting up a development VM
 
 This section documents setting up a virtual machine for doing Swift
 development.  The virtual machine will emulate running a four node Swift
-cluster.
+cluster. To begin:
 
 * Get an Ubuntu 14.04 LTS server image or try something
   Fedora/CentOS.
@@ -55,10 +55,9 @@ Installing dependencies
                          python-netifaces python-pip python-dns \
                          python-mock
 
-  This installs necessary system dependencies; and *most* of the python
-  dependencies.  Later in the process setuptools/distribute or pip will
-  install and/or upgrade some other stuff - it's getting harder to avoid.
-  You can also install anything else you want, like screen, ssh, vim, etc.
+  Note: This installs necessary system dependencies and *most* of the python
+  dependencies. Later in the process setuptools/distribute or pip will install
+  and/or upgrade packages. 
 
 Next, choose either :ref:`partition-section` or :ref:`loopback-section`.
 
@@ -95,6 +94,16 @@ another device when creating the VM, and follow these instructions:
         sudo chown -R ${USER}:${USER} /var/run/swift
         # **Make sure to include the trailing slash after /srv/$x/**
         for x in {1..4}; do sudo chown -R ${USER}:${USER} /srv/$x/; done
+
+     Note: We create the mount points and mount the storage disk under
+     /mnt/sdb1. This disk will contain one directory per simulated swift node,
+     each owned by the current swift user.
+
+     We then create symlinks to these directories under /srv.
+     If the disk sdb is unmounted, files will not be written under
+     /srv/\*, because the symbolic link destination /mnt/sdb1/* will not
+     exist. This prevents disk sync operations from writing to the root
+     partition in the event a drive is unmounted.
 
   #. Next, skip to :ref:`common-dev-section`.
 
@@ -136,6 +145,15 @@ these instructions:
         # **Make sure to include the trailing slash after /srv/$x/**
         for x in {1..4}; do sudo chown -R ${USER}:${USER} /srv/$x/; done
 
+     Note: We create the mount points and mount the loopback file under
+     /mnt/sdb1. This file will contain one directory per simulated swift node,
+     each owned by the current swift user.
+
+     We then create symlinks to these directories under /srv.
+     If the loopback file is unmounted, files will not be written under
+     /srv/\*, because the symbolic link destination /mnt/sdb1/* will not
+     exist. This prevents disk sync operations from writing to the root
+     partition in the event a drive is unmounted.
 
 .. _common-dev-section:
 
@@ -176,7 +194,7 @@ Getting the code
 
   #. Build a development installation of swift::
 
-        cd $HOME/swift; sudo python setup.py develop; cd -
+        cd $HOME/swift; sudo pip install -r requirements.txt; sudo python setup.py develop; cd -
 
      Fedora 19 or later users might have to perform the following if development
      installation of swift fails::
@@ -185,7 +203,7 @@ Getting the code
 
   #. Install swift's test dependencies::
 
-        sudo pip install -r swift/test-requirements.txt
+        cd $HOME/swift; sudo pip install -r test-requirements.txt
 
 ----------------
 Setting up rsync
@@ -353,6 +371,10 @@ commands are as follows:
 
      .. literalinclude:: /../saio/swift/container-reconciler.conf
 
+  #. ``/etc/swift/container-sync-realms.conf``
+
+     .. literalinclude:: /../saio/swift/container-sync-realms.conf
+
   #. ``/etc/swift/account-server/1.conf``
 
      .. literalinclude:: /../saio/swift/account-server/1.conf
@@ -409,6 +431,7 @@ Setting up scripts for running Swift
 
   #. Copy the SAIO scripts for resetting the environment::
 
+        mkdir -p $HOME/bin
         cd $HOME/swift/doc; cp saio/bin/* $HOME/bin; cd -
         chmod +x $HOME/bin/*
 

@@ -95,7 +95,7 @@ class DynamicResponseFactory(object):
     def _get_response(self, type_):
         self.stats[type_] += 1
         class_ = self.response_type[type_]
-        return class_(self.statuses.next())
+        return class_(next(self.statuses))
 
     def get_response(self, environ):
         (version, account, container, obj) = split_path(
@@ -128,7 +128,7 @@ class FakeApp(object):
         reason = RESPONSE_REASONS[response.status_int][0]
         start_response('%d %s' % (response.status_int, reason),
                        [(k, v) for k, v in response.headers.items()])
-        # It's a bit strnage, but the get_info cache stuff relies on the
+        # It's a bit strange, but the get_info cache stuff relies on the
         # app setting some keys in the environment as it makes requests
         # (in particular GETorHEAD_base) - so our fake does the same
         _set_info_cache(self, environ, response.account,
@@ -199,34 +199,34 @@ class TestFuncs(unittest.TestCase):
         env = {}
         info_a = get_info(app, env, 'a')
         # Check that you got proper info
-        self.assertEquals(info_a['status'], 200)
-        self.assertEquals(info_a['bytes'], 6666)
-        self.assertEquals(info_a['total_object_count'], 1000)
+        self.assertEqual(info_a['status'], 200)
+        self.assertEqual(info_a['bytes'], 6666)
+        self.assertEqual(info_a['total_object_count'], 1000)
         # Make sure the env cache is set
-        self.assertEquals(env.get('swift.account/a'), info_a)
+        self.assertEqual(env.get('swift.account/a'), info_a)
         # Make sure the app was called
         self.assertEqual(app.responses.stats['account'], 1)
 
         # Do an env cached call to account
         info_a = get_info(app, env, 'a')
         # Check that you got proper info
-        self.assertEquals(info_a['status'], 200)
-        self.assertEquals(info_a['bytes'], 6666)
-        self.assertEquals(info_a['total_object_count'], 1000)
+        self.assertEqual(info_a['status'], 200)
+        self.assertEqual(info_a['bytes'], 6666)
+        self.assertEqual(info_a['total_object_count'], 1000)
         # Make sure the env cache is set
-        self.assertEquals(env.get('swift.account/a'), info_a)
+        self.assertEqual(env.get('swift.account/a'), info_a)
         # Make sure the app was NOT called AGAIN
         self.assertEqual(app.responses.stats['account'], 1)
 
         # This time do env cached call to account and non cached to container
         info_c = get_info(app, env, 'a', 'c')
         # Check that you got proper info
-        self.assertEquals(info_c['status'], 200)
-        self.assertEquals(info_c['bytes'], 6666)
-        self.assertEquals(info_c['object_count'], 1000)
+        self.assertEqual(info_c['status'], 200)
+        self.assertEqual(info_c['bytes'], 6666)
+        self.assertEqual(info_c['object_count'], 1000)
         # Make sure the env cache is set
-        self.assertEquals(env.get('swift.account/a'), info_a)
-        self.assertEquals(env.get('swift.container/a/c'), info_c)
+        self.assertEqual(env.get('swift.account/a'), info_a)
+        self.assertEqual(env.get('swift.container/a/c'), info_c)
         # Make sure the app was called for container
         self.assertEqual(app.responses.stats['container'], 1)
 
@@ -236,12 +236,12 @@ class TestFuncs(unittest.TestCase):
         env = {}  # abandon previous call to env
         info_c = get_info(app, env, 'a', 'c')
         # Check that you got proper info
-        self.assertEquals(info_c['status'], 200)
-        self.assertEquals(info_c['bytes'], 6666)
-        self.assertEquals(info_c['object_count'], 1000)
+        self.assertEqual(info_c['status'], 200)
+        self.assertEqual(info_c['bytes'], 6666)
+        self.assertEqual(info_c['object_count'], 1000)
         # Make sure the env cache is set
-        self.assertEquals(env.get('swift.account/a'), info_a)
-        self.assertEquals(env.get('swift.container/a/c'), info_c)
+        self.assertEqual(env.get('swift.account/a'), info_a)
+        self.assertEqual(env.get('swift.container/a/c'), info_c)
         # check app calls both account and container
         self.assertEqual(app.responses.stats['account'], 1)
         self.assertEqual(app.responses.stats['container'], 1)
@@ -251,11 +251,11 @@ class TestFuncs(unittest.TestCase):
         del(env['swift.account/a'])
         info_c = get_info(app, env, 'a', 'c')
         # Check that you got proper info
-        self.assertEquals(info_a['status'], 200)
-        self.assertEquals(info_c['bytes'], 6666)
-        self.assertEquals(info_c['object_count'], 1000)
+        self.assertEqual(info_a['status'], 200)
+        self.assertEqual(info_c['bytes'], 6666)
+        self.assertEqual(info_c['object_count'], 1000)
         # Make sure the env cache is set and account still not cached
-        self.assertEquals(env.get('swift.container/a/c'), info_c)
+        self.assertEqual(env.get('swift.container/a/c'), info_c)
         # no additional calls were made
         self.assertEqual(app.responses.stats['account'], 1)
         self.assertEqual(app.responses.stats['container'], 1)
@@ -265,22 +265,22 @@ class TestFuncs(unittest.TestCase):
         env = {}
         info_a = get_info(app, env, 'a', ret_not_found=True)
         # Check that you got proper info
-        self.assertEquals(info_a['status'], 404)
-        self.assertEquals(info_a['bytes'], None)
-        self.assertEquals(info_a['total_object_count'], None)
+        self.assertEqual(info_a['status'], 404)
+        self.assertEqual(info_a['bytes'], None)
+        self.assertEqual(info_a['total_object_count'], None)
         # Make sure the env cache is set
-        self.assertEquals(env.get('swift.account/a'), info_a)
+        self.assertEqual(env.get('swift.account/a'), info_a)
         # and account was called
         self.assertEqual(app.responses.stats['account'], 1)
 
         # Do a cached call to account not found with ret_not_found
         info_a = get_info(app, env, 'a', ret_not_found=True)
         # Check that you got proper info
-        self.assertEquals(info_a['status'], 404)
-        self.assertEquals(info_a['bytes'], None)
-        self.assertEquals(info_a['total_object_count'], None)
+        self.assertEqual(info_a['status'], 404)
+        self.assertEqual(info_a['bytes'], None)
+        self.assertEqual(info_a['total_object_count'], None)
         # Make sure the env cache is set
-        self.assertEquals(env.get('swift.account/a'), info_a)
+        self.assertEqual(env.get('swift.account/a'), info_a)
         # add account was NOT called AGAIN
         self.assertEqual(app.responses.stats['account'], 1)
 
@@ -289,16 +289,16 @@ class TestFuncs(unittest.TestCase):
         env = {}
         info_a = get_info(app, env, 'a')
         # Check that you got proper info
-        self.assertEquals(info_a, None)
-        self.assertEquals(env['swift.account/a']['status'], 404)
+        self.assertEqual(info_a, None)
+        self.assertEqual(env['swift.account/a']['status'], 404)
         # and account was called
         self.assertEqual(app.responses.stats['account'], 1)
 
         # Do a cached call to account not found without ret_not_found
         info_a = get_info(None, env, 'a')
         # Check that you got proper info
-        self.assertEquals(info_a, None)
-        self.assertEquals(env['swift.account/a']['status'], 404)
+        self.assertEqual(info_a, None)
+        self.assertEqual(env['swift.account/a']['status'], 404)
         # add account was NOT called AGAIN
         self.assertEqual(app.responses.stats['account'], 1)
 
@@ -319,9 +319,9 @@ class TestFuncs(unittest.TestCase):
         req = Request.blank("/v1/AUTH_account/cont",
                             environ={'swift.cache': FakeCache({})})
         resp = get_container_info(req.environ, FakeApp())
-        self.assertEquals(resp['storage_policy'], '0')
-        self.assertEquals(resp['bytes'], 6666)
-        self.assertEquals(resp['object_count'], 1000)
+        self.assertEqual(resp['storage_policy'], '0')
+        self.assertEqual(resp['bytes'], 6666)
+        self.assertEqual(resp['object_count'], 1000)
 
     def test_get_container_info_no_account(self):
         responses = DynamicResponseFactory(404, 200)
@@ -336,8 +336,8 @@ class TestFuncs(unittest.TestCase):
         req = Request.blank("/v1/.system_account/cont")
         info = get_container_info(req.environ, app)
         self.assertEqual(info['status'], 200)
-        self.assertEquals(info['bytes'], 6666)
-        self.assertEquals(info['object_count'], 1000)
+        self.assertEqual(info['bytes'], 6666)
+        self.assertEqual(info['object_count'], 1000)
 
     def test_get_container_info_cache(self):
         cache_stub = {
@@ -347,11 +347,11 @@ class TestFuncs(unittest.TestCase):
         req = Request.blank("/v1/account/cont",
                             environ={'swift.cache': FakeCache(cache_stub)})
         resp = get_container_info(req.environ, FakeApp())
-        self.assertEquals(resp['storage_policy'], '0')
-        self.assertEquals(resp['bytes'], 3333)
-        self.assertEquals(resp['object_count'], 10)
-        self.assertEquals(resp['status'], 404)
-        self.assertEquals(resp['versions'], "\xe1\xbd\x8a\x39")
+        self.assertEqual(resp['storage_policy'], '0')
+        self.assertEqual(resp['bytes'], 3333)
+        self.assertEqual(resp['object_count'], 10)
+        self.assertEqual(resp['status'], 404)
+        self.assertEqual(resp['versions'], "\xe1\xbd\x8a\x39")
 
     def test_get_container_info_env(self):
         cache_key = get_container_memcache_key("account", "cont")
@@ -360,7 +360,7 @@ class TestFuncs(unittest.TestCase):
                             environ={env_key: {'bytes': 3867},
                                      'swift.cache': FakeCache({})})
         resp = get_container_info(req.environ, 'xxx')
-        self.assertEquals(resp['bytes'], 3867)
+        self.assertEqual(resp['bytes'], 3867)
 
     def test_get_account_info_swift_source(self):
         app = FakeApp()
@@ -373,8 +373,8 @@ class TestFuncs(unittest.TestCase):
         req = Request.blank("/v1/AUTH_account",
                             environ={'swift.cache': FakeCache({})})
         resp = get_account_info(req.environ, app)
-        self.assertEquals(resp['bytes'], 6666)
-        self.assertEquals(resp['total_object_count'], 1000)
+        self.assertEqual(resp['bytes'], 6666)
+        self.assertEqual(resp['total_object_count'], 1000)
 
     def test_get_account_info_cache(self):
         # The original test that we prefer to preserve
@@ -384,9 +384,9 @@ class TestFuncs(unittest.TestCase):
         req = Request.blank("/v1/account/cont",
                             environ={'swift.cache': FakeCache(cached)})
         resp = get_account_info(req.environ, FakeApp())
-        self.assertEquals(resp['bytes'], 3333)
-        self.assertEquals(resp['total_object_count'], 10)
-        self.assertEquals(resp['status'], 404)
+        self.assertEqual(resp['bytes'], 3333)
+        self.assertEqual(resp['total_object_count'], 10)
+        self.assertEqual(resp['status'], 404)
 
         # Here is a more realistic test
         cached = {'status': 404,
@@ -397,11 +397,11 @@ class TestFuncs(unittest.TestCase):
         req = Request.blank("/v1/account/cont",
                             environ={'swift.cache': FakeCache(cached)})
         resp = get_account_info(req.environ, FakeApp())
-        self.assertEquals(resp['status'], 404)
-        self.assertEquals(resp['bytes'], '3333')
-        self.assertEquals(resp['container_count'], 234)
-        self.assertEquals(resp['meta'], {})
-        self.assertEquals(resp['total_object_count'], '10')
+        self.assertEqual(resp['status'], 404)
+        self.assertEqual(resp['bytes'], '3333')
+        self.assertEqual(resp['container_count'], 234)
+        self.assertEqual(resp['meta'], {})
+        self.assertEqual(resp['total_object_count'], '10')
 
     def test_get_account_info_env(self):
         cache_key = get_account_memcache_key("account")
@@ -410,7 +410,7 @@ class TestFuncs(unittest.TestCase):
                             environ={env_key: {'bytes': 3867},
                                      'swift.cache': FakeCache({})})
         resp = get_account_info(req.environ, 'xxx')
-        self.assertEquals(resp['bytes'], 3867)
+        self.assertEqual(resp['bytes'], 3867)
 
     def test_get_object_info_env(self):
         cached = {'status': 200,
@@ -422,8 +422,8 @@ class TestFuncs(unittest.TestCase):
                             environ={env_key: cached,
                                      'swift.cache': FakeCache({})})
         resp = get_object_info(req.environ, 'xxx')
-        self.assertEquals(resp['length'], 3333)
-        self.assertEquals(resp['type'], 'application/json')
+        self.assertEqual(resp['length'], 3333)
+        self.assertEqual(resp['type'], 'application/json')
 
     def test_get_object_info_no_env(self):
         app = FakeApp()
@@ -433,31 +433,62 @@ class TestFuncs(unittest.TestCase):
         self.assertEqual(app.responses.stats['account'], 0)
         self.assertEqual(app.responses.stats['container'], 0)
         self.assertEqual(app.responses.stats['obj'], 1)
-        self.assertEquals(resp['length'], 5555)
-        self.assertEquals(resp['type'], 'text/plain')
+        self.assertEqual(resp['length'], 5555)
+        self.assertEqual(resp['type'], 'text/plain')
+
+    def test_options(self):
+        base = Controller(self.app)
+        base.account_name = 'a'
+        base.container_name = 'c'
+        origin = 'http://m.com'
+        self.app.cors_allow_origin = [origin]
+        req = Request.blank('/v1/a/c/o',
+                            environ={'swift.cache': FakeCache()},
+                            headers={'Origin': origin,
+                                     'Access-Control-Request-Method': 'GET'})
+
+        with patch('swift.proxy.controllers.base.'
+                   'http_connect', fake_http_connect(200)):
+            resp = base.OPTIONS(req)
+        self.assertEqual(resp.status_int, 200)
+
+    def test_options_unauthorized(self):
+        base = Controller(self.app)
+        base.account_name = 'a'
+        base.container_name = 'c'
+        self.app.cors_allow_origin = ['http://NOT_IT']
+        req = Request.blank('/v1/a/c/o',
+                            environ={'swift.cache': FakeCache()},
+                            headers={'Origin': 'http://m.com',
+                                     'Access-Control-Request-Method': 'GET'})
+
+        with patch('swift.proxy.controllers.base.'
+                   'http_connect', fake_http_connect(200)):
+            resp = base.OPTIONS(req)
+        self.assertEqual(resp.status_int, 401)
 
     def test_headers_to_container_info_missing(self):
         resp = headers_to_container_info({}, 404)
-        self.assertEquals(resp['status'], 404)
-        self.assertEquals(resp['read_acl'], None)
-        self.assertEquals(resp['write_acl'], None)
+        self.assertEqual(resp['status'], 404)
+        self.assertEqual(resp['read_acl'], None)
+        self.assertEqual(resp['write_acl'], None)
 
     def test_headers_to_container_info_meta(self):
         headers = {'X-Container-Meta-Whatevs': 14,
                    'x-container-meta-somethingelse': 0}
         resp = headers_to_container_info(headers.items(), 200)
-        self.assertEquals(len(resp['meta']), 2)
-        self.assertEquals(resp['meta']['whatevs'], 14)
-        self.assertEquals(resp['meta']['somethingelse'], 0)
+        self.assertEqual(len(resp['meta']), 2)
+        self.assertEqual(resp['meta']['whatevs'], 14)
+        self.assertEqual(resp['meta']['somethingelse'], 0)
 
     def test_headers_to_container_info_sys_meta(self):
         prefix = get_sys_meta_prefix('container')
         headers = {'%sWhatevs' % prefix: 14,
                    '%ssomethingelse' % prefix: 0}
         resp = headers_to_container_info(headers.items(), 200)
-        self.assertEquals(len(resp['sysmeta']), 2)
-        self.assertEquals(resp['sysmeta']['whatevs'], 14)
-        self.assertEquals(resp['sysmeta']['somethingelse'], 0)
+        self.assertEqual(len(resp['sysmeta']), 2)
+        self.assertEqual(resp['sysmeta']['whatevs'], 14)
+        self.assertEqual(resp['sysmeta']['somethingelse'], 0)
 
     def test_headers_to_container_info_values(self):
         headers = {
@@ -467,37 +498,37 @@ class TestFuncs(unittest.TestCase):
             'x-container-meta-access-control-allow-origin': 'here',
         }
         resp = headers_to_container_info(headers.items(), 200)
-        self.assertEquals(resp['read_acl'], 'readvalue')
-        self.assertEquals(resp['write_acl'], 'writevalue')
-        self.assertEquals(resp['cors']['allow_origin'], 'here')
+        self.assertEqual(resp['read_acl'], 'readvalue')
+        self.assertEqual(resp['write_acl'], 'writevalue')
+        self.assertEqual(resp['cors']['allow_origin'], 'here')
 
         headers['x-unused-header'] = 'blahblahblah'
-        self.assertEquals(
+        self.assertEqual(
             resp,
             headers_to_container_info(headers.items(), 200))
 
     def test_headers_to_account_info_missing(self):
         resp = headers_to_account_info({}, 404)
-        self.assertEquals(resp['status'], 404)
-        self.assertEquals(resp['bytes'], None)
-        self.assertEquals(resp['container_count'], None)
+        self.assertEqual(resp['status'], 404)
+        self.assertEqual(resp['bytes'], None)
+        self.assertEqual(resp['container_count'], None)
 
     def test_headers_to_account_info_meta(self):
         headers = {'X-Account-Meta-Whatevs': 14,
                    'x-account-meta-somethingelse': 0}
         resp = headers_to_account_info(headers.items(), 200)
-        self.assertEquals(len(resp['meta']), 2)
-        self.assertEquals(resp['meta']['whatevs'], 14)
-        self.assertEquals(resp['meta']['somethingelse'], 0)
+        self.assertEqual(len(resp['meta']), 2)
+        self.assertEqual(resp['meta']['whatevs'], 14)
+        self.assertEqual(resp['meta']['somethingelse'], 0)
 
     def test_headers_to_account_info_sys_meta(self):
         prefix = get_sys_meta_prefix('account')
         headers = {'%sWhatevs' % prefix: 14,
                    '%ssomethingelse' % prefix: 0}
         resp = headers_to_account_info(headers.items(), 200)
-        self.assertEquals(len(resp['sysmeta']), 2)
-        self.assertEquals(resp['sysmeta']['whatevs'], 14)
-        self.assertEquals(resp['sysmeta']['somethingelse'], 0)
+        self.assertEqual(len(resp['sysmeta']), 2)
+        self.assertEqual(resp['sysmeta']['whatevs'], 14)
+        self.assertEqual(resp['sysmeta']['somethingelse'], 0)
 
     def test_headers_to_account_info_values(self):
         headers = {
@@ -505,36 +536,36 @@ class TestFuncs(unittest.TestCase):
             'x-account-container-count': '20',
         }
         resp = headers_to_account_info(headers.items(), 200)
-        self.assertEquals(resp['total_object_count'], '10')
-        self.assertEquals(resp['container_count'], '20')
+        self.assertEqual(resp['total_object_count'], '10')
+        self.assertEqual(resp['container_count'], '20')
 
         headers['x-unused-header'] = 'blahblahblah'
-        self.assertEquals(
+        self.assertEqual(
             resp,
             headers_to_account_info(headers.items(), 200))
 
     def test_headers_to_object_info_missing(self):
         resp = headers_to_object_info({}, 404)
-        self.assertEquals(resp['status'], 404)
-        self.assertEquals(resp['length'], None)
-        self.assertEquals(resp['etag'], None)
+        self.assertEqual(resp['status'], 404)
+        self.assertEqual(resp['length'], None)
+        self.assertEqual(resp['etag'], None)
 
     def test_headers_to_object_info_meta(self):
         headers = {'X-Object-Meta-Whatevs': 14,
                    'x-object-meta-somethingelse': 0}
         resp = headers_to_object_info(headers.items(), 200)
-        self.assertEquals(len(resp['meta']), 2)
-        self.assertEquals(resp['meta']['whatevs'], 14)
-        self.assertEquals(resp['meta']['somethingelse'], 0)
+        self.assertEqual(len(resp['meta']), 2)
+        self.assertEqual(resp['meta']['whatevs'], 14)
+        self.assertEqual(resp['meta']['somethingelse'], 0)
 
     def test_headers_to_object_info_sys_meta(self):
         prefix = get_sys_meta_prefix('object')
         headers = {'%sWhatevs' % prefix: 14,
                    '%ssomethingelse' % prefix: 0}
         resp = headers_to_object_info(headers.items(), 200)
-        self.assertEquals(len(resp['sysmeta']), 2)
-        self.assertEquals(resp['sysmeta']['whatevs'], 14)
-        self.assertEquals(resp['sysmeta']['somethingelse'], 0)
+        self.assertEqual(len(resp['sysmeta']), 2)
+        self.assertEqual(resp['sysmeta']['whatevs'], 14)
+        self.assertEqual(resp['sysmeta']['somethingelse'], 0)
 
     def test_headers_to_object_info_values(self):
         headers = {
@@ -542,11 +573,11 @@ class TestFuncs(unittest.TestCase):
             'content-type': 'application/json',
         }
         resp = headers_to_object_info(headers.items(), 200)
-        self.assertEquals(resp['length'], '1024')
-        self.assertEquals(resp['type'], 'application/json')
+        self.assertEqual(resp['length'], '1024')
+        self.assertEqual(resp['type'], 'application/json')
 
         headers['x-unused-header'] = 'blahblahblah'
-        self.assertEquals(
+        self.assertEqual(
             resp,
             headers_to_object_info(headers.items(), 200))
 
@@ -579,7 +610,7 @@ class TestFuncs(unittest.TestCase):
         overrides = {302: 204, 100: 204}
         resp = base.best_response(req, statuses, reasons, bodies, server_type,
                                   headers=headers, overrides=overrides)
-        self.assertEqual(resp.status, '503 Internal Server Error')
+        self.assertEqual(resp.status, '503 Service Unavailable')
 
         # next make a 404 quorum and make sure the last delete (real) 404
         # status is the one returned.
@@ -593,24 +624,24 @@ class TestFuncs(unittest.TestCase):
         req = Request.blank('/')
         handler = GetOrHeadHandler(None, req, None, None, None, None, {})
         handler.fast_forward(50)
-        self.assertEquals(handler.backend_headers['Range'], 'bytes=50-')
+        self.assertEqual(handler.backend_headers['Range'], 'bytes=50-')
 
         handler = GetOrHeadHandler(None, req, None, None, None, None,
                                    {'Range': 'bytes=23-50'})
         handler.fast_forward(20)
-        self.assertEquals(handler.backend_headers['Range'], 'bytes=43-50')
+        self.assertEqual(handler.backend_headers['Range'], 'bytes=43-50')
         self.assertRaises(HTTPException,
                           handler.fast_forward, 80)
 
         handler = GetOrHeadHandler(None, req, None, None, None, None,
                                    {'Range': 'bytes=23-'})
         handler.fast_forward(20)
-        self.assertEquals(handler.backend_headers['Range'], 'bytes=43-')
+        self.assertEqual(handler.backend_headers['Range'], 'bytes=43-')
 
         handler = GetOrHeadHandler(None, req, None, None, None, None,
                                    {'Range': 'bytes=-100'})
         handler.fast_forward(20)
-        self.assertEquals(handler.backend_headers['Range'], 'bytes=-80')
+        self.assertEqual(handler.backend_headers['Range'], 'bytes=-80')
 
     def test_transfer_headers_with_sysmeta(self):
         base = Controller(self.app)
@@ -633,7 +664,7 @@ class TestFuncs(unittest.TestCase):
         expected_headers = {'x-base-meta-owner': '',
                             'x-base-meta-size': '151M',
                             'connection': 'close'}
-        for k, v in expected_headers.iteritems():
+        for k, v in expected_headers.items():
             self.assertTrue(k in dst_headers)
             self.assertEqual(v, dst_headers[k])
         self.assertFalse('new-owner' in dst_headers)
@@ -647,10 +678,10 @@ class TestFuncs(unittest.TestCase):
         hdrs.update(bad_hdrs)
         req = Request.blank('/v1/a/c/o', headers=hdrs)
         dst_headers = base.generate_request_headers(req, transfer=True)
-        for k, v in good_hdrs.iteritems():
+        for k, v in good_hdrs.items():
             self.assertTrue(k.lower() in dst_headers)
             self.assertEqual(v, dst_headers[k.lower()])
-        for k, v in bad_hdrs.iteritems():
+        for k, v in bad_hdrs.items():
             self.assertFalse(k.lower() in dst_headers)
 
     def test_client_chunk_size(self):
@@ -658,12 +689,20 @@ class TestFuncs(unittest.TestCase):
         class TestSource(object):
             def __init__(self, chunks):
                 self.chunks = list(chunks)
+                self.status = 200
 
             def read(self, _read_size):
                 if self.chunks:
                     return self.chunks.pop(0)
                 else:
                     return ''
+
+            def getheader(self, header):
+                if header.lower() == "content-length":
+                    return str(sum(len(c) for c in self.chunks))
+
+            def getheaders(self):
+                return [('content-length', self.getheader('content-length'))]
 
         source = TestSource((
             'abcd', '1234', 'abc', 'd1', '234abcd1234abcd1', '2'))
@@ -682,6 +721,7 @@ class TestFuncs(unittest.TestCase):
         class TestSource(object):
             def __init__(self, chunks):
                 self.chunks = list(chunks)
+                self.status = 200
 
             def read(self, _read_size):
                 if self.chunks:
@@ -692,6 +732,14 @@ class TestFuncs(unittest.TestCase):
                         return chunk
                 else:
                     return ''
+
+            def getheader(self, header):
+                if header.lower() == "content-length":
+                    return str(sum(len(c) for c in self.chunks
+                                   if c is not None))
+
+            def getheaders(self):
+                return [('content-length', self.getheader('content-length'))]
 
         node = {'ip': '1.2.3.4', 'port': 6000, 'device': 'sda'}
 
@@ -707,7 +755,6 @@ class TestFuncs(unittest.TestCase):
                           lambda: (source2, node)):
             client_chunks = list(app_iter)
         self.assertEqual(client_chunks, ['abcd1234', 'efgh5678'])
-        self.assertEqual(handler.backend_headers['Range'], 'bytes=8-')
 
     def test_bytes_to_skip(self):
         # if you start at the beginning, skip nothing
