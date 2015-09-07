@@ -1,3 +1,11 @@
+swift (2.4.0-1) unstable; urgency=medium
+
+  * New upstream release.
+  * swift-object-reconstructor init script is correctly installed now.
+  * Fixed service name of object-expirer.
+
+ -- Ondrej Novy <ondrej.novy@firma.seznam.cz>  Mon, 07 Sep 2015 09:05:10 +0200
+
 swift (2.3.0-1) unstable; urgency=medium
 
   * New upstream release.
