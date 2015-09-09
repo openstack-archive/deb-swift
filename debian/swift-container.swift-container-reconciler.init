@@ -6,55 +6,52 @@
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: Swift container reconciler
-# Description:       Container reconciler for swift.
+# Description:       Container reconciler for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="swift-container-reconciler"
-DAEMON="/usr/bin/${SERVICE_NAME}"
-DAEMON_ARGS="/etc/swift/container-reconciler.conf"
-PRINT_NAME="Swift container reconciler"
-SWIFT_USER=swift
-SWIFT_GRP=swift
-PID_FILE=/var/run/swift/${SERVICE_NAME}.pid
-PID_DIR=`dirname $PID_FILE`
-  
-if ! [ -x "${DAEMON}" ] ; then
-	exit 0 
-fi
+set -e
 
-if ! [ -r "${DAEMON_ARGS}" ] ; then
-	echo "No configuration file found in ${DAEMON_ARGS}: exiting"
-	exit 0
-fi
-              
-mkdir -p ${PID_DIR}
-chown ${SWIFT_USER} ${PID_DIR}
+SERVICE_NAME="container-reconciler"
+PRINT_NAME="container reconciler"
 
 . /lib/lsb/init-functions
 
+if ! [ -x /usr/bin/swift-init ] ; then
+	exit 0
+fi
+
 case "$1" in
 start)
-	log_daemon_msg "Starting ${PRINT_NAME}" "${SERVICE_NAME}"
-	start-stop-daemon --start --chuid ${SWIFT_USER}:${SWIFT_GRP} -b -m --pidfile $PID_FILE --exec ${DAEMON} -- ${DAEMON_ARGS}
-	log_end_msg $?                     
+	log_daemon_msg "Starting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
+	/usr/bin/swift-init ${SERVICE_NAME} start
+	log_end_msg $?
+	exit $?
 ;;
 stop)
-	log_daemon_msg "Stopping ${PRINT_NAME}" "${SERVICE_NAME}"
-	start-stop-daemon --stop --oknodo --pidfile ${PID_FILE}
-	log_end_msg $?                          
-;;                    
-restart|force-reload|reload)
-	$0 stop             
-	sleep 1
-	$0 start
-;;              
+	log_daemon_msg "Stopping Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
+	/usr/bin/swift-init ${SERVICE_NAME} stop
+	log_end_msg $?
+	exit $?
+;;
+restart)
+	log_daemon_msg "Restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
+	/usr/bin/swift-init ${SERVICE_NAME} restart
+	log_end_msg $?
+	exit $?
+;;
+reload|force-reload)
+	log_daemon_msg "Gracefully restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
+	/usr/bin/swift-init ${SERVICE_NAME} reload
+	log_end_msg $?
+	exit $?
+;;
 status)
-	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
+	exec /usr/bin/swift-init ${SERVICE_NAME} status
 ;;
 *)
-	echo "Usage: $0 {start|stop|restart|reload|force-reload}"
-	exit 1                                      
-;;            
+	echo "Usage: $0 {start|stop|restart|reload}"
+	exit 1
+;;
 esac
-    
+
 exit 0
