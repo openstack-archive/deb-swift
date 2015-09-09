@@ -58,6 +58,7 @@ override_dh_installinit:
 	dh_installinit --no-start -pswift-container --name=swift-container-auditor
 	dh_installinit --no-start -pswift-container --name=swift-container-updater
 	dh_installinit --no-start -pswift-container --name=swift-container-reconciler
+	dh_installinit --no-start -pswift-container --name=swift-container-sync
 	dh_installinit --no-start -pswift-account --name=swift-account-replicator
 	dh_installinit --no-start -pswift-account --name=swift-account-auditor
 	dh_installinit --no-start -pswift-account --name=swift-account-reaper
