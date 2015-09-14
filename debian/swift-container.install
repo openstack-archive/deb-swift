@@ -1,8 +1,8 @@
 usr/bin/swift-container-auditor
+usr/bin/swift-container-info
+usr/bin/swift-container-reconciler
 usr/bin/swift-container-replicator
 usr/bin/swift-container-server
 usr/bin/swift-container-sync
 usr/bin/swift-container-updater
-usr/bin/swift-container-info
-usr/bin/swift-container-reconciler
 usr/bin/swift-reconciler-enqueue
