@@ -5,6 +5,7 @@ swift (2.4.0-1) unstable; urgency=medium
   * Fixed service name of object-expirer.
   * Added container-sync init script.
   * All init scripts is using swift-init.
+  * Added myself as uploader.
 
  -- Ondrej Novy <ondrej.novy@firma.seznam.cz>  Mon, 09 Sep 2015 09:05:10 +0200
 
