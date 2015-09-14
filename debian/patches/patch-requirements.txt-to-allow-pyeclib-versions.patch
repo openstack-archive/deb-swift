@@ -1,0 +1,13 @@
+Description: Allow any PyEclib version
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2015-09-14
+
+--- swift-2.4.0.orig/requirements.txt
++++ swift-2.4.0/requirements.txt
+@@ -10,4 +10,4 @@ pastedeploy>=1.3.3
+ simplejson>=2.0.9
+ six>=1.9.0
+ xattr>=0.4
+-PyECLib==1.0.7                          # BSD
++PyECLib>=1.0.7                          # BSD
