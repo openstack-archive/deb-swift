@@ -692,6 +692,7 @@ def drop_buffer_cache(fd, offset, length):
 NORMAL_FORMAT = "%016.05f"
 INTERNAL_FORMAT = NORMAL_FORMAT + '_%016x'
 MAX_OFFSET = (16 ** 16) - 1
+PRECISION = 1e-5
 # Setting this to True will cause the internal format to always display
 # extended digits - even when the value is equivalent to the normalized form.
 # This isn't ideal during an upgrade when some servers might not understand
@@ -736,7 +737,20 @@ class Timestamp(object):
     compatible for normalized timestamps which do not include an offset.
     """
 
-    def __init__(self, timestamp, offset=0):
+    def __init__(self, timestamp, offset=0, delta=0):
+        """
+        Create a new Timestamp.
+
+        :param timestamp: time in seconds since the Epoch, may be any of:
+
+            * a float or integer
+            * normalized/internalized string
+            * another instance of this class (offset is preserved)
+
+        :param offset: the second internal offset vector, an int
+        :param delta: deca-microsecond difference from the base timestamp
+                      param, an int
+        """
         if isinstance(timestamp, basestring):
             parts = timestamp.split('_', 1)
             self.timestamp = float(parts.pop(0))
@@ -754,6 +768,14 @@ class Timestamp(object):
             raise ValueError('offset must be non-negative')
         if self.offset > MAX_OFFSET:
             raise ValueError('offset must be smaller than %d' % MAX_OFFSET)
+        self.raw = int(round(self.timestamp / PRECISION))
+        # add delta
+        if delta:
+            self.raw = self.raw + delta
+            if self.raw <= 0:
+                raise ValueError(
+                    'delta must be greater than %d' % (-1 * self.raw))
+            self.timestamp = float(self.raw * PRECISION)
 
     def __repr__(self):
         return INTERNAL_FORMAT % (self.timestamp, self.offset)
@@ -1415,7 +1437,7 @@ class SwiftLogFormatter(logging.Formatter):
             if self.max_line_length < 7:
                 msg = msg[:self.max_line_length]
             else:
-                approxhalf = (self.max_line_length - 5) / 2
+                approxhalf = (self.max_line_length - 5) // 2
                 msg = msg[:approxhalf] + " ... " + msg[-approxhalf:]
         return msg
 
@@ -2268,6 +2290,7 @@ class GreenAsyncPile(object):
             size = size_or_pool
         self._responses = eventlet.queue.LightQueue(size)
         self._inflight = 0
+        self._pending = 0
 
     def _run_func(self, func, args, kwargs):
         try:
@@ -2279,6 +2302,7 @@ class GreenAsyncPile(object):
         """
         Spawn a job in a green thread on the pile.
         """
+        self._pending += 1
         self._inflight += 1
         self._pool.spawn(self._run_func, func, args, kwargs)
 
@@ -2303,12 +2327,13 @@ class GreenAsyncPile(object):
 
     def next(self):
         try:
-            return self._responses.get_nowait()
+            rv = self._responses.get_nowait()
         except Empty:
             if self._inflight == 0:
                 raise StopIteration()
-            else:
-                return self._responses.get()
+            rv = self._responses.get()
+        self._pending -= 1
+        return rv
 
 
 class ModifiedParseResult(ParseResult):
@@ -2698,6 +2723,33 @@ def rsync_ip(ip):
         return ip
     else:
         return '[%s]' % ip
+
+
+def rsync_module_interpolation(template, device):
+    """
+    Interpolate devices variables inside a rsync module template
+
+    :param template: rsync module template as a string
+    :param device: a device from a ring
+
+    :returns: a string with all variables replaced by device attributes
+    """
+    replacements = {
+        'ip': rsync_ip(device.get('ip', '')),
+        'port': device.get('port', ''),
+        'replication_ip': rsync_ip(device.get('replication_ip', '')),
+        'replication_port': device.get('replication_port', ''),
+        'region': device.get('region', ''),
+        'zone': device.get('zone', ''),
+        'device': device.get('device', ''),
+        'meta': device.get('meta', ''),
+    }
+    try:
+        module = template.format(**replacements)
+    except KeyError as e:
+        raise ValueError('Cannot interpolate rsync_module, invalid variable: '
+                         '%s' % e)
+    return module
 
 
 def get_valid_utf8_str(str_or_unicode):
@@ -3300,7 +3352,10 @@ class _MultipartMimeFileLikeObject(object):
         if len(self.input_buffer) < length + len(self.boundary) + 2:
             to_read = length + len(self.boundary) + 2
             while to_read > 0:
-                chunk = self.wsgi_input.read(to_read)
+                try:
+                    chunk = self.wsgi_input.read(to_read)
+                except (IOError, ValueError) as e:
+                    raise swift.common.exceptions.ChunkReadError(str(e))
                 to_read -= len(chunk)
                 self.input_buffer += chunk
                 if not chunk:
@@ -3326,7 +3381,10 @@ class _MultipartMimeFileLikeObject(object):
             return ''
         boundary_pos = newline_pos = -1
         while newline_pos < 0 and boundary_pos < 0:
-            chunk = self.wsgi_input.read(self.read_chunk_size)
+            try:
+                chunk = self.wsgi_input.read(self.read_chunk_size)
+            except (IOError, ValueError) as e:
+                raise swift.common.exceptions.ChunkReadError(str(e))
             self.input_buffer += chunk
             newline_pos = self.input_buffer.find('\r\n')
             boundary_pos = self.input_buffer.find(self.boundary)
@@ -3367,9 +3425,12 @@ def iter_multipart_mime_documents(wsgi_input, boundary, read_chunk_size=4096):
     """
     boundary = '--' + boundary
     blen = len(boundary) + 2  # \r\n
-    got = wsgi_input.readline(blen)
-    while got == '\r\n':
+    try:
         got = wsgi_input.readline(blen)
+        while got == '\r\n':
+            got = wsgi_input.readline(blen)
+    except (IOError, ValueError) as e:
+        raise swift.common.exceptions.ChunkReadError(str(e))
 
     if got.strip() != boundary:
         raise swift.common.exceptions.MimeInvalid(
@@ -3401,6 +3462,27 @@ def mime_to_document_iters(input_file, boundary, read_chunk_size=4096):
         # this consumes the headers and leaves just the body in doc_file
         headers = rfc822.Message(doc_file, 0)
         yield (headers, doc_file)
+
+
+def maybe_multipart_byteranges_to_document_iters(app_iter, content_type):
+    """
+    Takes an iterator that may or may not contain a multipart MIME document
+    as well as content type and returns an iterator of body iterators.
+
+    :param app_iter: iterator that may contain a multipart MIME document
+    :param content_type: content type of the app_iter, used to determine
+                         whether it conains a multipart document and, if
+                         so, what the boundary is between documents
+    """
+    content_type, params_list = parse_content_type(content_type)
+    if content_type != 'multipart/byteranges':
+        yield app_iter
+        return
+
+    body_file = FileLikeIter(app_iter)
+    boundary = dict(params_list)['boundary']
+    for _headers, body in mime_to_document_iters(body_file, boundary):
+        yield (chunk for chunk in iter(lambda: body.read(65536), ''))
 
 
 def document_iters_to_multipart_byteranges(ranges_iter, boundary):

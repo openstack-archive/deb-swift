@@ -405,6 +405,44 @@ class TestTimestamp(unittest.TestCase):
                             '%r is not bigger than %f given %r' % (
                                 timestamp, float(normal), value))
 
+    def test_raw(self):
+        expected = 140243640891203
+        timestamp = utils.Timestamp(1402436408.91203)
+        self.assertEqual(expected, timestamp.raw)
+
+        # 'raw' does not include offset
+        timestamp = utils.Timestamp(1402436408.91203, 0xf0)
+        self.assertEqual(expected, timestamp.raw)
+
+    def test_delta(self):
+        def _assertWithinBounds(expected, timestamp):
+            tolerance = 0.00001
+            minimum = expected - tolerance
+            maximum = expected + tolerance
+            self.assertTrue(float(timestamp) > minimum)
+            self.assertTrue(float(timestamp) < maximum)
+
+        timestamp = utils.Timestamp(1402436408.91203, delta=100)
+        _assertWithinBounds(1402436408.91303, timestamp)
+        self.assertEqual(140243640891303, timestamp.raw)
+
+        timestamp = utils.Timestamp(1402436408.91203, delta=-100)
+        _assertWithinBounds(1402436408.91103, timestamp)
+        self.assertEqual(140243640891103, timestamp.raw)
+
+        timestamp = utils.Timestamp(1402436408.91203, delta=0)
+        _assertWithinBounds(1402436408.91203, timestamp)
+        self.assertEqual(140243640891203, timestamp.raw)
+
+        # delta is independent of offset
+        timestamp = utils.Timestamp(1402436408.91203, offset=42, delta=100)
+        self.assertEqual(140243640891303, timestamp.raw)
+        self.assertEqual(42, timestamp.offset)
+
+        # cannot go negative
+        self.assertRaises(ValueError, utils.Timestamp, 1402436408.91203,
+                          delta=-140243640891203)
+
     def test_int(self):
         expected = 1402437965
         test_values = (
@@ -2243,6 +2281,58 @@ cluster_dfw1 = http://dfw1.host/v1/
     def test_rsync_ip_ipv6_ipv4_compatible(self):
         self.assertEqual(
             utils.rsync_ip('::ffff:192.0.2.128'), '[::ffff:192.0.2.128]')
+
+    def test_rsync_module_interpolation(self):
+        fake_device = {'ip': '127.0.0.1', 'port': 11,
+                       'replication_ip': '127.0.0.2', 'replication_port': 12,
+                       'region': '1', 'zone': '2', 'device': 'sda1',
+                       'meta': 'just_a_string'}
+
+        self.assertEqual(
+            utils.rsync_module_interpolation('{ip}', fake_device),
+            '127.0.0.1')
+        self.assertEqual(
+            utils.rsync_module_interpolation('{port}', fake_device),
+            '11')
+        self.assertEqual(
+            utils.rsync_module_interpolation('{replication_ip}', fake_device),
+            '127.0.0.2')
+        self.assertEqual(
+            utils.rsync_module_interpolation('{replication_port}',
+                                             fake_device),
+            '12')
+        self.assertEqual(
+            utils.rsync_module_interpolation('{region}', fake_device),
+            '1')
+        self.assertEqual(
+            utils.rsync_module_interpolation('{zone}', fake_device),
+            '2')
+        self.assertEqual(
+            utils.rsync_module_interpolation('{device}', fake_device),
+            'sda1')
+        self.assertEqual(
+            utils.rsync_module_interpolation('{meta}', fake_device),
+            'just_a_string')
+
+        self.assertEqual(
+            utils.rsync_module_interpolation('{replication_ip}::object',
+                                             fake_device),
+            '127.0.0.2::object')
+        self.assertEqual(
+            utils.rsync_module_interpolation('{ip}::container{port}',
+                                             fake_device),
+            '127.0.0.1::container11')
+        self.assertEqual(
+            utils.rsync_module_interpolation(
+                '{replication_ip}::object_{device}', fake_device),
+            '127.0.0.2::object_sda1')
+        self.assertEqual(
+            utils.rsync_module_interpolation(
+                '127.0.0.3::object_{replication_port}', fake_device),
+            '127.0.0.3::object_12')
+
+        self.assertRaises(ValueError, utils.rsync_module_interpolation,
+                          '{replication_ip}::object_{deivce}', fake_device)
 
     def test_fallocate_reserve(self):
 
@@ -4529,6 +4619,22 @@ class TestGreenAsyncPile(unittest.TestCase):
         pile.spawn(run_test, 0.1)
         self.assertEqual(pile.waitall(0.5), [0.1, 0.1])
         self.assertEqual(completed[0], 2)
+
+    def test_pending(self):
+        pile = utils.GreenAsyncPile(3)
+        self.assertEqual(0, pile._pending)
+        for repeats in range(2):
+            # repeat to verify that pending will go again up after going down
+            for i in range(4):
+                pile.spawn(lambda: i)
+            self.assertEqual(4, pile._pending)
+            for i in range(3, -1, -1):
+                pile.next()
+                self.assertEqual(i, pile._pending)
+            # sanity check - the pile is empty
+            self.assertRaises(StopIteration, pile.next)
+            # pending remains 0
+            self.assertEqual(0, pile._pending)
 
 
 class TestLRUCache(unittest.TestCase):

@@ -53,12 +53,12 @@ from swift.common import constraints
 from swift.common.exceptions import ChunkReadTimeout, \
     ChunkWriteTimeout, ConnectionTimeout, ResponseTimeout, \
     InsufficientStorage, FooterNotSupported, MultiphasePUTNotSupported, \
-    PutterConnectError
+    PutterConnectError, ChunkReadError
 from swift.common.http import (
-    is_success, is_server_error, HTTP_CONTINUE, HTTP_CREATED,
-    HTTP_MULTIPLE_CHOICES, HTTP_INTERNAL_SERVER_ERROR,
-    HTTP_SERVICE_UNAVAILABLE, HTTP_INSUFFICIENT_STORAGE,
-    HTTP_PRECONDITION_FAILED, HTTP_CONFLICT, is_informational)
+    is_informational, is_success, is_client_error, is_server_error,
+    HTTP_CONTINUE, HTTP_CREATED, HTTP_MULTIPLE_CHOICES,
+    HTTP_INTERNAL_SERVER_ERROR, HTTP_SERVICE_UNAVAILABLE,
+    HTTP_INSUFFICIENT_STORAGE, HTTP_PRECONDITION_FAILED, HTTP_CONFLICT)
 from swift.common.storage_policy import (POLICIES, REPL_POLICY, EC_POLICY,
                                          ECDriverError, PolicyError)
 from swift.proxy.controllers.base import Controller, delay_denial, \
@@ -276,19 +276,33 @@ class BaseObjectController(Controller):
                           container_partition, containers,
                           delete_at_container=None, delete_at_partition=None,
                           delete_at_nodes=None):
+        policy_index = req.headers['X-Backend-Storage-Policy-Index']
+        policy = POLICIES.get_by_index(policy_index)
         headers = [self.generate_request_headers(req, additional=req.headers)
                    for _junk in range(n_outgoing)]
 
+        def set_container_update(index, container):
+            headers[index]['X-Container-Partition'] = container_partition
+            headers[index]['X-Container-Host'] = csv_append(
+                headers[index].get('X-Container-Host'),
+                '%(ip)s:%(port)s' % container)
+            headers[index]['X-Container-Device'] = csv_append(
+                headers[index].get('X-Container-Device'),
+                container['device'])
+
         for i, container in enumerate(containers):
             i = i % len(headers)
+            set_container_update(i, container)
 
-            headers[i]['X-Container-Partition'] = container_partition
-            headers[i]['X-Container-Host'] = csv_append(
-                headers[i].get('X-Container-Host'),
-                '%(ip)s:%(port)s' % container)
-            headers[i]['X-Container-Device'] = csv_append(
-                headers[i].get('X-Container-Device'),
-                container['device'])
+        # if # of container_updates is not enough against # of replicas
+        # (or fragments). Fill them like as pigeon hole problem.
+        # TODO?: apply these to X-Delete-At-Container?
+        n_updates_needed = min(policy.quorum + 1, n_outgoing)
+        container_iter = itertools.cycle(containers)
+        existing_updates = len(containers)
+        while existing_updates < n_updates_needed:
+            set_container_update(existing_updates, next(container_iter))
+            existing_updates += 1
 
         for i, node in enumerate(delete_at_nodes or []):
             i = i % len(headers)
@@ -721,8 +735,13 @@ class BaseObjectController(Controller):
             if error_response:
                 return error_response
         else:
-            reader = req.environ['wsgi.input'].read
-            data_source = iter(lambda: reader(self.app.client_chunk_size), '')
+            def reader():
+                try:
+                    return req.environ['wsgi.input'].read(
+                        self.app.client_chunk_size)
+                except (ValueError, IOError) as e:
+                    raise ChunkReadError(str(e))
+            data_source = iter(reader, '')
             update_response = lambda req, resp: resp
 
         # check if object is set to be automatically deleted (i.e. expired)
@@ -818,6 +837,13 @@ class BaseObjectController(Controller):
         self.object_name = dest_object
         # re-write the existing request as a PUT instead of creating a new one
         # since this one is already attached to the posthooklogger
+        # TODO: Swift now has proxy-logging middleware instead of
+        #       posthooklogger used in before. i.e. we don't have to
+        #       keep the code depends on evnetlet.posthooks sequence, IMHO.
+        #       However, creating a new sub request might
+        #       cause the possibility to hide some bugs behindes the request
+        #       so that we should discuss whichi is suitable (new-sub-request
+        #       vs re-write-existing-request) for Swift. [kota_]
         req.method = 'PUT'
         req.path_info = '/v1/%s/%s/%s' % \
                         (dest_account, dest_container, dest_object)
@@ -955,6 +981,12 @@ class ReplicatedObjectController(BaseObjectController):
             raise HTTPRequestTimeout(request=req)
         except HTTPException:
             raise
+        except ChunkReadError:
+            req.client_disconnect = True
+            self.app.logger.warn(
+                _('Client disconnected without sending last chunk'))
+            self.app.logger.increment('client_disconnects')
+            raise HTTPClientDisconnect(request=req)
         except (Exception, Timeout):
             self.app.logger.exception(
                 _('ERROR Exception causing client disconnect'))
@@ -1953,44 +1985,43 @@ class ECObjectController(BaseObjectController):
                 orig_range = req.range
                 range_specs = self._convert_range(req, policy)
 
-            node_iter = GreenthreadSafeIterator(node_iter)
-            num_gets = policy.ec_ndata
-            with ContextPool(num_gets) as pool:
+            safe_iter = GreenthreadSafeIterator(node_iter)
+            with ContextPool(policy.ec_ndata) as pool:
                 pile = GreenAsyncPile(pool)
-                for _junk in range(num_gets):
+                for _junk in range(policy.ec_ndata):
                     pile.spawn(self._fragment_GET_request,
-                               req, node_iter, partition,
+                               req, safe_iter, partition,
                                policy)
 
-                gets = list(pile)
-                good_gets = []
                 bad_gets = []
-                for get, parts_iter in gets:
+                etag_buckets = collections.defaultdict(list)
+                best_etag = None
+                for get, parts_iter in pile:
                     if is_success(get.last_status):
-                        good_gets.append((get, parts_iter))
+                        etag = HeaderKeyDict(
+                            get.last_headers)['X-Object-Sysmeta-Ec-Etag']
+                        etag_buckets[etag].append((get, parts_iter))
+                        if etag != best_etag and (
+                                len(etag_buckets[etag]) >
+                                len(etag_buckets[best_etag])):
+                            best_etag = etag
                     else:
                         bad_gets.append((get, parts_iter))
+                    matching_response_count = max(
+                        len(etag_buckets[best_etag]), len(bad_gets))
+                    if (policy.ec_ndata - matching_response_count >
+                            pile._pending) and node_iter.nodes_left > 0:
+                        # we need more matching responses to reach ec_ndata
+                        # than we have pending gets, as long as we still have
+                        # nodes in node_iter we can spawn another
+                        pile.spawn(self._fragment_GET_request, req,
+                                   safe_iter, partition, policy)
 
             req.range = orig_range
-            if len(good_gets) == num_gets:
-                # If these aren't all for the same object, then error out so
-                # at least the client doesn't get garbage. We can do a lot
-                # better here with more work, but this'll work for now.
-                found_obj_etags = set(
-                    HeaderKeyDict(
-                        getter.last_headers)['X-Object-Sysmeta-Ec-Etag']
-                    for getter, _junk in good_gets)
-                if len(found_obj_etags) > 1:
-                    self.app.logger.debug(
-                        "Returning 503 for %s; found too many etags (%s)",
-                        req.path,
-                        ", ".join(found_obj_etags))
-                    return HTTPServiceUnavailable(request=req)
-
-                # we found enough pieces to decode the object, so now let's
-                # decode the object
+            if len(etag_buckets[best_etag]) >= policy.ec_ndata:
+                # headers can come from any of the getters
                 resp_headers = HeaderKeyDict(
-                    good_gets[0][0].source_headers[-1])
+                    etag_buckets[best_etag][0][0].source_headers[-1])
                 resp_headers.pop('Content-Range', None)
                 eccl = resp_headers.get('X-Object-Sysmeta-Ec-Content-Length')
                 obj_length = int(eccl) if eccl is not None else None
@@ -1998,11 +2029,10 @@ class ECObjectController(BaseObjectController):
                 # This is only true if we didn't get a 206 response, but
                 # that's the only time this is used anyway.
                 fa_length = int(resp_headers['Content-Length'])
-
                 app_iter = ECAppIter(
                     req.swift_entity_path,
                     policy,
-                    [iterator for getter, iterator in good_gets],
+                    [iterator for getter, iterator in etag_buckets[best_etag]],
                     range_specs, fa_length, obj_length,
                     self.app.logger)
                 resp = Response(
@@ -2031,13 +2061,12 @@ class ECObjectController(BaseObjectController):
         # EC fragment archives each have different bytes, hence different
         # etags. However, they all have the original object's etag stored in
         # sysmeta, so we copy that here so the client gets it.
-        resp.headers['Etag'] = resp.headers.get(
-            'X-Object-Sysmeta-Ec-Etag')
-        resp.headers['Content-Length'] = resp.headers.get(
-            'X-Object-Sysmeta-Ec-Content-Length')
-        resp.fix_conditional_response()
-
-        return resp
+        if is_success(resp.status_int):
+            resp.headers['Etag'] = resp.headers.get(
+                'X-Object-Sysmeta-Ec-Etag')
+            resp.headers['Content-Length'] = resp.headers.get(
+                'X-Object-Sysmeta-Ec-Content-Length')
+            resp.fix_conditional_response()
 
     def _connect_put_node(self, node_iter, part, path, headers,
                           logger_thread_locals):
@@ -2158,30 +2187,39 @@ class ECObjectController(BaseObjectController):
                         try:
                             chunk = next(data_source)
                         except StopIteration:
-                            computed_etag = (etag_hasher.hexdigest()
-                                             if etag_hasher else None)
-                            received_etag = req.headers.get(
-                                'etag', '').strip('"')
-                            if (computed_etag and received_etag and
-                               computed_etag != received_etag):
-                                raise HTTPUnprocessableEntity(request=req)
-
-                            send_chunk('')  # flush out any buffered data
-
-                            for putter in putters:
-                                trail_md = trailing_metadata(
-                                    policy, etag_hasher,
-                                    bytes_transferred,
-                                    chunk_index[putter])
-                                trail_md['Etag'] = \
-                                    putter.chunk_hasher.hexdigest()
-                                putter.end_of_object_data(trail_md)
                             break
                     bytes_transferred += len(chunk)
                     if bytes_transferred > constraints.MAX_FILE_SIZE:
                         raise HTTPRequestEntityTooLarge(request=req)
 
                     send_chunk(chunk)
+
+                if req.content_length and (
+                        bytes_transferred < req.content_length):
+                    req.client_disconnect = True
+                    self.app.logger.warn(
+                        _('Client disconnected without sending enough data'))
+                    self.app.logger.increment('client_disconnects')
+                    raise HTTPClientDisconnect(request=req)
+
+                computed_etag = (etag_hasher.hexdigest()
+                                 if etag_hasher else None)
+                received_etag = req.headers.get(
+                    'etag', '').strip('"')
+                if (computed_etag and received_etag and
+                   computed_etag != received_etag):
+                    raise HTTPUnprocessableEntity(request=req)
+
+                send_chunk('')  # flush out any buffered data
+
+                for putter in putters:
+                    trail_md = trailing_metadata(
+                        policy, etag_hasher,
+                        bytes_transferred,
+                        chunk_index[putter])
+                    trail_md['Etag'] = \
+                        putter.chunk_hasher.hexdigest()
+                    putter.end_of_object_data(trail_md)
 
                 for putter in putters:
                     putter.wait()
@@ -2202,6 +2240,23 @@ class ECObjectController(BaseObjectController):
                         _('Not enough object servers ack\'ed (got %d)'),
                         statuses.count(HTTP_CONTINUE))
                     raise HTTPServiceUnavailable(request=req)
+
+                elif not self._have_adequate_informational(
+                        statuses, min_conns):
+                    resp = self.best_response(req, statuses, reasons, bodies,
+                                              _('Object PUT'),
+                                              quorum_size=min_conns)
+                    if is_client_error(resp.status_int):
+                        # if 4xx occurred in this state it is absolutely
+                        # a bad conversation between proxy-server and
+                        # object-server (even if it's
+                        # HTTP_UNPROCESSABLE_ENTITY) so we should regard this
+                        # as HTTPServiceUnavailable.
+                        raise HTTPServiceUnavailable(request=req)
+                    else:
+                        # Other errors should use raw best_response
+                        raise resp
+
                 # quorum achieved, start 2nd phase - send commit
                 # confirmation to participating object servers
                 # so they write a .durable state file indicating
@@ -2215,32 +2270,48 @@ class ECObjectController(BaseObjectController):
                 _('ERROR Client read timeout (%ss)'), err.seconds)
             self.app.logger.increment('client_timeouts')
             raise HTTPRequestTimeout(request=req)
+        except ChunkReadError:
+            req.client_disconnect = True
+            self.app.logger.warn(
+                _('Client disconnected without sending last chunk'))
+            self.app.logger.increment('client_disconnects')
+            raise HTTPClientDisconnect(request=req)
         except HTTPException:
             raise
         except (Exception, Timeout):
             self.app.logger.exception(
                 _('ERROR Exception causing client disconnect'))
             raise HTTPClientDisconnect(request=req)
-        if req.content_length and bytes_transferred < req.content_length:
-            req.client_disconnect = True
-            self.app.logger.warn(
-                _('Client disconnected without sending enough data'))
-            self.app.logger.increment('client_disconnects')
-            raise HTTPClientDisconnect(request=req)
 
-    def _have_adequate_successes(self, statuses, min_responses):
+    def _have_adequate_responses(
+            self, statuses, min_responses, conditional_func):
         """
         Given a list of statuses from several requests, determine if a
-        satisfactory number of nodes have responded with 2xx statuses to
+        satisfactory number of nodes have responded with 1xx or 2xx statuses to
         deem the transaction for a succssful response to the client.
 
         :param statuses: list of statuses returned so far
         :param min_responses: minimal pass criterion for number of successes
+        :param conditional_func: a callable function to check http status code
         :returns: True or False, depending on current number of successes
         """
-        if sum(1 for s in statuses if is_success(s)) >= min_responses:
+        if sum(1 for s in statuses if (conditional_func(s))) >= min_responses:
             return True
         return False
+
+    def _have_adequate_successes(self, statuses, min_responses):
+        """
+        Partial method of _have_adequate_responses for 2xx
+        """
+        return self._have_adequate_responses(
+            statuses, min_responses, is_success)
+
+    def _have_adequate_informational(self, statuses, min_responses):
+        """
+        Partial method of _have_adequate_responses for 1xx
+        """
+        return self._have_adequate_responses(
+            statuses, min_responses, is_informational)
 
     def _await_response(self, conn, final_phase):
         return conn.await_response(
@@ -2296,9 +2367,9 @@ class ECObjectController(BaseObjectController):
             reasons.append(response.reason)
             if final_phase:
                 body = response.read()
-                bodies.append(body)
             else:
                 body = ''
+            bodies.append(body)
             if response.status == HTTP_INSUFFICIENT_STORAGE:
                 putter.failed = True
                 self.app.error_limit(putter.node,
@@ -2337,7 +2408,8 @@ class ECObjectController(BaseObjectController):
                     bodies.append('')
             else:
                 # intermediate response phase - set return value to true only
-                # if there are enough 100-continue acknowledgements
+                # if there are responses having same value of *any* status
+                # except 5xx
                 if self.have_quorum(statuses, num_nodes, quorum=min_responses):
                     quorum = True
 
@@ -2371,10 +2443,14 @@ class ECObjectController(BaseObjectController):
             final_phase = True
             need_quorum = False
             # The .durable file will propagate in a replicated fashion; if
-            # one exists, the reconstructor will spread it around. Thus, we
-            # require "parity + 1" .durable files to be successfully written
-            # as we do fragment archives in order to call the PUT a success.
-            min_conns = policy.ec_nparity + 1
+            # one exists, the reconstructor will spread it around.
+            # In order to avoid successfully writing an object, but refusing
+            # to serve it on a subsequent GET because don't have enough
+            # durable data fragments - we require the same number of durable
+            # writes as quorum fragment writes.  If object servers are in the
+            # future able to serve their non-durable fragment archives we may
+            # be able to reduce this quorum count if needed.
+            min_conns = policy.quorum
             putters = [p for p in putters if not p.failed]
             # ignore response etags, and quorum boolean
             statuses, reasons, bodies, _etags, _quorum = \
