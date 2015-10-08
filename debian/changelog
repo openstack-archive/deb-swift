@@ -1,3 +1,9 @@
+swift (2.5.0-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- Ondřej Nový <novy@ondrej.org>  Thu, 08 Oct 2015 23:18:00 +0200
+
 swift (2.4.0-1) unstable; urgency=medium
 
   [ Ondřej Nový ]
