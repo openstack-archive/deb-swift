@@ -53,6 +53,12 @@ override_dh_installinit:
 			cp $$MYPKG.upstart.in $$MYPKG.upstart ; \
 		done ; \
 	fi
+
+	for i in `ls -1 debian/*.init.in` ; do \
+		MYPKG=`echo $$i | sed s/.init.in//` ; \
+		cat $$MYPKG.init.in debian/FOOTER.init.in > $$MYPKG.init ; \
+	done
+
 	dh_installinit --no-start
 
 	dh_installinit --no-start -pswift-container --name=swift-container-replicator

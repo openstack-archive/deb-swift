@@ -1,0 +1,4 @@
+# Configuration file for Swift
+
+# Wait N seconds for processes to die
+KILL_WAIT=15

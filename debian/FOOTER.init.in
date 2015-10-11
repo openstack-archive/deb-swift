@@ -1,16 +1,3 @@
-#! /bin/sh
-### BEGIN INIT INFO
-# Provides:          swift-container
-# Required-Start:    $remote_fs
-# Required-Stop:     $remote_fs
-# Default-Start:     2 3 4 5
-# Default-Stop:      0 1 6
-# Short-Description: Swift container server
-# Description:       Container server for Swift.
-### END INIT INFO
-
-SERVICE_NAME="container-server"
-PRINT_NAME="container server"
 PIDS_LOCATION="/var/run/swift"
 
 kill_service()
@@ -23,6 +10,11 @@ kill_service()
 }
 
 . /lib/lsb/init-functions
+
+# Include Swift defaults if available
+if [ -f /etc/default/swift ] ; then
+    . /etc/default/swift
+fi
 
 if ! [ -x /usr/bin/swift-init ] ; then
 	exit 0
@@ -37,14 +29,14 @@ start)
 ;;
 stop)
 	log_daemon_msg "Stopping Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	/usr/bin/swift-init ${SERVICE_NAME} stop
+	/usr/bin/swift-init --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
 	if [ "$?" -ne 0 ]; then kill_service; fi
 	log_end_msg $?
 	exit $?
 ;;
 restart)
 	log_daemon_msg "Restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	/usr/bin/swift-init ${SERVICE_NAME} stop
+	/usr/bin/swift-init --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
 	if [ "$?" -ne 0 ]; then kill_service; fi
 	/usr/bin/swift-init ${SERVICE_NAME} start
 	log_end_msg $?

@@ -3,6 +3,8 @@ swift (2.5.0-1) UNRELEASED; urgency=medium
   * New upstream release.
   * Workaround swift-init bug and send SIGKILL if SIGTERM is not successfull.
     Thanks to Petr Kuběna <petr.kubena@firma.seznam.cz>
+  * Moved same parts of init scripts to global lib.
+  * Allow to change kill-interval in swift-init.
 
  -- Ondřej Nový <novy@ondrej.org>  Thu, 08 Oct 2015 23:18:00 +0200
 
