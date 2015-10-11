@@ -1,4 +1,5 @@
 PIDS_LOCATION="/var/run/swift"
+KILL_WAIT=15
 
 kill_service()
 {
