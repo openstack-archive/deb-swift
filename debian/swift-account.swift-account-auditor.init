@@ -9,10 +9,18 @@
 # Description:       Account auditor server for Swift.
 ### END INIT INFO
 
-set -e
-
 SERVICE_NAME="account-auditor"
 PRINT_NAME="account auditor"
+PIDS_LOCATION="/var/run/swift"
+
+kill_service()
+{
+	SERVICE_PIDS=`cat ${PIDS_LOCATION}/${SERVICE_NAME}/*.pid ${PIDS_LOCATION}/${SERVICE_NAME}.pid`
+	for PID in $SERVICE_PIDS;
+	do
+		(kill -9 -$PID 2>&1) >/dev/null;
+	done;
+}
 
 . /lib/lsb/init-functions
 
@@ -30,12 +38,15 @@ start)
 stop)
 	log_daemon_msg "Stopping Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
 	/usr/bin/swift-init ${SERVICE_NAME} stop
+	if [ "$?" -ne 0 ]; then kill_service; fi
 	log_end_msg $?
 	exit $?
 ;;
 restart)
 	log_daemon_msg "Restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	/usr/bin/swift-init ${SERVICE_NAME} restart
+	/usr/bin/swift-init ${SERVICE_NAME} stop
+	if [ "$?" -ne 0 ]; then kill_service; fi
+	/usr/bin/swift-init ${SERVICE_NAME} start
 	log_end_msg $?
 	exit $?
 ;;
