@@ -1,13 +1,9 @@
-
-debian/mans/swift-object/swift-object-replicator.8
-
 doc/manpages/swift-recon.1
 doc/manpages/swift-object-updater.1
 doc/manpages/swift-object-server.1
-
 doc/manpages/swift-object-auditor.1
 doc/manpages/swift-object-expirer.1
+doc/manpages/swift-object-replicator.1
 doc/manpages/swift-object-info.1
-doc/manpages/swift-object-expirer.1
 doc/manpages/object-expirer.conf.5
 doc/manpages/object-server.conf.5

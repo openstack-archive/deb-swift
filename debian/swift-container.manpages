@@ -1,4 +1,5 @@
 doc/manpages/swift-container-auditor.1
+doc/manpages/swift-container-info.1
 doc/manpages/swift-container-replicator.1
 doc/manpages/swift-container-server.1
 doc/manpages/swift-container-sync.1

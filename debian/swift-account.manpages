@@ -1,5 +1,5 @@
-debian/mans/swift-account/swift-account-stats-logger.8
 doc/manpages/swift-account-auditor.1
+doc/manpages/swift-account-info.1
 doc/manpages/swift-account-reaper.1
 doc/manpages/swift-account-replicator.1
 doc/manpages/swift-account-server.1
