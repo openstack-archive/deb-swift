@@ -3,7 +3,7 @@ KILL_WAIT=15
 
 kill_service()
 {
-	SERVICE_PIDS=`cat ${PIDS_LOCATION}/${SERVICE_NAME}/*.pid ${PIDS_LOCATION}/${SERVICE_NAME}.pid`
+	SERVICE_PIDS=`cat ${PIDS_LOCATION}/${SERVICE_NAME}/*.pid ${PIDS_LOCATION}/${SERVICE_NAME}.pid 2>/dev/null`
 	for PID in $SERVICE_PIDS;
 	do
 		(kill -9 -$PID 2>&1) >/dev/null;
