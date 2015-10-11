@@ -45,7 +45,9 @@ restart)
 ;;
 reload|force-reload)
 	log_daemon_msg "Gracefully restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	/usr/bin/swift-init ${SERVICE_NAME} reload
+	/usr/bin/swift-init --kill-wait=${KILL_WAIT} ${SERVICE_NAME} shutdown
+	if [ "$?" -ne 0 ]; then kill_service; fi
+	/usr/bin/swift-init ${SERVICE_NAME} start
 	log_end_msg $?
 	exit $?
 ;;
