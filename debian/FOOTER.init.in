@@ -4,10 +4,10 @@ KILL_WAIT=15
 kill_service()
 {
 	SERVICE_PIDS=`cat ${PIDS_LOCATION}/${SERVICE_NAME}/*.pid ${PIDS_LOCATION}/${SERVICE_NAME}.pid 2>/dev/null`
-	for PID in $SERVICE_PIDS;
-	do
-		(kill -9 -$PID 2>&1) >/dev/null;
-	done;
+	for PID in $SERVICE_PIDS
+    do
+		kill -9 -$PID >/dev/null 2>&1
+	done
 }
 
 . /lib/lsb/init-functions
@@ -32,7 +32,7 @@ stop)
 	log_daemon_msg "Stopping Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
 	/usr/bin/swift-init --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
 	if [ "$?" -ne 0 ]; then kill_service; fi
-	log_end_msg $?
+	log_end_msg 0
 	exit $?
 ;;
 restart)
