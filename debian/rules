@@ -12,6 +12,7 @@ export OSLO_PACKAGE_VERSION=$(VERSION)
 override_dh_clean:
 	dh_clean
 	rm -f debian/*.upstart
+	rm -f debian/*.init
 	rm -rf swift.egg-info
 
 # build with sphinx documentation
