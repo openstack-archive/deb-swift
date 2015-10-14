@@ -1,13 +1,22 @@
 PIDS_LOCATION="/var/run/swift"
+SWIFT_INIT_TOOL="/usr/bin/swift-init"
 KILL_WAIT=15
+
 
 kill_service()
 {
-	SERVICE_PIDS=`cat ${PIDS_LOCATION}/${SERVICE_NAME}/*.pid ${PIDS_LOCATION}/${SERVICE_NAME}.pid 2>/dev/null`
-	for PID in $SERVICE_PIDS
-    do
-		kill -9 -$PID >/dev/null 2>&1
-	done
+	SERVICE_PIDS=`sed \
+		-e 's/^/-/g' \
+		${PIDS_LOCATION}/${SERVICE_NAME}/*.pid \
+		${PIDS_LOCATION}/${SERVICE_NAME}.pid \
+		2>/dev/null \
+		| tr -s '[:space:]' ' '`
+
+	if [ "${SERVICE_PIDS}" != "" ] ; then
+		kill -9 ${SERVICE_PIDS} >/dev/null 2>&1
+	fi
+
+	return 0
 }
 
 . /lib/lsb/init-functions
@@ -17,45 +26,45 @@ if [ -f /etc/default/swift ] ; then
     . /etc/default/swift
 fi
 
-if ! [ -x /usr/bin/swift-init ] ; then
-	exit 0
+if ! [ -x ${SWIFT_INIT_TOOL} ] ; then
+	exit 5
 fi
 
 case "$1" in
 start)
 	log_daemon_msg "Starting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	/usr/bin/swift-init ${SERVICE_NAME} start
+	${SWIFT_INIT_TOOL} ${SERVICE_NAME} start
 	log_end_msg $?
 	exit $?
 ;;
 stop)
 	log_daemon_msg "Stopping Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	/usr/bin/swift-init --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
-	if [ "$?" -ne 0 ]; then kill_service; fi
+	${SWIFT_INIT_TOOL} --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
+	[ "$?" -ne 0 ] && kill_service
 	log_end_msg 0
-	exit $?
+	exit 0
 ;;
 restart)
 	log_daemon_msg "Restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	/usr/bin/swift-init --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
-	if [ "$?" -ne 0 ]; then kill_service; fi
-	/usr/bin/swift-init ${SERVICE_NAME} start
+	${SWIFT_INIT_TOOL} --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
+	[ "$?" -ne 0 ] && kill_service
+	${SWIFT_INIT_TOOL} ${SERVICE_NAME} start
 	log_end_msg $?
 	exit $?
 ;;
 reload|force-reload)
 	log_daemon_msg "Gracefully restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	/usr/bin/swift-init --kill-wait=${KILL_WAIT} ${SERVICE_NAME} shutdown
-	if [ "$?" -ne 0 ]; then kill_service; fi
-	/usr/bin/swift-init ${SERVICE_NAME} start
+	${SWIFT_INIT_TOOL} --kill-wait=${KILL_WAIT} ${SERVICE_NAME} shutdown
+	[ "$?" -ne 0 ] && kill_service
+	${SWIFT_INIT_TOOL} ${SERVICE_NAME} start
 	log_end_msg $?
 	exit $?
 ;;
 status)
-	exec /usr/bin/swift-init ${SERVICE_NAME} status
+	exec ${SWIFT_INIT_TOOL} ${SERVICE_NAME} status
 ;;
 *)
-	echo "Usage: $0 {start|stop|restart|reload}"
+	echo "Usage: $0 {start|stop|restart|reload|force-reload|status}"
 	exit 1
 ;;
 esac
