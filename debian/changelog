@@ -1,4 +1,4 @@
-swift (2.5.0-1) UNRELEASED; urgency=medium
+swift (2.5.0-1) unstable; urgency=medium
 
   * New upstream release.
   * Workaround swift-init bug and send SIGKILL if SIGTERM is not successfull.
