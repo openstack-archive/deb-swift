@@ -38,7 +38,6 @@ Homepage: https://github.com/openstack/swift
 Package: python-swift
 Architecture: all
 Section: python
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: adduser,
          python-dnspython (>= 1.9.4),
          python-eventlet (>> 0.17.0),
@@ -81,7 +80,6 @@ Description: distributed virtual object store - Python libraries
 
 Package: swift
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: python-swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
@@ -110,7 +108,6 @@ Description: distributed virtual object store - common files
 
 Package: swift-proxy
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
          swift,
@@ -142,7 +139,6 @@ Description: distributed virtual object store - proxy server
 
 Package: swift-object
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
          rsync,
@@ -175,7 +171,6 @@ Description: distributed virtual object store - object server
 
 Package: swift-container
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
          rsync,
@@ -184,8 +179,6 @@ Depends: lsb-base (>= 3.0-6),
          ${python:Depends},
          ${shlibs:Depends},
 Provides: ${python:Provides},
-Breaks: swift (<< 1.8.0-4~),
-Replaces: swift (<< 1.8.0-4~),
 Description: distributed virtual object store - container server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -210,7 +203,6 @@ Description: distributed virtual object store - container server
 
 Package: swift-account
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
          python-swiftclient,
@@ -244,9 +236,6 @@ Description: distributed virtual object store - account server
 
 Package: swift-object-expirer
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
-Breaks: swift-object (<< 2.0.0),
-Replaces: swift-object (<< 2.0.0),
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
          python-swiftclient,
@@ -282,7 +271,6 @@ Description: distributed virtual object store - object-expirer
 Package: swift-doc
 Architecture: all
 Section: doc
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: libjs-jquery,
          libjs-underscore,
          ${misc:Depends},
