@@ -2,6 +2,7 @@ swift (2.5.0-2) UNRELEASED; urgency=medium
 
   * Added cron job for drive audit.
   * Removed python-swiftclient dependency.
+  * Added libjerasure2 build dependency.
 
  -- Ondřej Nový <novy@ondrej.org>  Tue, 10 Nov 2015 21:53:30 +0200
 
