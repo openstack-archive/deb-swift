@@ -40,7 +40,7 @@ override_dh_install:
 	install -D -m 0644 $(CURDIR)/etc/account-server.conf-sample		$(CURDIR)/debian/swift-account/etc/swift/account-server.conf
 	install -D -m 0644 $(CURDIR)/etc/container-server.conf-sample		$(CURDIR)/debian/swift-container/etc/swift/container-server.conf
 	install -D -m 0644 $(CURDIR)/etc/container-reconciler.conf-sample	$(CURDIR)/debian/swift-container/etc/swift/container-reconciler.conf
-	install -D -m 0644 $(CURDIR)/etc/drive-audit.conf-sample		$(CURDIR)/debian/python-swift/etc/swift/drive-audit.conf
+	install -D -m 0644 $(CURDIR)/etc/drive-audit.conf-sample		$(CURDIR)/debian/swift-drive-audit/etc/swift/drive-audit.conf
 	install -D -m 0644 $(CURDIR)/etc/memcache.conf-sample			$(CURDIR)/debian/swift-proxy/etc/swift/memcache.conf
 	install -D -m 0644 $(CURDIR)/etc/mime.types-sample			$(CURDIR)/debian/swift-proxy/etc/swift/mime.types
 	install -D -m 0644 $(CURDIR)/etc/proxy-server.conf-sample		$(CURDIR)/debian/swift-proxy/etc/swift/proxy-server.conf

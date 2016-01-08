@@ -147,6 +147,7 @@ Depends: lsb-base (>= 3.0-6),
          ${python:Depends},
          ${shlibs:Depends},
 Provides: ${python:Provides},
+Recommends: swift-drive-audit,
 Description: distributed virtual object store - object server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -179,6 +180,7 @@ Depends: lsb-base (>= 3.0-6),
          ${python:Depends},
          ${shlibs:Depends},
 Provides: ${python:Provides},
+Recommends: swift-drive-audit,
 Description: distributed virtual object store - container server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -211,6 +213,7 @@ Depends: lsb-base (>= 3.0-6),
          ${python:Depends},
          ${shlibs:Depends},
 Provides: ${python:Provides},
+Recommends: swift-drive-audit,
 Description: distributed virtual object store - account server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -294,3 +297,33 @@ Description: distributed virtual object store - documentation
  expensive equipment.
  .
  This package provides the Sphinx generated documentation for Swift.
+
+Package: swift-drive-audit
+Architecture: all
+Depends: python-swift (=${binary:Version}),
+         ${misc:Depends},
+         ${python:Depends},
+         ${shlibs:Depends},
+Breaks: python-swift (<< 2.5.0-2),
+Replaces: python-swift (<< 2.5.0-2),
+Description: distributed virtual object store - object server
+ OpenStack Object Storage (code-named Swift) creates redundant, scalable object
+ storage using clusters of standardized servers to store petabytes of
+ accessible data. It is not a file system or real-time data storage system, but
+ rather a long-term storage system for a more permanent type of static data
+ that can be retrieved, leveraged, and then updated if necessary. Primary
+ examples of data that best fit this type of storage model are virtual machine
+ images, photo storage, email storage and backup archiving. Having no central
+ "brain" or master point of control provides greater scalability, redundancy
+ and permanence.
+ .
+ Objects are written to multiple hardware devices in the data center, with
+ the OpenStack software responsible for ensuring data replication and
+ integrity across the cluster. Storage clusters can scale horizontally by
+ adding new nodes. Should a node fail, OpenStack works to replicate its
+ content from other active nodes. Because OpenStack uses software logic to
+ ensure data replication and distribution across different devices,
+ inexpensive commodity hard drives and servers can be used in lieu of more
+ expensive equipment.
+ .
+ This package provides the swift drive audit tool.
