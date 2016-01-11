@@ -304,8 +304,6 @@ Depends: python-swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
          ${shlibs:Depends},
-Breaks: python-swift (<< 2.5.0-2),
-Replaces: python-swift (<< 2.5.0-2),
 Description: distributed virtual object store - object server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
