@@ -1,4 +1,4 @@
-swift (2.5.0-2) UNRELEASED; urgency=medium
+swift (2.5.0-2) unstable; urgency=medium
 
   [ Ondřej Nový ]
   * Added cron job for drive audit.
