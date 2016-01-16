@@ -2,6 +2,7 @@ swift (2.5.0-3) UNRELEASED; urgency=medium
 
   * Added myself to copyright file.
   * Fixed description of swift-drive-audit package.
+  * Fixed typo in swift-container-sync upstart job.
 
  --  Ondřej Nový <novy@ondrej.org>  Sat, 16 Jan 2016 05:05:21 -0500
 
