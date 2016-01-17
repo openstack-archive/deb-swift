@@ -16,6 +16,44 @@ Files: debian/*.upstart.in
 Copyright: (c) 2010-2013, Marc Cluet <marc.cluet@ubuntu.com>
 License: Apache-2
 
+Files: swift/common/middleware/tempurl.py
+Copyright: (c) 2011-2014 Greg Holt
+           (c) 2012-2013 John Dickinson
+           (c) 2012 Felipe Reyes
+           (c) 2012 Peter Portante
+           (c) 2012 Victor Rodionov
+           (c) 2013-2014 Samuel Merritt
+           (c) 2013 Chuck Thier
+           (c) 2013 David Goetz
+           (c) 2013 Dirk Mueller
+           (c) 2013 Donagh McCabe
+           (c) 2013 Fabien Boucher
+           (c) 2013 Greg Lange
+           (c) 2013 Kun Huang
+           (c) 2013 Richard Hawkins
+           (c) 2013 Tong Li
+           (c) 2013 ZhiQiang Fan
+License: Apache-2
+
+Files: test/unit/common/middleware/test_tempurl.py
+Copyright: (c) 2011-2014 Greg Holt
+           (c) 2012-2013 Peter Portante
+           (c) 2012 Iryoung Jeong
+           (c) 2012 Michael Barton
+           (c) 2013 Alex Gaynor
+           (c) 2013 Chuck Thier
+           (c) 2013 David Goetz
+           (c) 2015 Donagh McCabe
+           (c) 2013 Greg Lange
+           (c) 2013 John Dickinson
+           (c) 2013 Kun Huang
+           (c) 2013 Richard Hawkins
+           (c) 2013 Samuel Merritt
+           (c) 2013 Shri Javadekar
+           (c) 2013 Tong Li
+           (c) 2013 ZhiQiang Fan
+License: Apache-2
+
 License: Apache-2
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
