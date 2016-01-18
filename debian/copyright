@@ -4,6 +4,8 @@ Source: https://code.launchpad.net/swift
 
 Files: *
 Copyright: (c) 2010-2016, See AUTHORS file
+           (c) 2013 Hewlett-Packard Development Company, L.P.
+           (c) 2010-2015 OpenStack Foundation
 License: Apache-2
 
 Files: debian/*
