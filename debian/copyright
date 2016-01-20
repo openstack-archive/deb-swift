@@ -12,6 +12,7 @@ Files: debian/*
 Copyright: (c) 2010-2016, Thomas Goirand <zigo@debian.org>
            (c) 2010-2012, Julien Danjou <acid@debian.org>
            (c) 2015-2016, Ondřej Nový <novy@ondrej.org>
+           (c) 2016, Marek Kaleta <marek.kaleta@firma.seznam.cz>
 License: Apache-2
 
 Files: debian/*.upstart.in

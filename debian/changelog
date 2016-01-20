@@ -10,6 +10,7 @@ swift (2.5.0-2) UNRELEASED; urgency=medium
 
   [ Marek Kaleta ]
   * Moved drive audit to new package swift-drive-audit.
+  * Added myself to copyright file.
 
  -- Ondřej Nový <novy@ondrej.org>  Sat, 16 Jan 2016 05:05:21 -0500
 
