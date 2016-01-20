@@ -1,3 +1,9 @@
+swift (2.5.0-3) UNRELEASED; urgency=medium
+
+  * Removed useless shlibs dependency.
+
+ -- Ondřej Nový <novy@ondrej.org>  Wed, 20 Jan 2016 05:31:21 -0500
+
 swift (2.5.0-2) unstable; urgency=medium
 
   [ Ondřej Nový ]

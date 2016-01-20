@@ -83,7 +83,6 @@ Architecture: all
 Depends: python-swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
-         ${shlibs:Depends},
 Description: distributed virtual object store - common files
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -113,7 +112,6 @@ Depends: lsb-base (>= 3.0-6),
          swift,
          ${misc:Depends},
          ${python:Depends},
-         ${shlibs:Depends},
 Description: distributed virtual object store - proxy server
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -145,7 +143,6 @@ Depends: lsb-base (>= 3.0-6),
          swift,
          ${misc:Depends},
          ${python:Depends},
-         ${shlibs:Depends},
 Provides: ${python:Provides},
 Recommends: swift-drive-audit,
 Description: distributed virtual object store - object server
@@ -178,7 +175,6 @@ Depends: lsb-base (>= 3.0-6),
          swift,
          ${misc:Depends},
          ${python:Depends},
-         ${shlibs:Depends},
 Provides: ${python:Provides},
 Recommends: swift-drive-audit,
 Description: distributed virtual object store - container server
@@ -211,7 +207,6 @@ Depends: lsb-base (>= 3.0-6),
          swift,
          ${misc:Depends},
          ${python:Depends},
-         ${shlibs:Depends},
 Provides: ${python:Provides},
 Recommends: swift-drive-audit,
 Description: distributed virtual object store - account server
@@ -244,7 +239,6 @@ Depends: lsb-base (>= 3.0-6),
          swift,
          ${misc:Depends},
          ${python:Depends},
-         ${shlibs:Depends},
 Description: distributed virtual object store - object-expirer
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -303,7 +297,6 @@ Architecture: all
 Depends: python-swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
-         ${shlibs:Depends},
 Description: distributed virtual object store - drive audit
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
