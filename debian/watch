@@ -1,3 +1,3 @@
 version=3
-http://launchpad.net/swift/+download http://launchpad.net/swift/.*/.*/swift-(.*)\.tar\.gz
-http://swift.openstack.org/tarballs/ swift-(.*).tar.gz
+https://github.com/openstack/swift/tags .*/(\d[\d\.]+.*)\.(?:zip|tgz|tbz|txz|(?:tar\.(?:gz|bz2|xz)))
+https://tarballs.openstack.org/swift/ swift-(\d[\d\.]+.*)\.(?:zip|tgz|tbz|txz|(?:tar\.(?:gz|bz2|xz)))
