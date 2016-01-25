@@ -16,18 +16,20 @@
 from eventlet import sleep, Timeout
 from eventlet.green import httplib, socket, urllib2
 import json
+import six
 from six.moves import range
+from six.moves import urllib
 import struct
 from sys import exc_info
 import zlib
 from swift import gettext_ as _
 from time import gmtime, strftime, time
-import urlparse
 from zlib import compressobj
 
-from swift.common.utils import quote
-from swift.common.http import HTTP_NOT_FOUND
+from swift.common.exceptions import ClientException
+from swift.common.http import HTTP_NOT_FOUND, HTTP_MULTIPLE_CHOICES
 from swift.common.swob import Request
+from swift.common.utils import quote
 from swift.common.wsgi import loadapp, pipeline_property
 
 
@@ -194,7 +196,7 @@ class InternalClient(object):
                 _('Unexpected response: %s') % resp.status, resp)
         if exc_type:
             # To make pep8 tool happy, in place of raise t, v, tb:
-            raise exc_type(*exc_value.args), None, exc_traceback
+            six.reraise(exc_type(*exc_value.args), None, exc_traceback)
 
     def _get_metadata(
             self, path, metadata_prefix='', acceptable_statuses=(2,),
@@ -255,6 +257,8 @@ class InternalClient(object):
                 (path, quote(marker), quote(end_marker)),
                 {}, acceptable_statuses)
             if not resp.status_int == 200:
+                if resp.status_int >= HTTP_MULTIPLE_CHOICES:
+                    ''.join(resp.app_iter)
                 break
             data = json.loads(resp.body)
             if not data:
@@ -760,7 +764,7 @@ class SimpleClient(object):
 
         req = urllib2.Request(url, headers=headers, data=contents)
         if proxy:
-            proxy = urlparse.urlparse(proxy)
+            proxy = urllib.parse.urlparse(proxy)
             req.set_proxy(proxy.netloc, proxy.scheme)
         req.get_method = lambda: method
         conn = urllib2.urlopen(req, timeout=timeout)
@@ -804,9 +808,14 @@ class SimpleClient(object):
             self.attempts += 1
             try:
                 return self.base_request(method, **kwargs)
-            except (socket.error, httplib.HTTPException, urllib2.URLError):
+            except (socket.error, httplib.HTTPException, urllib2.URLError) \
+                    as err:
                 if self.attempts > retries:
-                    raise
+                    if isinstance(err, urllib2.HTTPError):
+                        raise ClientException('Raise too many retries',
+                                              http_status=err.getcode())
+                    else:
+                        raise
             sleep(backoff)
             backoff = min(backoff * 2, self.max_backoff)
 

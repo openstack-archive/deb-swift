@@ -15,10 +15,12 @@
 
 import os
 import itertools
+import json
 import time
 from collections import defaultdict
 from eventlet import Timeout
 
+from swift.container.sync_store import ContainerSyncStore
 from swift.container.backend import ContainerBroker, DATADIR
 from swift.container.reconciler import (
     MISPLACED_OBJECTS_ACCOUNT, incorrect_policy_index,
@@ -28,7 +30,7 @@ from swift.common.storage_policy import POLICIES
 from swift.common.exceptions import DeviceUnavailable
 from swift.common.http import is_success
 from swift.common.db import DatabaseAlreadyExists
-from swift.common.utils import (json, Timestamp, hash_path,
+from swift.common.utils import (Timestamp, hash_path,
                                 storage_directory, quorum_size)
 
 
@@ -188,6 +190,13 @@ class ContainerReplicator(db_replicator.Replicator):
     def _post_replicate_hook(self, broker, info, responses):
         if info['account'] == MISPLACED_OBJECTS_ACCOUNT:
             return
+
+        try:
+            self.sync_store.update_sync_store(broker)
+        except Exception:
+            self.logger.exception('Failed to update sync_store %s' %
+                                  broker.db_file)
+
         point = broker.get_reconciler_sync()
         if not broker.has_multiple_policies() and info['max_row'] != point:
             broker.update_reconciler_sync(info['max_row'])
@@ -209,6 +218,13 @@ class ContainerReplicator(db_replicator.Replicator):
             # this container shouldn't be here, make sure it's cleaned up
             self.reconciler_cleanups[broker.container] = broker
             return
+        try:
+            # DB is going to get deleted. Be preemptive about it
+            self.sync_store.remove_synced_container(broker)
+        except Exception:
+            self.logger.exception('Failed to remove sync_store entry %s' %
+                                  broker.db_file)
+
         return super(ContainerReplicator, self).delete_db(broker)
 
     def replicate_reconcilers(self):
@@ -236,6 +252,9 @@ class ContainerReplicator(db_replicator.Replicator):
     def run_once(self, *args, **kwargs):
         self.reconciler_containers = {}
         self.reconciler_cleanups = {}
+        self.sync_store = ContainerSyncStore(self.root,
+                                             self.logger,
+                                             self.mount_check)
         rv = super(ContainerReplicator, self).run_once(*args, **kwargs)
         if any([self.reconciler_containers, self.reconciler_cleanups]):
             self.replicate_reconcilers()

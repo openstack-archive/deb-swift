@@ -19,6 +19,7 @@ import random
 import time
 import itertools
 from collections import defaultdict
+import six
 import six.moves.cPickle as pickle
 import shutil
 
@@ -799,7 +800,7 @@ class ObjectReconstructor(Daemon):
             self._diskfile_mgr = self._df_router[policy]
             self.load_object_ring(policy)
             data_dir = get_data_dir(policy)
-            local_devices = list(itertools.ifilter(
+            local_devices = list(six.moves.filter(
                 lambda dev: dev and is_local_device(
                     ips, self.port,
                     dev['replication_ip'], dev['replication_port']),
@@ -818,8 +819,8 @@ class ObjectReconstructor(Daemon):
                 dev_path = self._df_router[policy].get_dev_path(
                     local_dev['device'])
                 if not dev_path:
-                    self.logger.warn(_('%s is not mounted'),
-                                     local_dev['device'])
+                    self.logger.warning(_('%s is not mounted'),
+                                        local_dev['device'])
                     continue
                 obj_path = join(dev_path, data_dir)
                 tmp_path = join(dev_path, get_tmp_dir(int(policy)))

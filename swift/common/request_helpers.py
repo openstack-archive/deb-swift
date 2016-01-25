@@ -24,7 +24,10 @@ import hashlib
 import itertools
 import sys
 import time
-from urllib import unquote
+
+import six
+from six.moves.urllib.parse import unquote
+
 from swift import gettext_ as _
 from swift.common.storage_policy import POLICIES
 from swift.common.constraints import FORMAT2CONTENT_TYPE
@@ -51,7 +54,7 @@ def get_param(req, name, default=None):
     :raises: HTTPBadRequest if param not valid UTF-8 byte sequence
     """
     value = req.params.get(name, default)
-    if value and not isinstance(value, unicode):
+    if value and not isinstance(value, six.text_type):
         try:
             value.decode('utf8')    # Ensure UTF8ness
         except UnicodeDecodeError:
@@ -304,8 +307,10 @@ class SegmentedIterable(object):
                         'ERROR: While processing manifest %s, '
                         'max LO GET time of %ds exceeded' %
                         (self.name, self.max_get_time))
-                # Make sure that the segment is a plain old object, not some
-                # flavor of large object, so that we can check its MD5.
+                # The "multipart-manifest=get" query param ensures that the
+                # segment is a plain old object, not some flavor of large
+                # object; therefore, its etag is its MD5sum and hence we can
+                # check it.
                 path = seg_path + '?multipart-manifest=get'
                 seg_req = make_subrequest(
                     self.req.environ, path=path, method='GET',
@@ -314,21 +319,35 @@ class SegmentedIterable(object):
                     agent=('%(orig)s ' + self.ua_suffix),
                     swift_source=self.swift_source)
 
+                seg_req_rangeval = None
                 if first_byte != 0 or not go_to_end:
-                    seg_req.headers['Range'] = "bytes=%s-%s" % (
+                    seg_req_rangeval = "%s-%s" % (
                         first_byte, '' if go_to_end else last_byte)
+                    seg_req.headers['Range'] = "bytes=" + seg_req_rangeval
 
                 # We can only coalesce if paths match and we know the segment
                 # size (so we can check that the ranges will be allowed)
                 if pending_req and pending_req.path == seg_req.path and \
                         seg_size is not None:
-                    new_range = '%s,%s' % (
-                        pending_req.headers.get('Range',
-                                                'bytes=0-%s' % (seg_size - 1)),
-                        seg_req.headers['Range'].split('bytes=')[1])
-                    if Range(new_range).ranges_for_length(seg_size):
+
+                    # Make a new Range object so that we don't goof up the
+                    # existing one in case of invalid ranges. Note that a
+                    # range set with too many individual byteranges is
+                    # invalid, so we can combine N valid byteranges and 1
+                    # valid byterange and get an invalid range set.
+                    if pending_req.range:
+                        new_range_str = str(pending_req.range)
+                    else:
+                        new_range_str = "bytes=0-%d" % (seg_size - 1)
+
+                    if seg_req.range:
+                        new_range_str += "," + seg_req_rangeval
+                    else:
+                        new_range_str += ",0-%d" % (seg_size - 1)
+
+                    if Range(new_range_str).ranges_for_length(seg_size):
                         # Good news! We can coalesce the requests
-                        pending_req.headers['Range'] = new_range
+                        pending_req.headers['Range'] = new_range_str
                         continue
                     # else, Too many ranges, or too much backtracking, or ...
 
@@ -347,7 +366,7 @@ class SegmentedIterable(object):
                     (self.name, self.max_get_time))
             if pending_req:
                 yield pending_req, pending_etag, pending_size
-            raise e_type, e_value, e_traceback
+            six.reraise(e_type, e_value, e_traceback)
 
         if time.time() - start_time > self.max_get_time:
             raise SegmentError(
@@ -435,6 +454,9 @@ class SegmentedIterable(object):
             self.logger.exception(_('ERROR: An error occurred '
                                     'while retrieving segments'))
             raise
+        finally:
+            if self.current_resp:
+                close_if_possible(self.current_resp.app_iter)
 
     def app_iter_range(self, *a, **kw):
         """
@@ -477,5 +499,4 @@ class SegmentedIterable(object):
         Called when the client disconnect. Ensure that the connection to the
         backend server is closed.
         """
-        if self.current_resp:
-            close_if_possible(self.current_resp.app_iter)
+        close_if_possible(self.app_iter)

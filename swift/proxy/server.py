@@ -23,6 +23,7 @@ import functools
 import sys
 
 from eventlet import Timeout
+import six
 
 from swift import __canonical_version__ as swift_version
 from swift.common import constraints
@@ -86,8 +87,8 @@ class Application(object):
 
         swift_dir = conf.get('swift_dir', '/etc/swift')
         self.swift_dir = swift_dir
-        self.node_timeout = int(conf.get('node_timeout', 10))
-        self.recoverable_node_timeout = int(
+        self.node_timeout = float(conf.get('node_timeout', 10))
+        self.recoverable_node_timeout = float(
             conf.get('recoverable_node_timeout', self.node_timeout))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         self.client_timeout = int(conf.get('client_timeout', 60))
@@ -228,9 +229,10 @@ class Application(object):
         Check the configuration for possible errors
         """
         if self._read_affinity and self.sorting_method != 'affinity':
-            self.logger.warn("sorting_method is set to '%s', not 'affinity'; "
-                             "read_affinity setting will have no effect." %
-                             self.sorting_method)
+            self.logger.warning(
+                "sorting_method is set to '%s', not 'affinity'; "
+                "read_affinity setting will have no effect." %
+                self.sorting_method)
 
     def get_object_ring(self, policy_idx):
         """
@@ -343,7 +345,7 @@ class Application(object):
             try:
                 controller, path_parts = self.get_controller(req)
                 p = req.path_info
-                if isinstance(p, unicode):
+                if isinstance(p, six.text_type):
                     p = p.encode('utf-8')
             except APIVersionError:
                 self.logger.increment('errors')

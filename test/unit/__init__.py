@@ -41,7 +41,8 @@ import logging.handlers
 
 from six.moves.http_client import HTTPException
 from swift.common import storage_policy
-from swift.common.storage_policy import StoragePolicy, ECStoragePolicy
+from swift.common.storage_policy import (StoragePolicy, ECStoragePolicy,
+                                         VALID_EC_TYPES)
 import functools
 import six.moves.cPickle as pickle
 from gzip import GzipFile
@@ -54,6 +55,22 @@ EMPTY_ETAG = md5().hexdigest()
 if not os.path.basename(sys.argv[0]).startswith('swift'):
     # never patch HASH_PATH_SUFFIX AGAIN!
     utils.HASH_PATH_SUFFIX = 'endcap'
+
+
+EC_TYPE_PREFERENCE = [
+    'liberasurecode_rs_vand',
+    'jerasure_rs_vand',
+]
+for eclib_name in EC_TYPE_PREFERENCE:
+    if eclib_name in VALID_EC_TYPES:
+        break
+else:
+    raise SystemExit('ERROR: unable to find suitable PyECLib type'
+                     ' (none of %r found in %r)' % (
+                         EC_TYPE_PREFERENCE,
+                         VALID_EC_TYPES,
+                     ))
+DEFAULT_TEST_EC_TYPE = eclib_name
 
 
 def patch_policies(thing_or_policies=None, legacy_only=False,
@@ -70,7 +87,7 @@ def patch_policies(thing_or_policies=None, legacy_only=False,
     elif with_ec_default:
         default_policies = [
             ECStoragePolicy(0, name='ec', is_default=True,
-                            ec_type='jerasure_rs_vand', ec_ndata=10,
+                            ec_type=DEFAULT_TEST_EC_TYPE, ec_ndata=10,
                             ec_nparity=4, ec_segment_size=4096),
             StoragePolicy(1, name='unu'),
         ]
@@ -186,13 +203,6 @@ class FakeRing(Ring):
 
     def __init__(self, replicas=3, max_more_nodes=0, part_power=0,
                  base_port=1000):
-        """
-        :param part_power: make part calculation based on the path
-
-        If you set a part_power when you setup your FakeRing the parts you get
-        out of ring methods will actually be based on the path - otherwise we
-        exercise the real ring code, but ignore the result and return 1.
-        """
         self._base_port = base_port
         self.max_more_nodes = max_more_nodes
         self._part_shift = 32 - part_power
@@ -460,6 +470,12 @@ class UnmockTimeModule(object):
 logging.time = UnmockTimeModule()
 
 
+class WARN_DEPRECATED(Exception):
+    def __init__(self, msg):
+        self.msg = msg
+        print(self.msg)
+
+
 class FakeLogger(logging.Logger, object):
     # a thread safe fake logger
 
@@ -481,6 +497,9 @@ class FakeLogger(logging.Logger, object):
         logging.CRITICAL: 'critical',
         NOTICE: 'notice',
     }
+
+    def warn(self, *args, **kwargs):
+        raise WARN_DEPRECATED("Deprecated Method warn use warning instead")
 
     def notice(self, msg, *args, **kwargs):
         """

@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from contextlib import nested
 import json
 import mock
 import os
@@ -23,10 +22,10 @@ import string
 import tempfile
 import time
 import unittest
-import urlparse
 
-from eventlet.green import urllib2
+from eventlet.green import urllib2, socket
 from six import StringIO
+from six.moves import urllib
 
 from swift.cli import recon
 from swift.common import utils
@@ -87,6 +86,15 @@ class TestScout(unittest.TestCase):
         self.assertEqual(status, 404)
 
     @mock.patch('eventlet.green.urllib2.urlopen')
+    def test_scout_socket_timeout(self, mock_urlopen):
+        mock_urlopen.side_effect = socket.timeout("timeout")
+        url, content, status, ts_start, ts_end = self.scout_instance.scout(
+            ("127.0.0.1", "8080"))
+        self.assertTrue(isinstance(content, socket.timeout))
+        self.assertEqual(url, self.url)
+        self.assertEqual(status, -1)
+
+    @mock.patch('eventlet.green.urllib2.urlopen')
     def test_scout_server_type_ok(self, mock_urlopen):
         def getheader(name):
             d = {'Server': 'server-type'}
@@ -116,6 +124,15 @@ class TestScout(unittest.TestCase):
         self.assertEqual(url, self.server_type_url)
         self.assertTrue(isinstance(content, urllib2.HTTPError))
         self.assertEqual(status, 404)
+
+    @mock.patch('eventlet.green.urllib2.urlopen')
+    def test_scout_server_type_socket_timeout(self, mock_urlopen):
+        mock_urlopen.side_effect = socket.timeout("timeout")
+        url, content, status = self.scout_instance.scout_server_type(
+            ("127.0.0.1", "8080"))
+        self.assertTrue(isinstance(content, socket.timeout))
+        self.assertEqual(url, self.server_type_url)
+        self.assertEqual(status, -1)
 
 
 class TestRecon(unittest.TestCase):
@@ -147,17 +164,17 @@ class TestRecon(unittest.TestCase):
         self.assertEqual(stats.get('perc_none'), 25.0)
 
     def test_ptime(self):
-        with mock.patch('time.localtime') as mock_localtime:
-            mock_localtime.return_value = time.struct_time(
+        with mock.patch('time.gmtime') as mock_gmtime:
+            mock_gmtime.return_value = time.struct_time(
                 (2013, 12, 17, 10, 0, 0, 1, 351, 0))
 
             timestamp = self.recon_instance._ptime(1387274400)
             self.assertEqual(timestamp, "2013-12-17 10:00:00")
-            mock_localtime.assert_called_with(1387274400)
+            mock_gmtime.assert_called_with(1387274400)
 
             timestamp2 = self.recon_instance._ptime()
             self.assertEqual(timestamp2, "2013-12-17 10:00:00")
-            mock_localtime.assert_called_with()
+            mock_gmtime.assert_called_with()
 
     def test_get_devices(self):
         ringbuilder = builder.RingBuilder(2, 3, 1)
@@ -222,11 +239,8 @@ class TestRecon(unittest.TestCase):
             mock_scout.return_value = scout_instance
             stdout = StringIO()
             mock_hash = mock.MagicMock()
-            patches = [
-                mock.patch('sys.stdout', new=stdout),
-                mock.patch('swift.cli.recon.md5', new=mock_hash),
-            ]
-            with nested(*patches):
+            with mock.patch('sys.stdout', new=stdout), \
+                    mock.patch('swift.cli.recon.md5', new=mock_hash):
                 mock_hash.return_value.hexdigest.return_value = \
                     empty_file_hash
                 self.recon_instance.get_ringmd5(hosts, self.swift_dir)
@@ -277,11 +291,9 @@ class TestRecon(unittest.TestCase):
             return url, response, status, 0, 0
 
         stdout = StringIO()
-        patches = [
-            mock.patch('swift.cli.recon.Scout.scout', mock_scout_quarantine),
-            mock.patch('sys.stdout', new=stdout),
-        ]
-        with nested(*patches):
+        with mock.patch('swift.cli.recon.Scout.scout',
+                        mock_scout_quarantine), \
+                mock.patch('sys.stdout', new=stdout):
             self.recon_instance.quarantine_check(hosts)
 
         output = stdout.getvalue()
@@ -314,11 +326,9 @@ class TestRecon(unittest.TestCase):
             return url, response, status, 0, 0
 
         stdout = StringIO()
-        patches = [
-            mock.patch('swift.cli.recon.Scout.scout', mock_scout_driveaudit),
-            mock.patch('sys.stdout', new=stdout),
-        ]
-        with nested(*patches):
+        with mock.patch('swift.cli.recon.Scout.scout',
+                        mock_scout_driveaudit), \
+                mock.patch('sys.stdout', new=stdout):
             self.recon_instance.driveaudit_check(hosts)
 
         output = stdout.getvalue()
@@ -342,7 +352,7 @@ class TestReconCommands(unittest.TestCase):
     def mock_responses(self, resps):
 
         def fake_urlopen(url, timeout):
-            scheme, netloc, path, _, _, _ = urlparse.urlparse(url)
+            scheme, netloc, path, _, _, _ = urllib.parse.urlparse(url)
             self.assertEqual(scheme, 'http')  # can't handle anything else
             self.assertTrue(path.startswith('/recon/'))
 
@@ -376,19 +386,15 @@ class TestReconCommands(unittest.TestCase):
             return url, response, status
 
         stdout = StringIO()
-        patches = [
-            mock.patch('swift.cli.recon.Scout.scout_server_type',
-                       mock_scout_server_type),
-            mock.patch('sys.stdout', new=stdout),
-        ]
-
         res_object = 'Invalid: http://127.0.0.1:6010/ is object-server'
         res_container = 'Invalid: http://127.0.0.1:6011/ is container-server'
         res_account = 'Invalid: http://127.0.0.1:6012/ is account-server'
         valid = "1/1 hosts ok, 0 error[s] while checking hosts."
 
         # Test for object server type - default
-        with nested(*patches):
+        with mock.patch('swift.cli.recon.Scout.scout_server_type',
+                        mock_scout_server_type), \
+                mock.patch('sys.stdout', new=stdout):
             self.recon.server_type_check(hosts)
 
         output = stdout.getvalue()
@@ -397,7 +403,9 @@ class TestReconCommands(unittest.TestCase):
         stdout.truncate(0)
 
         # Test ok for object server type - default
-        with nested(*patches):
+        with mock.patch('swift.cli.recon.Scout.scout_server_type',
+                        mock_scout_server_type), \
+                mock.patch('sys.stdout', new=stdout):
             self.recon.server_type_check([hosts[0]])
 
         output = stdout.getvalue()
@@ -405,7 +413,9 @@ class TestReconCommands(unittest.TestCase):
         stdout.truncate(0)
 
         # Test for account server type
-        with nested(*patches):
+        with mock.patch('swift.cli.recon.Scout.scout_server_type',
+                        mock_scout_server_type), \
+                mock.patch('sys.stdout', new=stdout):
             self.recon.server_type = 'account'
             self.recon.server_type_check(hosts)
 
@@ -415,7 +425,9 @@ class TestReconCommands(unittest.TestCase):
         stdout.truncate(0)
 
         # Test ok for account server type
-        with nested(*patches):
+        with mock.patch('swift.cli.recon.Scout.scout_server_type',
+                        mock_scout_server_type), \
+                mock.patch('sys.stdout', new=stdout):
             self.recon.server_type = 'account'
             self.recon.server_type_check([hosts[2]])
 
@@ -424,7 +436,9 @@ class TestReconCommands(unittest.TestCase):
         stdout.truncate(0)
 
         # Test for container server type
-        with nested(*patches):
+        with mock.patch('swift.cli.recon.Scout.scout_server_type',
+                        mock_scout_server_type), \
+                mock.patch('sys.stdout', new=stdout):
             self.recon.server_type = 'container'
             self.recon.server_type_check(hosts)
 
@@ -434,7 +448,9 @@ class TestReconCommands(unittest.TestCase):
         stdout.truncate(0)
 
         # Test ok for container server type
-        with nested(*patches):
+        with mock.patch('swift.cli.recon.Scout.scout_server_type',
+                        mock_scout_server_type), \
+                mock.patch('sys.stdout', new=stdout):
             self.recon.server_type = 'container'
             self.recon.server_type_check([hosts[1]])
 
@@ -554,11 +570,11 @@ class TestReconCommands(unittest.TestCase):
             mock.call('=' * 79),
         ]
 
-        with mock.patch('__builtin__.print') as mock_print:
+        with mock.patch('six.moves.builtins.print') as mock_print:
             cli.disk_usage([('127.0.0.1', 6010)])
             mock_print.assert_has_calls(default_calls)
 
-        with mock.patch('__builtin__.print') as mock_print:
+        with mock.patch('six.moves.builtins.print') as mock_print:
             expected_calls = default_calls + [
                 mock.call('LOWEST 5'),
                 mock.call('85.00%  127.0.0.1       sdc1'),
@@ -568,7 +584,7 @@ class TestReconCommands(unittest.TestCase):
             cli.disk_usage([('127.0.0.1', 6010)], 0, 5)
             mock_print.assert_has_calls(expected_calls)
 
-        with mock.patch('__builtin__.print') as mock_print:
+        with mock.patch('six.moves.builtins.print') as mock_print:
             expected_calls = default_calls + [
                 mock.call('TOP 5'),
                 mock.call('90.00%  127.0.0.1       sdb1'),
@@ -578,7 +594,7 @@ class TestReconCommands(unittest.TestCase):
             cli.disk_usage([('127.0.0.1', 6010)], 5, 0)
             mock_print.assert_has_calls(expected_calls)
 
-    @mock.patch('__builtin__.print')
+    @mock.patch('six.moves.builtins.print')
     @mock.patch('time.time')
     def test_replication_check(self, mock_now, mock_print):
         now = 1430000000.0
@@ -633,7 +649,7 @@ class TestReconCommands(unittest.TestCase):
         # that is returned from the recon middleware, thus can't rely on it
         mock_print.assert_has_calls(default_calls, any_order=True)
 
-    @mock.patch('__builtin__.print')
+    @mock.patch('six.moves.builtins.print')
     @mock.patch('time.time')
     def test_load_check(self, mock_now, mock_print):
         now = 1430000000.0
@@ -672,7 +688,7 @@ class TestReconCommands(unittest.TestCase):
         # that is returned from the recon middleware, thus can't rely on it
         mock_print.assert_has_calls(default_calls, any_order=True)
 
-    @mock.patch('__builtin__.print')
+    @mock.patch('six.moves.builtins.print')
     @mock.patch('time.time')
     def test_time_check(self, mock_now, mock_print):
         now = 1430000000.0
@@ -704,7 +720,7 @@ class TestReconCommands(unittest.TestCase):
         # that is returned from the recon middleware, thus can't rely on it
         mock_print.assert_has_calls(default_calls, any_order=True)
 
-    @mock.patch('__builtin__.print')
+    @mock.patch('six.moves.builtins.print')
     @mock.patch('time.time')
     def test_time_check_mismatch(self, mock_now, mock_print):
         now = 1430000000.0
@@ -734,11 +750,7 @@ class TestReconCommands(unittest.TestCase):
             mock.call('1/2 hosts matched, 0 error[s] while checking hosts.'),
         ]
 
-        def mock_localtime(*args, **kwargs):
-            return time.gmtime(*args, **kwargs)
-
-        with mock.patch("time.localtime", mock_localtime):
-            cli.time_check([('127.0.0.1', 6010), ('127.0.0.1', 6020)])
+        cli.time_check([('127.0.0.1', 6010), ('127.0.0.1', 6020)])
 
         # We need any_order=True because the order of calls depends on the dict
         # that is returned from the recon middleware, thus can't rely on it

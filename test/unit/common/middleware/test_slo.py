@@ -17,26 +17,26 @@
 from six.moves import range
 
 import hashlib
+import json
 import time
 import unittest
-from contextlib import nested
 from mock import patch
 from hashlib import md5
 from swift.common import swob, utils
 from swift.common.exceptions import ListingIterError, SegmentError
 from swift.common.middleware import slo
 from swift.common.swob import Request, Response, HTTPException
-from swift.common.utils import quote, json, closing_if_possible
+from swift.common.utils import quote, closing_if_possible, close_if_possible
 from test.unit.common.middleware.helpers import FakeSwift
 
 
 test_xml_data = '''<?xml version="1.0" encoding="UTF-8"?>
 <static_large_object>
-<object_segment>
-<path>/cont/object</path>
-<etag>etagoftheobjectsegment</etag>
-<size_bytes>100</size_bytes>
-</object_segment>
+  <object_segment>
+    <path>/cont/object</path>
+    <etag>etagoftheobjectsegment</etag>
+    <size_bytes>100</size_bytes>
+  </object_segment>
 </static_large_object>
 '''
 test_json_data = json.dumps([{'path': '/cont/object',
@@ -108,8 +108,8 @@ class TestSloMiddleware(SloTestCase):
     def test_handle_multipart_no_obj(self):
         req = Request.blank('/')
         resp_iter = self.slo(req.environ, fake_start_response)
-        self.assertEquals(self.app.calls, [('GET', '/')])
-        self.assertEquals(''.join(resp_iter), 'passed')
+        self.assertEqual(self.app.calls, [('GET', '/')])
+        self.assertEqual(''.join(resp_iter), 'passed')
 
     def test_slo_header_assigned(self):
         req = Request.blank(
@@ -119,28 +119,171 @@ class TestSloMiddleware(SloTestCase):
         self.assertTrue(
             resp.startswith('X-Static-Large-Object is a reserved header'))
 
-    def test_parse_input(self):
-        self.assertRaises(HTTPException, slo.parse_input, 'some non json')
-        self.assertRaises(HTTPException, slo.parse_input, '[{}]')
-        self.assertRaises(HTTPException, slo.parse_input, json.dumps(
-            [{'path': '/cont/object', 'etag': 'etagoftheobjecitsegment',
-              'size_bytes': 100, 'foo': 'bar'}]))
-        self.assertRaises(HTTPException, slo.parse_input, json.dumps(
-            [{'path': '/cont/object', 'etag': 'etagoftheobjecitsegment',
-              'size_bytes': 100, 'range': 'non-range value'}]))
+    def _put_bogus_slo(self, manifest_text,
+                       manifest_path='/v1/a/c/the-manifest',
+                       min_segment_size=1):
+        with self.assertRaises(HTTPException) as catcher:
+            slo.parse_and_validate_input(manifest_text, manifest_path,
+                                         min_segment_size)
+        self.assertEqual(400, catcher.exception.status_int)
+        return catcher.exception.body
 
+    def _put_slo(self, manifest_text, manifest_path='/v1/a/c/the-manifest',
+                 min_segment_size=1):
+        return slo.parse_and_validate_input(manifest_text, manifest_path,
+                                            min_segment_size)
+
+    def test_bogus_input(self):
+        self.assertEqual('Manifest must be valid JSON.\n',
+                         self._put_bogus_slo('some non json'))
+
+        self.assertEqual('Manifest must be a list.\n',
+                         self._put_bogus_slo('{}'))
+
+        self.assertEqual('Index 0: not a JSON object\n',
+                         self._put_bogus_slo('["zombocom"]'))
+
+    def test_bogus_input_bad_keys(self):
+        self.assertEqual(
+            "Index 0: extraneous keys \"baz\", \"foo\"\n",
+            self._put_bogus_slo(json.dumps(
+                [{'path': '/cont/object', 'etag': 'etagoftheobjectsegment',
+                  'size_bytes': 100,
+                  'foo': 'bar', 'baz': 'quux'}])))
+
+    def test_bogus_input_ranges(self):
+        self.assertEqual(
+            "Index 0: invalid range\n",
+            self._put_bogus_slo(json.dumps(
+                [{'path': '/cont/object', 'etag': 'blah',
+                  'size_bytes': 100, 'range': 'non-range value'}])))
+
+        self.assertEqual(
+            "Index 0: multiple ranges (only one allowed)\n",
+            self._put_bogus_slo(json.dumps(
+                [{'path': '/cont/object', 'etag': 'blah',
+                  'size_bytes': 100, 'range': '1-20,30-40'}])))
+
+    def test_bogus_input_unsatisfiable_range(self):
+        self.assertEqual(
+            "Index 0: unsatisfiable range\n",
+            self._put_bogus_slo(json.dumps(
+                [{'path': '/cont/object', 'etag': 'blah',
+                  'size_bytes': 100, 'range': '8888-9999'}])))
+
+        # since size is optional, we have to be able to defer this check
+        segs = self._put_slo(json.dumps(
+            [{'path': '/cont/object', 'etag': 'blah',
+              'size_bytes': None, 'range': '8888-9999'}]))
+        self.assertEqual(1, len(segs))
+
+    def test_bogus_input_path(self):
+        self.assertEqual(
+            "Index 0: path does not refer to an object. Path must be of the "
+            "form /container/object.\n"
+            "Index 1: path does not refer to an object. Path must be of the "
+            "form /container/object.\n",
+            self._put_bogus_slo(json.dumps(
+                [{'path': '/cont', 'etag': 'etagoftheobjectsegment',
+                  'size_bytes': 100},
+                 {'path': '/c-trailing-slash/', 'etag': 'e',
+                  'size_bytes': 100},
+                 {'path': '/con/obj', 'etag': 'e',
+                  'size_bytes': 100},
+                 {'path': '/con/obj-trailing-slash/', 'etag': 'e',
+                  'size_bytes': 100},
+                 {'path': '/con/obj/with/slashes', 'etag': 'e',
+                  'size_bytes': 100}])))
+
+    def test_bogus_input_multiple(self):
+        self.assertEqual(
+            "Index 0: invalid range\nIndex 1: not a JSON object\n",
+            self._put_bogus_slo(json.dumps(
+                [{'path': '/cont/object', 'etag': 'etagoftheobjectsegment',
+                  'size_bytes': 100, 'range': 'non-range value'},
+                 None])))
+
+    def test_bogus_input_size_bytes(self):
+        self.assertEqual(
+            "Index 0: invalid size_bytes\n",
+            self._put_bogus_slo(json.dumps(
+                [{'path': '/cont/object', 'etag': 'blah', 'size_bytes': "fht"},
+                 {'path': '/cont/object', 'etag': 'blah', 'size_bytes': None},
+                 {'path': '/cont/object', 'etag': 'blah', 'size_bytes': 100}],
+            )))
+
+        self.assertEqual(
+            "Index 0: invalid size_bytes\n",
+            self._put_bogus_slo(json.dumps(
+                [{'path': '/cont/object', 'etag': 'blah', 'size_bytes': []}],
+            )))
+
+    def test_bogus_input_self_referential(self):
+        self.assertEqual(
+            "Index 0: manifest must not include itself as a segment\n",
+            self._put_bogus_slo(json.dumps(
+                [{'path': '/c/the-manifest', 'etag': 'gate',
+                  'size_bytes': 100, 'range': 'non-range value'}])))
+
+    def test_bogus_input_self_referential_non_ascii(self):
+        self.assertEqual(
+            "Index 0: manifest must not include itself as a segment\n",
+            self._put_bogus_slo(
+                json.dumps([{'path': u'/c/あ_1',
+                             'etag': 'a', 'size_bytes': 1}]),
+                manifest_path=quote(u'/v1/a/c/あ_1')))
+
+    def test_bogus_input_self_referential_last_segment(self):
+        test_json_data = json.dumps([
+            {'path': '/c/seg_1', 'etag': 'a', 'size_bytes': 1},
+            {'path': '/c/seg_2', 'etag': 'a', 'size_bytes': 1},
+            {'path': '/c/seg_3', 'etag': 'a', 'size_bytes': 1},
+            {'path': '/c/the-manifest', 'etag': 'a', 'size_bytes': 1},
+        ])
+        self.assertEqual(
+            "Index 3: manifest must not include itself as a segment\n",
+            self._put_bogus_slo(
+                test_json_data,
+                manifest_path=quote('/v1/a/c/the-manifest')))
+
+    def test_bogus_input_undersize_segment(self):
+        self.assertEqual(
+            "Index 1: too small; each segment, except the last, "
+            "must be at least 1000 bytes.\n"
+            "Index 2: too small; each segment, except the last, "
+            "must be at least 1000 bytes.\n",
+            self._put_bogus_slo(
+                json.dumps([
+                    {'path': u'/c/s1', 'etag': 'a', 'size_bytes': 1000},
+                    {'path': u'/c/s2', 'etag': 'b', 'size_bytes': 999},
+                    {'path': u'/c/s3', 'etag': 'c', 'size_bytes': 998},
+                    # No error for this one since size_bytes is unspecified
+                    {'path': u'/c/s4', 'etag': 'd', 'size_bytes': None},
+                    {'path': u'/c/s5', 'etag': 'e', 'size_bytes': 996}]),
+                min_segment_size=1000))
+
+    def test_valid_input(self):
         data = json.dumps(
-            [{'path': '/cont/object', 'etag': 'etagoftheobjecitsegment',
+            [{'path': '/cont/object', 'etag': 'etagoftheobjectsegment',
               'size_bytes': 100}])
-        self.assertEquals('/cont/object',
-                          slo.parse_input(data)[0]['path'])
+        self.assertEqual(
+            '/cont/object',
+            slo.parse_and_validate_input(data, '/v1/a/cont/man', 1)[0]['path'])
 
         data = json.dumps(
-            [{'path': '/cont/object', 'etag': 'etagoftheobjecitsegment',
-              'size_bytes': 100, 'range': '0-40,30-90'}])
-        parsed = slo.parse_input(data)
-        self.assertEquals('/cont/object', parsed[0]['path'])
-        self.assertEquals([(0, 40), (30, 90)], parsed[0]['range'].ranges)
+            [{'path': '/cont/object', 'etag': 'etagoftheobjectsegment',
+              'size_bytes': 100, 'range': '0-40'}])
+        parsed = slo.parse_and_validate_input(data, '/v1/a/cont/man', 1)
+        self.assertEqual('/cont/object', parsed[0]['path'])
+        self.assertEqual([(0, 40)], parsed[0]['range'].ranges)
+
+        data = json.dumps(
+            [{'path': '/cont/object', 'etag': 'etagoftheobjectsegment',
+              'size_bytes': None, 'range': '0-40'}])
+        parsed = slo.parse_and_validate_input(data, '/v1/a/cont/man', 1)
+        self.assertEqual('/cont/object', parsed[0]['path'])
+        self.assertEqual(None, parsed[0]['size_bytes'])
+        self.assertEqual([(0, 40)], parsed[0]['range'].ranges)
 
 
 class TestSloPutManifest(SloTestCase):
@@ -213,7 +356,7 @@ class TestSloPutManifest(SloTestCase):
             self.slo.handle_multipart_put(req, fake_start_response)
         except HTTPException as e:
             pass
-        self.assertEquals(e.status_int, 413)
+        self.assertEqual(e.status_int, 413)
 
         with patch.object(self.slo, 'max_manifest_segments', 0):
             req = Request.blank('/v1/a/c/o', body=test_json_data)
@@ -222,7 +365,7 @@ class TestSloPutManifest(SloTestCase):
                 self.slo.handle_multipart_put(req, fake_start_response)
             except HTTPException as e:
                 pass
-            self.assertEquals(e.status_int, 413)
+            self.assertEqual(e.status_int, 413)
 
         with patch.object(self.slo, 'min_segment_size', 1000):
             test_json_data_2obj = json.dumps(
@@ -237,20 +380,20 @@ class TestSloPutManifest(SloTestCase):
                 self.slo.handle_multipart_put(req, fake_start_response)
             except HTTPException as e:
                 pass
-            self.assertEquals(e.status_int, 400)
+            self.assertEqual(e.status_int, 400)
 
         req = Request.blank('/v1/a/c/o', headers={'X-Copy-From': 'lala'})
         try:
             self.slo.handle_multipart_put(req, fake_start_response)
         except HTTPException as e:
             pass
-        self.assertEquals(e.status_int, 405)
+        self.assertEqual(e.status_int, 405)
 
         # ignores requests to /
         req = Request.blank(
             '/?multipart-manifest=put',
             environ={'REQUEST_METHOD': 'PUT'}, body=test_json_data)
-        self.assertEquals(
+        self.assertEqual(
             list(self.slo.handle_multipart_put(req, fake_start_response)),
             ['passed'])
 
@@ -310,7 +453,7 @@ class TestSloPutManifest(SloTestCase):
                 self.slo.handle_multipart_put(req, fake_start_response)
             except HTTPException as e:
                 pass
-            self.assertEquals(e.status_int, 400)
+            self.assertEqual(e.status_int, 400)
 
     def test_handle_multipart_put_success_unicode(self):
         test_json_data = json.dumps([{'path': u'/cont/object\u2661',
@@ -331,7 +474,7 @@ class TestSloPutManifest(SloTestCase):
             environ={'REQUEST_METHOD': 'PUT'}, headers={'Accept': 'test'},
             body=test_xml_data)
         no_xml = self.slo(req.environ, fake_start_response)
-        self.assertEquals(no_xml, ['Manifest must be valid json.'])
+        self.assertEqual(no_xml, ['Manifest must be valid JSON.\n'])
 
     def test_handle_multipart_put_bad_data(self):
         bad_data = json.dumps([{'path': '/cont/object',
@@ -358,6 +501,7 @@ class TestSloPutManifest(SloTestCase):
                              'etag': 'etagoftheobj', 'size_bytes': 100}]),
                 json.dumps([{'path': 12, 'size_bytes': 100}]),
                 json.dumps([{'path': 12, 'size_bytes': 100}]),
+                json.dumps([{'path': '/c/o', 'etag': 123, 'size_bytes': 100}]),
                 json.dumps([{'path': None, 'etag': 'etagoftheobj',
                              'size_bytes': 100}])]:
             req = Request.blank(
@@ -374,7 +518,7 @@ class TestSloPutManifest(SloTestCase):
             '/v1/AUTH_test/checktest/man_3?multipart-manifest=put',
             environ={'REQUEST_METHOD': 'PUT'}, body=good_data)
         status, headers, body = self.call_slo(req)
-        self.assertEquals(self.app.call_count, 3)
+        self.assertEqual(self.app.call_count, 3)
 
         # go behind SLO's back and see what actually got stored
         req = Request.blank(
@@ -386,9 +530,9 @@ class TestSloPutManifest(SloTestCase):
         headers = dict(headers)
         manifest_data = json.loads(body)
         self.assertTrue(headers['Content-Type'].endswith(';swift_bytes=3'))
-        self.assertEquals(len(manifest_data), 2)
-        self.assertEquals(manifest_data[0]['hash'], 'a')
-        self.assertEquals(manifest_data[0]['bytes'], 1)
+        self.assertEqual(len(manifest_data), 2)
+        self.assertEqual(manifest_data[0]['hash'], 'a')
+        self.assertEqual(manifest_data[0]['bytes'], 1)
         self.assertTrue(
             not manifest_data[0]['last_modified'].startswith('2012'))
         self.assertTrue(manifest_data[1]['last_modified'].startswith('2012'))
@@ -407,59 +551,19 @@ class TestSloPutManifest(SloTestCase):
             body=bad_data)
 
         status, headers, body = self.call_slo(req)
-        self.assertEquals(self.app.call_count, 5)
+        self.assertEqual(self.app.call_count, 5)
         errors = json.loads(body)['Errors']
-        self.assertEquals(len(errors), 5)
-        self.assertEquals(errors[0][0], '/checktest/a_1')
-        self.assertEquals(errors[0][1], 'Size Mismatch')
-        self.assertEquals(errors[1][0], '/checktest/badreq')
-        self.assertEquals(errors[1][1], '400 Bad Request')
-        self.assertEquals(errors[2][0], '/checktest/b_2')
-        self.assertEquals(errors[2][1], 'Etag Mismatch')
-        self.assertEquals(errors[3][0], '/checktest/slob')
-        self.assertEquals(errors[3][1], 'Size Mismatch')
-        self.assertEquals(errors[4][0], '/checktest/slob')
-        self.assertEquals(errors[4][1], 'Etag Mismatch')
-
-    def test_handle_multipart_put_manifest_equal_slo(self):
-        test_json_data = json.dumps([{'path': '/cont/object',
-                                      'etag': 'etagoftheobjectsegment',
-                                      'size_bytes': 100}])
-        req = Request.blank(
-            '/v1/AUTH_test/cont/object?multipart-manifest=put',
-            environ={'REQUEST_METHOD': 'PUT'}, headers={'Accept': 'test'},
-            body=test_json_data)
-        status, headers, body = self.call_slo(req)
-        self.assertEqual(status, '409 Conflict')
-        self.assertEqual(self.app.call_count, 0)
-
-    def test_handle_multipart_put_manifest_equal_slo_non_ascii(self):
-        test_json_data = json.dumps([{'path': u'/cont/あ_1',
-                                      'etag': 'a',
-                                      'size_bytes': 1}])
-        path = quote(u'/v1/AUTH_test/cont/あ_1')
-        req = Request.blank(
-            path + '?multipart-manifest=put',
-            environ={'REQUEST_METHOD': 'PUT'}, headers={'Accept': 'test'},
-            body=test_json_data)
-        status, headers, body = self.call_slo(req)
-        self.assertEqual(status, '409 Conflict')
-        self.assertEqual(self.app.call_count, 0)
-
-    def test_handle_multipart_put_manifest_equal_last_segment(self):
-        test_json_data = json.dumps([{'path': '/cont/object',
-                                      'etag': 'etagoftheobjectsegment',
-                                      'size_bytes': 100},
-                                     {'path': '/cont/object2',
-                                      'etag': 'etagoftheobjectsegment',
-                                      'size_bytes': 100}])
-        req = Request.blank(
-            '/v1/AUTH_test/cont/object2?multipart-manifest=put',
-            environ={'REQUEST_METHOD': 'PUT'}, headers={'Accept': 'test'},
-            body=test_json_data)
-        status, headers, body = self.call_slo(req)
-        self.assertEqual(status, '409 Conflict')
-        self.assertEqual(self.app.call_count, 1)
+        self.assertEqual(len(errors), 5)
+        self.assertEqual(errors[0][0], '/checktest/a_1')
+        self.assertEqual(errors[0][1], 'Size Mismatch')
+        self.assertEqual(errors[1][0], '/checktest/badreq')
+        self.assertEqual(errors[1][1], '400 Bad Request')
+        self.assertEqual(errors[2][0], '/checktest/b_2')
+        self.assertEqual(errors[2][1], 'Etag Mismatch')
+        self.assertEqual(errors[3][0], '/checktest/slob')
+        self.assertEqual(errors[3][1], 'Size Mismatch')
+        self.assertEqual(errors[4][0], '/checktest/slob')
+        self.assertEqual(errors[4][1], 'Etag Mismatch')
 
     def test_handle_multipart_put_skip_size_check(self):
         good_data = json.dumps(
@@ -469,7 +573,7 @@ class TestSloPutManifest(SloTestCase):
             '/v1/AUTH_test/checktest/man_3?multipart-manifest=put',
             environ={'REQUEST_METHOD': 'PUT'}, body=good_data)
         status, headers, body = self.call_slo(req)
-        self.assertEquals(self.app.call_count, 3)
+        self.assertEqual(self.app.call_count, 3)
 
         # Check that we still populated the manifest properly from our HEADs
         req = Request.blank(
@@ -479,8 +583,8 @@ class TestSloPutManifest(SloTestCase):
             environ={'REQUEST_METHOD': 'GET'})
         status, headers, body = self.call_app(req)
         manifest_data = json.loads(body)
-        self.assertEquals(1, manifest_data[0]['bytes'])
-        self.assertEquals(2, manifest_data[1]['bytes'])
+        self.assertEqual(1, manifest_data[0]['bytes'])
+        self.assertEqual(2, manifest_data[1]['bytes'])
 
     def test_handle_multipart_put_skip_size_check_still_uses_min_size(self):
         with patch.object(self.slo, 'min_segment_size', 50):
@@ -493,7 +597,25 @@ class TestSloPutManifest(SloTestCase):
             req = Request.blank('/v1/AUTH_test/c/o', body=test_json_data)
             with self.assertRaises(HTTPException) as cm:
                 self.slo.handle_multipart_put(req, fake_start_response)
-            self.assertEquals(cm.exception.status_int, 400)
+            self.assertEqual(cm.exception.status_int, 400)
+
+    def test_handle_multipart_put_skip_size_check_no_early_bailout(self):
+        with patch.object(self.slo, 'min_segment_size', 50):
+            # The first is too small (it's 10 bytes but min size is 50), and
+            # the second has a bad etag. Make sure both errors show up in
+            # the response.
+            test_json_data = json.dumps([{'path': '/cont/small_object',
+                                          'etag': 'etagoftheobjectsegment',
+                                          'size_bytes': None},
+                                         {'path': '/cont/object2',
+                                          'etag': 'wrong wrong wrong',
+                                          'size_bytes': 100}])
+            req = Request.blank('/v1/AUTH_test/c/o', body=test_json_data)
+            with self.assertRaises(HTTPException) as cm:
+                self.slo.handle_multipart_put(req, fake_start_response)
+            self.assertEqual(cm.exception.status_int, 400)
+            self.assertIn('at least 50 bytes', cm.exception.body)
+            self.assertIn('Etag Mismatch', cm.exception.body)
 
     def test_handle_multipart_put_skip_etag_check(self):
         good_data = json.dumps(
@@ -503,7 +625,7 @@ class TestSloPutManifest(SloTestCase):
             '/v1/AUTH_test/checktest/man_3?multipart-manifest=put',
             environ={'REQUEST_METHOD': 'PUT'}, body=good_data)
         status, headers, body = self.call_slo(req)
-        self.assertEquals(self.app.call_count, 3)
+        self.assertEqual(self.app.call_count, 3)
 
         # Check that we still populated the manifest properly from our HEADs
         req = Request.blank(
@@ -513,8 +635,8 @@ class TestSloPutManifest(SloTestCase):
             environ={'REQUEST_METHOD': 'GET'})
         status, headers, body = self.call_app(req)
         manifest_data = json.loads(body)
-        self.assertEquals('a', manifest_data[0]['hash'])
-        self.assertEquals('b', manifest_data[1]['hash'])
+        self.assertEqual('a', manifest_data[0]['hash'])
+        self.assertEqual('b', manifest_data[1]['hash'])
 
     def test_handle_unsatisfiable_ranges(self):
         bad_data = json.dumps(
@@ -526,11 +648,12 @@ class TestSloPutManifest(SloTestCase):
         with self.assertRaises(HTTPException) as catcher:
             self.slo.handle_multipart_put(req, fake_start_response)
         self.assertEqual(400, catcher.exception.status_int)
+        self.assertIn("Unsatisfiable Range", catcher.exception.body)
 
     def test_handle_single_ranges(self):
         good_data = json.dumps(
             [{'path': '/checktest/a_1', 'etag': None,
-              'size_bytes': 1, 'range': '0-0'},
+              'size_bytes': None, 'range': '0-0'},
              {'path': '/checktest/b_2', 'etag': None,
               'size_bytes': 2, 'range': '-1'},
              {'path': '/checktest/b_2', 'etag': None,
@@ -559,37 +682,18 @@ class TestSloPutManifest(SloTestCase):
             environ={'REQUEST_METHOD': 'GET'})
         status, headers, body = self.call_app(req)
         manifest_data = json.loads(body)
-        self.assertEquals('a', manifest_data[0]['hash'])
+        self.assertEqual('a', manifest_data[0]['hash'])
         self.assertNotIn('range', manifest_data[0])
         self.assertNotIn('segment_bytes', manifest_data[0])
 
-        self.assertEquals('b', manifest_data[1]['hash'])
-        self.assertEquals('1-1', manifest_data[1]['range'])
+        self.assertEqual('b', manifest_data[1]['hash'])
+        self.assertEqual('1-1', manifest_data[1]['range'])
 
-        self.assertEquals('b', manifest_data[2]['hash'])
-        self.assertEquals('0-0', manifest_data[2]['range'])
+        self.assertEqual('b', manifest_data[2]['hash'])
+        self.assertEqual('0-0', manifest_data[2]['range'])
 
-        self.assertEquals('etagoftheobjectsegment', manifest_data[3]['hash'])
-        self.assertEquals('10-40', manifest_data[3]['range'])
-
-    def test_handle_multiple_ranges_error(self):
-        good_data = json.dumps(
-            [{'path': '/checktest/a_1', 'etag': None,
-              'size_bytes': 1, 'range': '0-100'},
-             {'path': '/checktest/b_2', 'etag': None,
-              'size_bytes': 2, 'range': '-1,0-0'},
-             {'path': '/cont/object', 'etag': None,
-              'size_bytes': None, 'range': '10-30,20-40'}])
-        req = Request.blank(
-            '/v1/AUTH_test/checktest/man_3?multipart-manifest=put',
-            environ={'REQUEST_METHOD': 'PUT'}, body=good_data)
-        status, headers, body = self.call_slo(req)
-        self.assertEqual(status, '400 Bad Request')
-        self.assertEquals(self.app.call_count, 3)
-        self.assertEqual(body, '\n'.join([
-            'Errors:',
-            '/checktest/b_2, Multiple Ranges',
-            '/cont/object, Multiple Ranges']))
+        self.assertEqual('etagoftheobjectsegment', manifest_data[3]['hash'])
+        self.assertEqual('10-40', manifest_data[3]['range'])
 
 
 class TestSloDeleteManifest(SloTestCase):
@@ -707,7 +811,7 @@ class TestSloDeleteManifest(SloTestCase):
             '/v1/AUTH_test/deltest/man',
             environ={'REQUEST_METHOD': 'DELETE'})
         self.slo(req.environ, fake_start_response)
-        self.assertEquals(self.app.call_count, 1)
+        self.assertEqual(self.app.call_count, 1)
 
     def test_handle_multipart_delete_bad_utf8(self):
         req = Request.blank(
@@ -715,10 +819,10 @@ class TestSloDeleteManifest(SloTestCase):
             environ={'REQUEST_METHOD': 'DELETE',
                      'HTTP_ACCEPT': 'application/json'})
         status, headers, body = self.call_slo(req)
-        self.assertEquals(status, '200 OK')
+        self.assertEqual(status, '200 OK')
         resp_data = json.loads(body)
-        self.assertEquals(resp_data['Response Status'],
-                          '412 Precondition Failed')
+        self.assertEqual(resp_data['Response Status'],
+                         '412 Precondition Failed')
 
     def test_handle_multipart_delete_whole_404(self):
         req = Request.blank(
@@ -727,15 +831,15 @@ class TestSloDeleteManifest(SloTestCase):
                      'HTTP_ACCEPT': 'application/json'})
         status, headers, body = self.call_slo(req)
         resp_data = json.loads(body)
-        self.assertEquals(
+        self.assertEqual(
             self.app.calls,
             [('GET',
               '/v1/AUTH_test/deltest/man_404?multipart-manifest=get')])
-        self.assertEquals(resp_data['Response Status'], '200 OK')
-        self.assertEquals(resp_data['Response Body'], '')
-        self.assertEquals(resp_data['Number Deleted'], 0)
-        self.assertEquals(resp_data['Number Not Found'], 1)
-        self.assertEquals(resp_data['Errors'], [])
+        self.assertEqual(resp_data['Response Status'], '200 OK')
+        self.assertEqual(resp_data['Response Body'], '')
+        self.assertEqual(resp_data['Number Deleted'], 0)
+        self.assertEqual(resp_data['Number Not Found'], 1)
+        self.assertEqual(resp_data['Errors'], [])
 
     def test_handle_multipart_delete_segment_404(self):
         req = Request.blank(
@@ -744,7 +848,7 @@ class TestSloDeleteManifest(SloTestCase):
                      'HTTP_ACCEPT': 'application/json'})
         status, headers, body = self.call_slo(req)
         resp_data = json.loads(body)
-        self.assertEquals(
+        self.assertEqual(
             self.app.calls,
             [('GET',
               '/v1/AUTH_test/deltest/man?multipart-manifest=get'),
@@ -754,16 +858,16 @@ class TestSloDeleteManifest(SloTestCase):
               '/v1/AUTH_test/deltest/b_2?multipart-manifest=delete'),
              ('DELETE',
               '/v1/AUTH_test/deltest/man?multipart-manifest=delete')])
-        self.assertEquals(resp_data['Response Status'], '200 OK')
-        self.assertEquals(resp_data['Number Deleted'], 2)
-        self.assertEquals(resp_data['Number Not Found'], 1)
+        self.assertEqual(resp_data['Response Status'], '200 OK')
+        self.assertEqual(resp_data['Number Deleted'], 2)
+        self.assertEqual(resp_data['Number Not Found'], 1)
 
     def test_handle_multipart_delete_whole(self):
         req = Request.blank(
             '/v1/AUTH_test/deltest/man-all-there?multipart-manifest=delete',
             environ={'REQUEST_METHOD': 'DELETE'})
         self.call_slo(req)
-        self.assertEquals(
+        self.assertEqual(
             self.app.calls,
             [('GET',
               '/v1/AUTH_test/deltest/man-all-there?multipart-manifest=get'),
@@ -778,7 +882,7 @@ class TestSloDeleteManifest(SloTestCase):
             'multipart-manifest=delete',
             environ={'REQUEST_METHOD': 'DELETE'})
         self.call_slo(req)
-        self.assertEquals(
+        self.assertEqual(
             set(self.app.calls),
             set([('GET', '/v1/AUTH_test/deltest/' +
                   'manifest-with-submanifest?multipart-manifest=get'),
@@ -807,11 +911,11 @@ class TestSloDeleteManifest(SloTestCase):
                      'HTTP_ACCEPT': 'application/json'})
         with patch.object(slo, 'MAX_BUFFERED_SLO_SEGMENTS', 1):
             status, headers, body = self.call_slo(req)
-        self.assertEquals(status, '200 OK')
+        self.assertEqual(status, '200 OK')
         resp_data = json.loads(body)
-        self.assertEquals(resp_data['Response Status'], '400 Bad Request')
-        self.assertEquals(resp_data['Response Body'],
-                          'Too many buffered slo segments to delete.')
+        self.assertEqual(resp_data['Response Status'], '400 Bad Request')
+        self.assertEqual(resp_data['Response Body'],
+                         'Too many buffered slo segments to delete.')
 
     def test_handle_multipart_delete_nested_404(self):
         req = Request.blank(
@@ -821,7 +925,7 @@ class TestSloDeleteManifest(SloTestCase):
                      'HTTP_ACCEPT': 'application/json'})
         status, headers, body = self.call_slo(req)
         resp_data = json.loads(body)
-        self.assertEquals(
+        self.assertEqual(
             self.app.calls,
             [('GET', '/v1/AUTH_test/deltest/' +
               'manifest-missing-submanifest?multipart-manifest=get'),
@@ -831,11 +935,11 @@ class TestSloDeleteManifest(SloTestCase):
              ('DELETE', '/v1/AUTH_test/deltest/d_3?multipart-manifest=delete'),
              ('DELETE', '/v1/AUTH_test/deltest/' +
               'manifest-missing-submanifest?multipart-manifest=delete')])
-        self.assertEquals(resp_data['Response Status'], '200 OK')
-        self.assertEquals(resp_data['Response Body'], '')
-        self.assertEquals(resp_data['Number Deleted'], 3)
-        self.assertEquals(resp_data['Number Not Found'], 1)
-        self.assertEquals(resp_data['Errors'], [])
+        self.assertEqual(resp_data['Response Status'], '200 OK')
+        self.assertEqual(resp_data['Response Body'], '')
+        self.assertEqual(resp_data['Number Deleted'], 3)
+        self.assertEqual(resp_data['Number Not Found'], 1)
+        self.assertEqual(resp_data['Errors'], [])
 
     def test_handle_multipart_delete_nested_401(self):
         self.app.register(
@@ -848,11 +952,11 @@ class TestSloDeleteManifest(SloTestCase):
             environ={'REQUEST_METHOD': 'DELETE',
                      'HTTP_ACCEPT': 'application/json'})
         status, headers, body = self.call_slo(req)
-        self.assertEquals(status, '200 OK')
+        self.assertEqual(status, '200 OK')
         resp_data = json.loads(body)
-        self.assertEquals(resp_data['Response Status'], '400 Bad Request')
-        self.assertEquals(resp_data['Errors'],
-                          [['/deltest/submanifest', '401 Unauthorized']])
+        self.assertEqual(resp_data['Response Status'], '400 Bad Request')
+        self.assertEqual(resp_data['Errors'],
+                         [['/deltest/submanifest', '401 Unauthorized']])
 
     def test_handle_multipart_delete_nested_500(self):
         self.app.register(
@@ -865,12 +969,12 @@ class TestSloDeleteManifest(SloTestCase):
             environ={'REQUEST_METHOD': 'DELETE',
                      'HTTP_ACCEPT': 'application/json'})
         status, headers, body = self.call_slo(req)
-        self.assertEquals(status, '200 OK')
+        self.assertEqual(status, '200 OK')
         resp_data = json.loads(body)
-        self.assertEquals(resp_data['Response Status'], '400 Bad Request')
-        self.assertEquals(resp_data['Errors'],
-                          [['/deltest/submanifest',
-                            'Unable to load SLO manifest or segment.']])
+        self.assertEqual(resp_data['Response Status'], '400 Bad Request')
+        self.assertEqual(resp_data['Errors'],
+                         [['/deltest/submanifest',
+                           'Unable to load SLO manifest or segment.']])
 
     def test_handle_multipart_delete_not_a_manifest(self):
         req = Request.blank(
@@ -879,15 +983,15 @@ class TestSloDeleteManifest(SloTestCase):
                      'HTTP_ACCEPT': 'application/json'})
         status, headers, body = self.call_slo(req)
         resp_data = json.loads(body)
-        self.assertEquals(
+        self.assertEqual(
             self.app.calls,
             [('GET', '/v1/AUTH_test/deltest/a_1?multipart-manifest=get')])
-        self.assertEquals(resp_data['Response Status'], '400 Bad Request')
-        self.assertEquals(resp_data['Response Body'], '')
-        self.assertEquals(resp_data['Number Deleted'], 0)
-        self.assertEquals(resp_data['Number Not Found'], 0)
-        self.assertEquals(resp_data['Errors'],
-                          [['/deltest/a_1', 'Not an SLO manifest']])
+        self.assertEqual(resp_data['Response Status'], '400 Bad Request')
+        self.assertEqual(resp_data['Response Body'], '')
+        self.assertEqual(resp_data['Number Deleted'], 0)
+        self.assertEqual(resp_data['Number Not Found'], 0)
+        self.assertEqual(resp_data['Errors'],
+                         [['/deltest/a_1', 'Not an SLO manifest']])
 
     def test_handle_multipart_delete_bad_json(self):
         req = Request.blank(
@@ -896,16 +1000,16 @@ class TestSloDeleteManifest(SloTestCase):
                      'HTTP_ACCEPT': 'application/json'})
         status, headers, body = self.call_slo(req)
         resp_data = json.loads(body)
-        self.assertEquals(self.app.calls,
-                          [('GET', '/v1/AUTH_test/deltest/' +
-                            'manifest-badjson?multipart-manifest=get')])
-        self.assertEquals(resp_data['Response Status'], '400 Bad Request')
-        self.assertEquals(resp_data['Response Body'], '')
-        self.assertEquals(resp_data['Number Deleted'], 0)
-        self.assertEquals(resp_data['Number Not Found'], 0)
-        self.assertEquals(resp_data['Errors'],
-                          [['/deltest/manifest-badjson',
-                            'Unable to load SLO manifest']])
+        self.assertEqual(self.app.calls,
+                         [('GET', '/v1/AUTH_test/deltest/' +
+                           'manifest-badjson?multipart-manifest=get')])
+        self.assertEqual(resp_data['Response Status'], '400 Bad Request')
+        self.assertEqual(resp_data['Response Body'], '')
+        self.assertEqual(resp_data['Number Deleted'], 0)
+        self.assertEqual(resp_data['Number Not Found'], 0)
+        self.assertEqual(resp_data['Errors'],
+                         [['/deltest/manifest-badjson',
+                           'Unable to load SLO manifest']])
 
     def test_handle_multipart_delete_401(self):
         req = Request.blank(
@@ -915,7 +1019,7 @@ class TestSloDeleteManifest(SloTestCase):
                      'HTTP_ACCEPT': 'application/json'})
         status, headers, body = self.call_slo(req)
         resp_data = json.loads(body)
-        self.assertEquals(
+        self.assertEqual(
             self.app.calls,
             [('GET', '/v1/AUTH_test/deltest/' +
               'manifest-with-unauth-segment?multipart-manifest=get'),
@@ -924,12 +1028,32 @@ class TestSloDeleteManifest(SloTestCase):
               'q_17?multipart-manifest=delete'),
              ('DELETE', '/v1/AUTH_test/deltest/' +
               'manifest-with-unauth-segment?multipart-manifest=delete')])
-        self.assertEquals(resp_data['Response Status'], '400 Bad Request')
-        self.assertEquals(resp_data['Response Body'], '')
-        self.assertEquals(resp_data['Number Deleted'], 2)
-        self.assertEquals(resp_data['Number Not Found'], 0)
-        self.assertEquals(resp_data['Errors'],
-                          [['/deltest-unauth/q_17', '401 Unauthorized']])
+        self.assertEqual(resp_data['Response Status'], '400 Bad Request')
+        self.assertEqual(resp_data['Response Body'], '')
+        self.assertEqual(resp_data['Number Deleted'], 2)
+        self.assertEqual(resp_data['Number Not Found'], 0)
+        self.assertEqual(resp_data['Errors'],
+                         [['/deltest-unauth/q_17', '401 Unauthorized']])
+
+    def test_handle_multipart_delete_client_content_type(self):
+        req = Request.blank(
+            '/v1/AUTH_test/deltest/man-all-there?multipart-manifest=delete',
+            environ={'REQUEST_METHOD': 'DELETE', 'CONTENT_TYPE': 'foo/bar'},
+            headers={'Accept': 'application/json'})
+        status, headers, body = self.call_slo(req)
+
+        self.assertEqual(status, '200 OK')
+        resp_data = json.loads(body)
+        self.assertEqual(resp_data["Number Deleted"], 3)
+
+        self.assertEqual(
+            self.app.calls,
+            [('GET',
+              '/v1/AUTH_test/deltest/man-all-there?multipart-manifest=get'),
+             ('DELETE', '/v1/AUTH_test/deltest/b_2?multipart-manifest=delete'),
+             ('DELETE', '/v1/AUTH_test/deltest/c_3?multipart-manifest=delete'),
+             ('DELETE', ('/v1/AUTH_test/deltest/' +
+                         'man-all-there?multipart-manifest=delete'))])
 
 
 class TestSloHeadManifest(SloTestCase):
@@ -1181,6 +1305,61 @@ class TestSloGetManifest(SloTestCase):
         first_ua = self.app.calls_with_headers[0][2].get("User-Agent")
         self.assertFalse(
             "SLO MultipartGET" in first_ua)
+
+    def test_get_manifest_repeated_segments(self):
+        _aabbccdd_manifest_json = json.dumps(
+            [{'name': '/gettest/a_5', 'hash': md5hex("a" * 5),
+              'content_type': 'text/plain', 'bytes': '5'},
+             {'name': '/gettest/a_5', 'hash': md5hex("a" * 5),
+              'content_type': 'text/plain', 'bytes': '5'},
+
+             {'name': '/gettest/b_10', 'hash': md5hex("b" * 10),
+              'content_type': 'text/plain', 'bytes': '10'},
+             {'name': '/gettest/b_10', 'hash': md5hex("b" * 10),
+              'content_type': 'text/plain', 'bytes': '10'},
+
+             {'name': '/gettest/c_15', 'hash': md5hex("c" * 15),
+              'content_type': 'text/plain', 'bytes': '15'},
+             {'name': '/gettest/c_15', 'hash': md5hex("c" * 15),
+              'content_type': 'text/plain', 'bytes': '15'},
+
+             {'name': '/gettest/d_20', 'hash': md5hex("d" * 20),
+              'content_type': 'text/plain', 'bytes': '20'},
+             {'name': '/gettest/d_20', 'hash': md5hex("d" * 20),
+              'content_type': 'text/plain', 'bytes': '20'}])
+
+        self.app.register(
+            'GET', '/v1/AUTH_test/gettest/manifest-aabbccdd',
+            swob.HTTPOk, {'Content-Type': 'application/json',
+                          'X-Static-Large-Object': 'true',
+                          'Etag': md5(_aabbccdd_manifest_json).hexdigest()},
+            _aabbccdd_manifest_json)
+
+        req = Request.blank(
+            '/v1/AUTH_test/gettest/manifest-aabbccdd',
+            environ={'REQUEST_METHOD': 'GET'})
+        status, headers, body = self.call_slo(req)
+        headers = swob.HeaderKeyDict(headers)
+
+        self.assertEqual(status, '200 OK')
+        self.assertEqual(body, (
+            'aaaaaaaaaabbbbbbbbbbbbbbbbbbbbcccccccccccccccccccccccccccccc'
+            'dddddddddddddddddddddddddddddddddddddddd'))
+
+        self.assertEqual(self.app.calls, [
+            ('GET', '/v1/AUTH_test/gettest/manifest-aabbccdd'),
+            ('GET', '/v1/AUTH_test/gettest/a_5?multipart-manifest=get'),
+            ('GET', '/v1/AUTH_test/gettest/b_10?multipart-manifest=get'),
+            ('GET', '/v1/AUTH_test/gettest/c_15?multipart-manifest=get'),
+            ('GET', '/v1/AUTH_test/gettest/d_20?multipart-manifest=get')])
+
+        ranges = [c[2].get('Range') for c in self.app.calls_with_headers]
+        self.assertEqual(ranges, [
+            None,
+            'bytes=0-4,0-4',
+            'bytes=0-9,0-9',
+            'bytes=0-14,0-14',
+            'bytes=0-19,0-19'])
 
     def test_if_none_match_matches(self):
         req = Request.blank(
@@ -1765,6 +1944,68 @@ class TestSloGetManifest(SloTestCase):
         self.assertEqual(headers['X-Object-Meta-Fish'], 'Bass')
         self.assertEqual(body, '')
 
+    def test_generator_closure(self):
+        # Test that the SLO WSGI iterable closes its internal .app_iter when
+        # it receives a close() message.
+        #
+        # This is sufficient to fix a memory leak. The memory leak arises
+        # due to cyclic references involving a running generator; a running
+        # generator sometimes preventes the GC from collecting it in the
+        # same way that an object with a defined __del__ does.
+        #
+        # There are other ways to break the cycle and fix the memory leak as
+        # well; calling .close() on the generator is sufficient, but not
+        # necessary. However, having this test is better than nothing for
+        # preventing regressions.
+        leaks = [0]
+
+        class LeakTracker(object):
+            def __init__(self, inner_iter):
+                leaks[0] += 1
+                self.inner_iter = iter(inner_iter)
+
+            def __iter__(self):
+                return self
+
+            def next(self):
+                return next(self.inner_iter)
+
+            def close(self):
+                leaks[0] -= 1
+                close_if_possible(self.inner_iter)
+
+        class LeakTrackingSegmentedIterable(slo.SegmentedIterable):
+            def _internal_iter(self, *a, **kw):
+                it = super(
+                    LeakTrackingSegmentedIterable, self)._internal_iter(
+                        *a, **kw)
+                return LeakTracker(it)
+
+        status = [None]
+        headers = [None]
+
+        def start_response(s, h, ei=None):
+            status[0] = s
+            headers[0] = h
+
+        req = Request.blank(
+            '/v1/AUTH_test/gettest/manifest-abcd',
+            environ={'REQUEST_METHOD': 'GET',
+                     'HTTP_ACCEPT': 'application/json'})
+
+        # can't self.call_slo() here since we don't want to consume the
+        # whole body
+        with patch.object(slo, 'SegmentedIterable',
+                          LeakTrackingSegmentedIterable):
+            app_resp = self.slo(req.environ, start_response)
+        self.assertEqual(status[0], '200 OK')  # sanity check
+        body_iter = iter(app_resp)
+        chunk = next(body_iter)
+        self.assertEqual(chunk, 'aaaaa')  # sanity check
+
+        app_resp.close()
+        self.assertEqual(0, leaks[0])
+
     def test_head_manifest_is_efficient(self):
         req = Request.blank(
             '/v1/AUTH_test/gettest/manifest-abcd',
@@ -2146,13 +2387,13 @@ class TestSloGetManifest(SloTestCase):
             '/v1/AUTH_test/gettest/manifest-abcd',
             environ={'REQUEST_METHOD': 'GET'})
 
-        with nested(patch.object(slo, 'is_success', mock_is_success),
-                    patch('swift.common.request_helpers.time.time',
-                          mock_time),
-                    patch('swift.common.request_helpers.is_success',
-                          mock_is_success)):
-                status, headers, body, exc = self.call_slo(
-                    req, expect_exception=True)
+        with patch.object(slo, 'is_success', mock_is_success), \
+                patch('swift.common.request_helpers.time.time',
+                      mock_time), \
+                patch('swift.common.request_helpers.is_success',
+                      mock_is_success):
+            status, headers, body, exc = self.call_slo(
+                req, expect_exception=True)
 
         self.assertIsInstance(exc, SegmentError)
         self.assertEqual(status, '200 OK')

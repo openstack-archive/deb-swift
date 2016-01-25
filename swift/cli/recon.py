@@ -18,10 +18,10 @@
 
 from __future__ import print_function
 
-from eventlet.green import urllib2
+from eventlet.green import urllib2, socket
+from six.moves.urllib.parse import urlparse
 from swift.common.utils import SWIFT_CONF_FILE
 from swift.common.ring import Ring
-from urlparse import urlparse
 from hashlib import md5
 import eventlet
 import json
@@ -88,7 +88,7 @@ class Scout(object):
                 print("-> %s: %s" % (url, err))
             content = err
             status = err.code
-        except urllib2.URLError as err:
+        except (urllib2.URLError, socket.timeout) as err:
             if not self.suppress_errors or self.verbose:
                 print("-> %s: %s" % (url, err))
             content = err
@@ -130,7 +130,7 @@ class Scout(object):
                 print("-> %s: %s" % (url, err))
             content = err
             status = err.code
-        except urllib2.URLError as err:
+        except (urllib2.URLError, socket.timeout) as err:
             if not self.suppress_errors or self.verbose:
                 print("-> %s: %s" % (url, err))
             content = err
@@ -181,12 +181,12 @@ class SwiftRecon(object):
     def _ptime(self, timev=None):
         """
         :param timev: a unix timestamp or None
-        :returns: a pretty string of the current time or provided time
+        :returns: a pretty string of the current time or provided time in UTC
         """
         if timev:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timev))
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(timev))
         else:
-            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
 
     def _md5_file(self, path):
         """
@@ -495,16 +495,14 @@ class SwiftRecon(object):
                 elapsed = time.time() - least_recent_time
                 elapsed, elapsed_unit = seconds2timeunit(elapsed)
                 print('Oldest completion was %s (%d %s ago) by %s.' % (
-                    time.strftime('%Y-%m-%d %H:%M:%S',
-                                  time.gmtime(least_recent_time)),
+                    self._ptime(least_recent_time),
                     elapsed, elapsed_unit, host))
         if most_recent_url is not None:
             host = urlparse(most_recent_url).netloc
             elapsed = time.time() - most_recent_time
             elapsed, elapsed_unit = seconds2timeunit(elapsed)
             print('Most recent completion was %s (%d %s ago) by %s.' % (
-                time.strftime('%Y-%m-%d %H:%M:%S',
-                              time.gmtime(most_recent_time)),
+                self._ptime(most_recent_time),
                 elapsed, elapsed_unit, host))
         print("=" * 79)
 
@@ -899,12 +897,8 @@ class SwiftRecon(object):
                 continue
             if (ts_remote < ts_start or ts_remote > ts_end):
                 diff = abs(ts_end - ts_remote)
-                ts_end_f = time.strftime(
-                    "%Y-%m-%d %H:%M:%S",
-                    time.localtime(ts_end))
-                ts_remote_f = time.strftime(
-                    "%Y-%m-%d %H:%M:%S",
-                    time.localtime(ts_remote))
+                ts_end_f = self._ptime(ts_end)
+                ts_remote_f = self._ptime(ts_remote)
 
                 print("!! %s current time is %s, but remote is %s, "
                       "differs by %.2f sec" % (
@@ -978,7 +972,8 @@ class SwiftRecon(object):
                         order.')
         args.add_option('--all', action="store_true",
                         help="Perform all checks. Equal to \t\t\t-arudlqT "
-                        "--md5 --sockstat --auditor --updater --expirer")
+                        "--md5 --sockstat --auditor --updater --expirer "
+                        "--driveaudit --validate-servers")
         args.add_option('--region', type="int",
                         help="Only query servers in specified region")
         args.add_option('--zone', '-z', type="int",
@@ -1018,22 +1013,21 @@ class SwiftRecon(object):
         if options.all:
             if self.server_type == 'object':
                 self.async_check(hosts)
-                self.replication_check(hosts)
                 self.object_auditor_check(hosts)
                 self.updater_check(hosts)
                 self.expirer_check(hosts)
             elif self.server_type == 'container':
-                self.replication_check(hosts)
                 self.auditor_check(hosts)
                 self.updater_check(hosts)
             elif self.server_type == 'account':
-                self.replication_check(hosts)
                 self.auditor_check(hosts)
+            self.replication_check(hosts)
             self.umount_check(hosts)
             self.load_check(hosts)
             self.disk_usage(hosts, options.top, options.lowest,
                             options.human_readable)
             self.get_ringmd5(hosts, swift_dir)
+            self.get_swiftconfmd5(hosts)
             self.quarantine_check(hosts)
             self.socket_usage(hosts)
             self.server_type_check(hosts)

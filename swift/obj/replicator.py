@@ -20,6 +20,7 @@ import random
 import shutil
 import time
 import itertools
+from six import viewkeys
 import six.moves.cPickle as pickle
 from swift import gettext_ as _
 
@@ -84,10 +85,11 @@ class ObjectReplicator(Daemon):
         if not self.rsync_module:
             self.rsync_module = '{replication_ip}::object'
             if config_true_value(conf.get('vm_test_mode', 'no')):
-                self.logger.warn('Option object-replicator/vm_test_mode is '
-                                 'deprecated and will be removed in a future '
-                                 'version. Update your configuration to use '
-                                 'option object-replicator/rsync_module.')
+                self.logger.warning('Option object-replicator/vm_test_mode '
+                                    'is deprecated and will be removed in a '
+                                    'future version. Update your '
+                                    'configuration to use option '
+                                    'object-replicator/rsync_module.')
                 self.rsync_module += '{replication_port}'
         self.http_timeout = int(conf.get('http_timeout', 60))
         self.lockup_timeout = int(conf.get('lockup_timeout', 1800))
@@ -108,10 +110,10 @@ class ObjectReplicator(Daemon):
         self.handoff_delete = config_auto_int_value(
             conf.get('handoff_delete', 'auto'), 0)
         if any((self.handoff_delete, self.handoffs_first)):
-            self.logger.warn('Handoff only mode is not intended for normal '
-                             'operation, please disable handoffs_first and '
-                             'handoff_delete before the next '
-                             'normal rebalance')
+            self.logger.warning('Handoff only mode is not intended for normal '
+                                'operation, please disable handoffs_first and '
+                                'handoff_delete before the next '
+                                'normal rebalance')
         self._diskfile_mgr = DiskFileManager(conf, self.logger)
 
     def _zero_stats(self):
@@ -148,7 +150,7 @@ class ObjectReplicator(Daemon):
         :param job: information about the partition being synced
         :param suffixes: a list of suffixes which need to be pushed
 
-        :returns: boolean indicating success or failure
+        :returns: boolean and dictionary, boolean indicating success or failure
         """
         return self.sync_method(node, job, suffixes, *args, **kwargs)
 
@@ -305,8 +307,8 @@ class ObjectReplicator(Daemon):
                                 '/' + '-'.join(suffixes), headers=headers)
                             conn.getresponse().read()
                         if node['region'] != job['region']:
-                            synced_remote_regions[node['region']] = \
-                                candidates.keys()
+                            synced_remote_regions[node['region']] = viewkeys(
+                                candidates)
                     else:
                         failure_devs_info.add((node['replication_ip'],
                                                node['device']))
@@ -315,7 +317,8 @@ class ObjectReplicator(Daemon):
                     if delete_objs is None:
                         delete_objs = cand_objs
                     else:
-                        delete_objs = delete_objs.intersection(cand_objs)
+                        delete_objs = delete_objs & cand_objs
+
             if self.handoff_delete:
                 # delete handoff if we have had handoff_delete successes
                 delete_handoff = len([resp for resp in responses if resp]) >= \
@@ -564,6 +567,7 @@ class ObjectReplicator(Daemon):
             [(dev['replication_ip'], dev['device'])
              for dev in policy.object_ring.devs if dev])
         data_dir = get_data_dir(policy)
+        found_local = False
         for local_dev in [dev for dev in policy.object_ring.devs
                           if (dev
                               and is_local_device(ips,
@@ -572,6 +576,7 @@ class ObjectReplicator(Daemon):
                                                   dev['replication_port'])
                               and (override_devices is None
                                    or dev['device'] in override_devices))]:
+            found_local = True
             dev_path = join(self.devices_dir, local_dev['device'])
             obj_path = join(dev_path, data_dir)
             tmp_path = join(dev_path, get_tmp_dir(policy))
@@ -581,7 +586,8 @@ class ObjectReplicator(Daemon):
                       failure_dev['device'])
                      for failure_dev in policy.object_ring.devs
                      if failure_dev])
-                self.logger.warn(_('%s is not mounted'), local_dev['device'])
+                self.logger.warning(
+                    _('%s is not mounted'), local_dev['device'])
                 continue
             unlink_older_than(tmp_path, time.time() - self.reclaim_age)
             if not os.path.exists(obj_path):
@@ -624,6 +630,10 @@ class ObjectReplicator(Daemon):
                              for failure_dev in policy.object_ring.devs
                              if failure_dev])
                     continue
+        if not found_local:
+            self.logger.error("Can't find itself %s with port %s in ring "
+                              "file, not replicating",
+                              ", ".join(ips), self.port)
         return jobs
 
     def collect_jobs(self, override_devices=None, override_partitions=None,
@@ -693,7 +703,7 @@ class ObjectReplicator(Daemon):
                     self._add_failure_stats([(failure_dev['replication_ip'],
                                               failure_dev['device'])
                                              for failure_dev in job['nodes']])
-                    self.logger.warn(_('%s is not mounted'), job['device'])
+                    self.logger.warning(_('%s is not mounted'), job['device'])
                     continue
                 if not self.check_ring(job['policy'].object_ring):
                     self.logger.info(_("Ring change detected. Aborting "

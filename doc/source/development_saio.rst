@@ -37,9 +37,10 @@ Installing dependencies
 
         sudo apt-get update
         sudo apt-get install curl gcc memcached rsync sqlite3 xfsprogs \
-                             git-core libffi-dev python-setuptools
+                             git-core libffi-dev python-setuptools \
+                             liberasurecode-dev
         sudo apt-get install python-coverage python-dev python-nose \
-                             python-simplejson python-xattr python-eventlet \
+                             python-xattr python-eventlet \
                              python-greenlet python-pastedeploy \
                              python-netifaces python-pip python-dnspython \
                              python-mock
@@ -48,16 +49,17 @@ Installing dependencies
 
         sudo yum update
         sudo yum install curl gcc memcached rsync sqlite xfsprogs git-core \
-                         libffi-devel xinetd python-setuptools \
+                         libffi-devel xinetd liberasurecode-devel \
+                         python-setuptools \
                          python-coverage python-devel python-nose \
-                         python-simplejson pyxattr python-eventlet \
+                         pyxattr python-eventlet \
                          python-greenlet python-paste-deploy \
                          python-netifaces python-pip python-dns \
                          python-mock
 
   Note: This installs necessary system dependencies and *most* of the python
   dependencies. Later in the process setuptools/distribute or pip will install
-  and/or upgrade packages. 
+  and/or upgrade packages.
 
 Next, choose either :ref:`partition-section` or :ref:`loopback-section`.
 
@@ -450,11 +452,6 @@ Setting up scripts for running Swift
      /var/log/swift...`` line::
 
         sed -i "/find \/var\/log\/swift/d" $HOME/bin/resetswift
-
-     On Fedora, replace ``service <name> restart`` with ``systemctl restart
-     <name>.service``::
-
-        sed -i "s/service \(.*\) restart/systemctl restart \1.service/" $HOME/bin/resetswift
 
 
   #. Install the sample configuration file for running tests::

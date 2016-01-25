@@ -21,7 +21,6 @@ import os
 import multiprocessing
 import time
 import traceback
-import rfc822
 import socket
 import math
 from swift import gettext_ as _
@@ -33,7 +32,8 @@ from eventlet.greenthread import spawn
 from swift.common.utils import public, get_logger, \
     config_true_value, timing_stats, replication, \
     normalize_delete_at_timestamp, get_log_line, Timestamp, \
-    get_expirer_container, iter_multipart_mime_documents
+    get_expirer_container, parse_mime_headers, \
+    iter_multipart_mime_documents
 from swift.common.bufferedhttp import http_connect
 from swift.common.constraints import check_object_creation, \
     valid_timestamp, check_utf8
@@ -60,7 +60,7 @@ def iter_mime_headers_and_bodies(wsgi_input, mime_boundary, read_chunk_size):
         wsgi_input, mime_boundary, read_chunk_size)
 
     for file_like in mime_documents_iter:
-        hdrs = HeaderKeyDict(rfc822.Message(file_like, 0))
+        hdrs = parse_mime_headers(file_like)
         yield (hdrs, file_like)
 
 
@@ -558,7 +558,7 @@ class ObjectController(BaseStorageServer):
             return HTTPInsufficientStorage(drive=device, request=request)
         except (DiskFileNotExist, DiskFileQuarantined):
             orig_metadata = {}
-            orig_timestamp = 0
+            orig_timestamp = Timestamp(0)
 
         # Checks for If-None-Match
         if request.if_none_match is not None and orig_metadata:
@@ -895,7 +895,10 @@ class ObjectController(BaseStorageServer):
                                   container, obj, request, device,
                                   policy)
         if orig_timestamp < req_timestamp:
-            disk_file.delete(req_timestamp)
+            try:
+                disk_file.delete(req_timestamp)
+            except DiskFileNoSpace:
+                return HTTPInsufficientStorage(drive=device, request=request)
             self.container_update(
                 'DELETE', account, container, obj, request,
                 HeaderKeyDict({'x-timestamp': req_timestamp.internal}),

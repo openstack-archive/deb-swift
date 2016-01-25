@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import time
 import traceback
@@ -22,6 +23,7 @@ from xml.etree.cElementTree import Element, SubElement, tostring
 from eventlet import Timeout
 
 import swift.common.db
+from swift.container.sync_store import ContainerSyncStore
 from swift.container.backend import ContainerBroker, DATADIR
 from swift.container.replicator import ContainerReplicatorRpc
 from swift.common.db import DatabaseAlreadyExists
@@ -30,7 +32,7 @@ from swift.common.request_helpers import get_param, get_listing_content_type, \
     split_and_validate_path, is_sys_or_user_meta
 from swift.common.utils import get_logger, hash_path, public, \
     Timestamp, storage_directory, validate_sync_to, \
-    config_true_value, json, timing_stats, replication, \
+    config_true_value, timing_stats, replication, \
     override_bytes_from_content_type, get_log_line
 from swift.common.constraints import check_mount, valid_timestamp, check_utf8
 from swift.common import constraints
@@ -86,7 +88,7 @@ class ContainerController(BaseStorageServer):
         self.log_requests = config_true_value(conf.get('log_requests', 'true'))
         self.root = conf.get('devices', '/srv/node')
         self.mount_check = config_true_value(conf.get('mount_check', 'true'))
-        self.node_timeout = int(conf.get('node_timeout', 3))
+        self.node_timeout = float(conf.get('node_timeout', 3))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         #: ContainerSyncCluster instance for validating sync-to values.
         self.realms_conf = ContainerSyncRealms(
@@ -109,6 +111,9 @@ class ContainerController(BaseStorageServer):
             self.save_headers.append('x-versions-location')
         swift.common.db.DB_PREALLOCATION = \
             config_true_value(conf.get('db_preallocation', 'f'))
+        self.sync_store = ContainerSyncStore(self.root,
+                                             self.logger,
+                                             self.mount_check)
 
     def _get_container_broker(self, drive, part, account, container, **kwargs):
         """
@@ -241,6 +246,13 @@ class ContainerController(BaseStorageServer):
         else:
             return None
 
+    def _update_sync_store(self, broker, method):
+        try:
+            self.sync_store.update_sync_store(broker)
+        except Exception:
+            self.logger.exception('Failed to update sync_store %s during %s' %
+                                  broker.db_file, method)
+
     @public
     @timing_stats()
     def DELETE(self, req):
@@ -275,6 +287,7 @@ class ContainerController(BaseStorageServer):
             broker.delete_db(req_timestamp.internal)
             if not broker.is_deleted():
                 return HTTPConflict(request=req)
+            self._update_sync_store(broker, 'DELETE')
             resp = self.account_update(req, account, container, broker)
             if resp:
                 return resp
@@ -380,6 +393,8 @@ class ContainerController(BaseStorageServer):
                         broker.metadata['X-Container-Sync-To'][0]:
                     broker.set_x_container_sync_points(-1, -1)
             broker.update_metadata(metadata, validate_metadata=True)
+            if metadata:
+                self._update_sync_store(broker, 'PUT')
             resp = self.account_update(req, account, container, broker)
             if resp:
                 return resp
@@ -452,6 +467,7 @@ class ContainerController(BaseStorageServer):
         end_marker = get_param(req, 'end_marker')
         limit = constraints.CONTAINER_LISTING_LIMIT
         given_limit = get_param(req, 'limit')
+        reverse = config_true_value(get_param(req, 'reverse'))
         if given_limit and given_limit.isdigit():
             limit = int(given_limit)
             if limit > constraints.CONTAINER_LISTING_LIMIT:
@@ -471,7 +487,7 @@ class ContainerController(BaseStorageServer):
             return HTTPNotFound(request=req, headers=resp_headers)
         container_list = broker.list_objects_iter(
             limit, marker, end_marker, prefix, delimiter, path,
-            storage_policy_index=info['storage_policy_index'])
+            storage_policy_index=info['storage_policy_index'], reverse=reverse)
         return self.create_listing(req, out_content_type, info, resp_headers,
                                    broker.metadata, container_list, container)
 
@@ -548,6 +564,7 @@ class ContainerController(BaseStorageServer):
         broker = self._get_container_broker(drive, part, account, container)
         if broker.is_deleted():
             return HTTPNotFound(request=req)
+        broker.update_put_timestamp(req_timestamp.internal)
         metadata = {}
         metadata.update(
             (key, (value, req_timestamp.internal))
@@ -561,6 +578,7 @@ class ContainerController(BaseStorageServer):
                         broker.metadata['X-Container-Sync-To'][0]:
                     broker.set_x_container_sync_points(-1, -1)
             broker.update_metadata(metadata, validate_metadata=True)
+            self._update_sync_store(broker, 'POST')
         return HTTPNoContent(request=req)
 
     def __call__(self, env, start_response):

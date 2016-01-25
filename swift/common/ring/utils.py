@@ -223,7 +223,7 @@ def is_valid_hostname(hostname):
     """
     if len(hostname) < 1 or len(hostname) > 255:
         return False
-    if hostname[-1] == ".":
+    if hostname.endswith('.'):
         # strip exactly one dot from the right, if present
         hostname = hostname[:-1]
     allowed = re.compile("(?!-)[A-Z\d-]{1,63}(?<!-)$", re.IGNORECASE)
@@ -328,13 +328,13 @@ def parse_search_value(search_value):
         search_value = search_value[i:]
     if search_value.startswith('-'):
         search_value = search_value[1:]
-    if len(search_value) and search_value[0].isdigit():
+    if search_value and search_value[0].isdigit():
         i = 1
         while i < len(search_value) and search_value[i] in '0123456789.':
             i += 1
         match['ip'] = search_value[:i]
         search_value = search_value[i:]
-    elif len(search_value) and search_value[0] == '[':
+    elif search_value and search_value.startswith('['):
         i = 1
         while i < len(search_value) and search_value[i] != ']':
             i += 1
@@ -356,14 +356,14 @@ def parse_search_value(search_value):
     # replication parameters
     if search_value.startswith('R'):
         search_value = search_value[1:]
-        if len(search_value) and search_value[0].isdigit():
+        if search_value and search_value[0].isdigit():
             i = 1
             while (i < len(search_value) and
                    search_value[i] in '0123456789.'):
                 i += 1
             match['replication_ip'] = search_value[:i]
             search_value = search_value[i:]
-        elif len(search_value) and search_value[0] == '[':
+        elif search_value and search_value.startswith('['):
             i = 1
             while i < len(search_value) and search_value[i] != ']':
                 i += 1
@@ -540,10 +540,12 @@ def validate_args(argvish):
     format or not.
     """
     opts, args = parse_args(argvish)
-    new_cmd_format = opts.id or opts.region or opts.zone or \
-        opts.ip or opts.port or \
+    # id can be 0 (swift starts generating id from 0),
+    # also zone, region and weight can be set to zero.
+    new_cmd_format = opts.id is not None or opts.region is not None or \
+        opts.zone is not None or opts.ip or opts.port or \
         opts.replication_ip or opts.replication_port or \
-        opts.device or opts.weight or opts.meta
+        opts.device or opts.weight is not None or opts.meta
     return (new_cmd_format, opts, args)
 
 

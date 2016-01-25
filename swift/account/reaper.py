@@ -24,6 +24,7 @@ from hashlib import md5
 import itertools
 
 from eventlet import GreenPool, sleep, Timeout
+import six
 
 import swift.common.db
 from swift.account.backend import AccountBroker, DATADIR
@@ -69,10 +70,10 @@ class AccountReaper(Daemon):
         self.account_ring = None
         self.container_ring = None
         self.object_ring = None
-        self.node_timeout = int(conf.get('node_timeout', 10))
+        self.node_timeout = float(conf.get('node_timeout', 10))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         self.myips = whataremyips(conf.get('bind_ip', '0.0.0.0'))
-        self.bind_port = int(conf.get('bind_port', 0))
+        self.bind_port = int(conf.get('bind_port', 6002))
         self.concurrency = int(conf.get('concurrency', 25))
         self.container_concurrency = self.object_concurrency = \
             sqrt(self.concurrency)
@@ -310,8 +311,8 @@ class AccountReaper(Daemon):
         delete_timestamp = Timestamp(info['delete_timestamp'])
         if self.stats_containers_remaining and \
            begin - float(delete_timestamp) >= self.reap_not_done_after:
-            self.logger.warn(_('Account %s has not been reaped since %s') %
-                             (account, delete_timestamp.isoformat))
+            self.logger.warning(_('Account %s has not been reaped since %s') %
+                                (account, delete_timestamp.isoformat))
         return True
 
     def reap_container(self, account, account_partition, account_nodes,
@@ -387,7 +388,7 @@ class AccountReaper(Daemon):
                     self.logger.error('ERROR: invalid storage policy index: %r'
                                       % policy_index)
                 for obj in objects:
-                    if isinstance(obj['name'], unicode):
+                    if isinstance(obj['name'], six.text_type):
                         obj['name'] = obj['name'].encode('utf8')
                     pool.spawn(self.reap_object, account, container, part,
                                nodes, obj['name'], policy_index)

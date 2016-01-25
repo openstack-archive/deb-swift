@@ -35,21 +35,20 @@ place to keep Swift working every time webob decides some interface
 needs to change.
 """
 
-from collections import defaultdict
-import UserDict
+from collections import defaultdict, MutableMapping
 import time
 from functools import partial
 from datetime import datetime, timedelta, tzinfo
 from email.utils import parsedate
-import urlparse
-import urllib2
 import re
 import random
 import functools
 import inspect
 
+import six
 from six import BytesIO
 from six import StringIO
+from six.moves import urllib
 
 from swift.common.utils import reiterate, split_path, Timestamp, pairs, \
     close_if_possible
@@ -218,7 +217,16 @@ def _header_int_property(header):
                     doc="Retrieve and set the %s header as an int" % header)
 
 
-class HeaderEnvironProxy(UserDict.DictMixin):
+def header_to_environ_key(header_name):
+    header_name = 'HTTP_' + header_name.replace('-', '_').upper()
+    if header_name == 'HTTP_CONTENT_LENGTH':
+        return 'CONTENT_LENGTH'
+    if header_name == 'HTTP_CONTENT_TYPE':
+        return 'CONTENT_TYPE'
+    return header_name
+
+
+class HeaderEnvironProxy(MutableMapping):
     """
     A dict-like object that proxies requests to a wsgi environ,
     rewriting header keys to environ keys.
@@ -229,30 +237,29 @@ class HeaderEnvironProxy(UserDict.DictMixin):
     def __init__(self, environ):
         self.environ = environ
 
-    def _normalize(self, key):
-        key = 'HTTP_' + key.replace('-', '_').upper()
-        if key == 'HTTP_CONTENT_LENGTH':
-            return 'CONTENT_LENGTH'
-        if key == 'HTTP_CONTENT_TYPE':
-            return 'CONTENT_TYPE'
-        return key
+    def __iter__(self):
+        for k in self.keys():
+            yield k
+
+    def __len__(self):
+        return len(self.keys())
 
     def __getitem__(self, key):
-        return self.environ[self._normalize(key)]
+        return self.environ[header_to_environ_key(key)]
 
     def __setitem__(self, key, value):
         if value is None:
-            self.environ.pop(self._normalize(key), None)
-        elif isinstance(value, unicode):
-            self.environ[self._normalize(key)] = value.encode('utf-8')
+            self.environ.pop(header_to_environ_key(key), None)
+        elif isinstance(value, six.text_type):
+            self.environ[header_to_environ_key(key)] = value.encode('utf-8')
         else:
-            self.environ[self._normalize(key)] = str(value)
+            self.environ[header_to_environ_key(key)] = str(value)
 
     def __contains__(self, key):
-        return self._normalize(key) in self.environ
+        return header_to_environ_key(key) in self.environ
 
     def __delitem__(self, key):
-        del self.environ[self._normalize(key)]
+        del self.environ[header_to_environ_key(key)]
 
     def keys(self):
         keys = [key[5:].replace('_', '-').title()
@@ -288,7 +295,7 @@ class HeaderKeyDict(dict):
     def __setitem__(self, key, value):
         if value is None:
             self.pop(key.title(), None)
-        elif isinstance(value, unicode):
+        elif isinstance(value, six.text_type):
             return dict.__setitem__(self, key.title(), value.encode('utf-8'))
         else:
             return dict.__setitem__(self, key.title(), str(value))
@@ -327,7 +334,7 @@ def _resp_status_property():
             self.status_int = value
             self.explanation = self.title = RESPONSE_REASONS[value][0]
         else:
-            if isinstance(value, unicode):
+            if isinstance(value, six.text_type):
                 value = value.encode('utf-8')
             self.status_int = int(value.split(' ', 1)[0])
             self.explanation = self.title = value.split(' ', 1)[1]
@@ -352,7 +359,7 @@ def _resp_body_property():
         return self._body
 
     def setter(self, value):
-        if isinstance(value, unicode):
+        if isinstance(value, six.text_type):
             value = value.encode('utf-8')
         if isinstance(value, str):
             self.content_length = len(value)
@@ -535,14 +542,15 @@ class Range(object):
 
     def __str__(self):
         string = 'bytes='
-        for start, end in self.ranges:
+        for i, (start, end) in enumerate(self.ranges):
             if start is not None:
                 string += str(start)
             string += '-'
             if end is not None:
                 string += str(end)
-            string += ','
-        return string.rstrip(',')
+            if i < len(self.ranges) - 1:
+                string += ','
+        return string
 
     def ranges_for_length(self, length):
         """
@@ -748,7 +756,7 @@ def _req_environ_property(environ_field):
         return self.environ.get(environ_field, None)
 
     def setter(self, value):
-        if isinstance(value, unicode):
+        if isinstance(value, six.text_type):
             self.environ[environ_field] = value.encode('utf-8')
         else:
             self.environ[environ_field] = value
@@ -842,9 +850,9 @@ class Request(object):
         """
         headers = headers or {}
         environ = environ or {}
-        if isinstance(path, unicode):
+        if isinstance(path, six.text_type):
             path = path.encode('utf-8')
-        parsed_path = urlparse.urlparse(path)
+        parsed_path = urllib.parse.urlparse(path)
         server_name = 'localhost'
         if parsed_path.netloc:
             server_name = parsed_path.netloc.split(':', 1)[0]
@@ -859,7 +867,7 @@ class Request(object):
             'REQUEST_METHOD': 'GET',
             'SCRIPT_NAME': '',
             'QUERY_STRING': parsed_path.query,
-            'PATH_INFO': urllib2.unquote(parsed_path.path),
+            'PATH_INFO': urllib.parse.unquote(parsed_path.path),
             'SERVER_NAME': server_name,
             'SERVER_PORT': str(server_port),
             'HTTP_HOST': '%s:%d' % (server_name, server_port),
@@ -897,7 +905,7 @@ class Request(object):
         if self._params_cache is None:
             if 'QUERY_STRING' in self.environ:
                 self._params_cache = dict(
-                    urlparse.parse_qsl(self.environ['QUERY_STRING'], True))
+                    urllib.parse.parse_qsl(self.environ['QUERY_STRING'], True))
             else:
                 self._params_cache = {}
         return self._params_cache
@@ -930,8 +938,8 @@ class Request(object):
     @property
     def path(self):
         "Provides the full path of the request, excluding the QUERY_STRING"
-        return urllib2.quote(self.environ.get('SCRIPT_NAME', '') +
-                             self.environ['PATH_INFO'])
+        return urllib.parse.quote(self.environ.get('SCRIPT_NAME', '') +
+                                  self.environ['PATH_INFO'])
 
     @property
     def swift_entity_path(self):
@@ -964,7 +972,7 @@ class Request(object):
         the path segment.
         """
         path_info = self.path_info
-        if not path_info or path_info[0] != '/':
+        if not path_info or not path_info.startswith('/'):
             return None
         try:
             slash_loc = path_info.index('/', 1)
@@ -1178,7 +1186,7 @@ class Response(object):
         """
 
         content_size = self.content_length
-        content_type = self.content_type
+        content_type = self.headers.get('content-type')
         self.content_type = ''.join(['multipart/byteranges;',
                                      'boundary=', self.boundary])
 
@@ -1318,9 +1326,9 @@ class Response(object):
         if self.status_int in RESPONSE_REASONS:
             title, exp = RESPONSE_REASONS[self.status_int]
             if exp:
-                body = '<html><h1>%s</h1><p>%s</p></html>' % (title, exp)
-                if '%(' in body:
-                    body = body % defaultdict(lambda: 'unknown', self.__dict__)
+                body = '<html><h1>%s</h1><p>%s</p></html>' % (
+                    title,
+                    exp % defaultdict(lambda: 'unknown', self.__dict__))
                 self.content_length = len(body)
                 return [body]
         return ['']
@@ -1357,7 +1365,7 @@ class Response(object):
                 realm = 'unknown'
         except (AttributeError, ValueError):
             realm = 'unknown'
-        return 'Swift realm="%s"' % urllib2.quote(realm)
+        return 'Swift realm="%s"' % urllib.parse.quote(realm)
 
     @property
     def is_success(self):

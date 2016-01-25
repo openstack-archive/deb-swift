@@ -18,11 +18,13 @@ Internal client library for making calls directly to the servers rather than
 through the proxy.
 """
 
+import json
 import os
 import socket
 from time import time
 
 from eventlet import sleep, Timeout
+import six
 from six.moves.http_client import HTTPException
 
 from swift.common.bufferedhttp import http_connect
@@ -32,11 +34,6 @@ from swift.common.http import HTTP_NO_CONTENT, HTTP_INSUFFICIENT_STORAGE, \
     is_success, is_server_error
 from swift.common.swob import HeaderKeyDict
 from swift.common.utils import quote
-
-try:
-    import simplejson as json
-except ImportError:
-    import json
 
 
 class DirectClientException(ClientException):
@@ -53,7 +50,7 @@ class DirectClientException(ClientException):
 
 
 def _get_direct_account_container(path, stype, node, part,
-                                  account, marker=None, limit=None,
+                                  marker=None, limit=None,
                                   prefix=None, delimiter=None, conn_timeout=5,
                                   response_timeout=15):
     """Base class for get direct account and container.
@@ -116,7 +113,7 @@ def direct_get_account(node, part, account, marker=None, limit=None,
     """
     path = '/' + account
     return _get_direct_account_container(path, "Account", node, part,
-                                         account, marker=marker,
+                                         marker=marker,
                                          limit=limit, prefix=prefix,
                                          delimiter=delimiter,
                                          conn_timeout=conn_timeout,
@@ -192,7 +189,7 @@ def direct_get_container(node, part, account, container, marker=None,
     """
     path = '/%s/%s' % (account, container)
     return _get_direct_account_container(path, "Container", node,
-                                         part, account, marker=marker,
+                                         part, marker=marker,
                                          limit=limit, prefix=prefix,
                                          delimiter=delimiter,
                                          conn_timeout=conn_timeout,
@@ -399,7 +396,7 @@ def direct_put_object(node, part, account, container, name, contents,
         headers['Content-Type'] = 'application/octet-stream'
     if not contents:
         headers['Content-Length'] = '0'
-    if isinstance(contents, basestring):
+    if isinstance(contents, six.string_types):
         contents = [contents]
     # Incase the caller want to insert an object with specific age
     add_ts = 'X-Timestamp' not in headers
@@ -513,14 +510,8 @@ def retry(func, *args, **kwargs):
     :returns: result of func
     :raises ClientException: all retries failed
     """
-    retries = 5
-    if 'retries' in kwargs:
-        retries = kwargs['retries']
-        del kwargs['retries']
-    error_log = None
-    if 'error_log' in kwargs:
-        error_log = kwargs['error_log']
-        del kwargs['error_log']
+    retries = kwargs.pop('retries', 5)
+    error_log = kwargs.pop('error_log', None)
     attempts = 0
     backoff = 1
     while attempts <= retries:

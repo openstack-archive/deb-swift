@@ -18,7 +18,6 @@ import time
 import eventlet
 import mock
 from contextlib import contextmanager
-from threading import Thread
 
 from test.unit import FakeLogger
 from swift.common.middleware import ratelimit
@@ -27,6 +26,8 @@ from swift.proxy.controllers.base import get_container_memcache_key, \
 from swift.common.memcached import MemcacheConnectionError
 from swift.common.swob import Request
 from swift.common import utils
+
+threading = eventlet.patcher.original('threading')
 
 
 class FakeMemcache(object):
@@ -159,7 +160,7 @@ class TestRateLimit(unittest.TestCase):
         # Allow for one second of variation in the total time.
         time_diff = abs(total_time - (end - begin))
         if check_time:
-            self.assertEquals(round(total_time, 1), round(time_ticker, 1))
+            self.assertEqual(round(total_time, 1), round(time_ticker, 1))
         return time_diff
 
     def test_get_maxrate(self):
@@ -168,15 +169,15 @@ class TestRateLimit(unittest.TestCase):
                      'container_ratelimit_75': 30}
         test_ratelimit = ratelimit.filter_factory(conf_dict)(FakeApp())
         test_ratelimit.logger = FakeLogger()
-        self.assertEquals(ratelimit.get_maxrate(
+        self.assertEqual(ratelimit.get_maxrate(
             test_ratelimit.container_ratelimits, 0), None)
-        self.assertEquals(ratelimit.get_maxrate(
+        self.assertEqual(ratelimit.get_maxrate(
             test_ratelimit.container_ratelimits, 5), None)
-        self.assertEquals(ratelimit.get_maxrate(
+        self.assertEqual(ratelimit.get_maxrate(
             test_ratelimit.container_ratelimits, 10), 200)
-        self.assertEquals(ratelimit.get_maxrate(
+        self.assertEqual(ratelimit.get_maxrate(
             test_ratelimit.container_ratelimits, 60), 72)
-        self.assertEquals(ratelimit.get_maxrate(
+        self.assertEqual(ratelimit.get_maxrate(
             test_ratelimit.container_ratelimits, 160), 30)
 
     def test_get_ratelimitable_key_tuples(self):
@@ -193,35 +194,35 @@ class TestRateLimit(unittest.TestCase):
         with mock.patch('swift.common.middleware.ratelimit.get_account_info',
                         lambda *args, **kwargs: {}):
             req.method = 'DELETE'
-            self.assertEquals(len(the_app.get_ratelimitable_key_tuples(
+            self.assertEqual(len(the_app.get_ratelimitable_key_tuples(
                 req, 'a', None, None)), 0)
             req.method = 'PUT'
-            self.assertEquals(len(the_app.get_ratelimitable_key_tuples(
+            self.assertEqual(len(the_app.get_ratelimitable_key_tuples(
                 req, 'a', 'c', None)), 1)
             req.method = 'DELETE'
-            self.assertEquals(len(the_app.get_ratelimitable_key_tuples(
+            self.assertEqual(len(the_app.get_ratelimitable_key_tuples(
                 req, 'a', 'c', None)), 1)
             req.method = 'GET'
-            self.assertEquals(len(the_app.get_ratelimitable_key_tuples(
+            self.assertEqual(len(the_app.get_ratelimitable_key_tuples(
                 req, 'a', 'c', 'o')), 0)
             req.method = 'PUT'
-            self.assertEquals(len(the_app.get_ratelimitable_key_tuples(
+            self.assertEqual(len(the_app.get_ratelimitable_key_tuples(
                 req, 'a', 'c', 'o')), 1)
 
         req.method = 'PUT'
-        self.assertEquals(len(the_app.get_ratelimitable_key_tuples(
+        self.assertEqual(len(the_app.get_ratelimitable_key_tuples(
             req, 'a', 'c', None, global_ratelimit=10)), 2)
-        self.assertEquals(the_app.get_ratelimitable_key_tuples(
+        self.assertEqual(the_app.get_ratelimitable_key_tuples(
             req, 'a', 'c', None, global_ratelimit=10)[1],
             ('ratelimit/global-write/a', 10))
 
         req.method = 'PUT'
-        self.assertEquals(len(the_app.get_ratelimitable_key_tuples(
+        self.assertEqual(len(the_app.get_ratelimitable_key_tuples(
             req, 'a', 'c', None, global_ratelimit='notafloat')), 1)
 
     def test_memcached_container_info_dict(self):
         mdict = headers_to_container_info({'x-container-object-count': '45'})
-        self.assertEquals(mdict['object_count'], '45')
+        self.assertEqual(mdict['object_count'], '45')
 
     def test_ratelimit_old_memcache_format(self):
         current_rate = 13
@@ -238,7 +239,7 @@ class TestRateLimit(unittest.TestCase):
         with mock.patch('swift.common.middleware.ratelimit.get_account_info',
                         lambda *args, **kwargs: {}):
             tuples = the_app.get_ratelimitable_key_tuples(req, 'a', 'c', 'o')
-            self.assertEquals(tuples, [('ratelimit/a/c', 200.0)])
+            self.assertEqual(tuples, [('ratelimit/a/c', 200.0)])
 
     def test_account_ratelimit(self):
         current_rate = 5
@@ -261,7 +262,7 @@ class TestRateLimit(unittest.TestCase):
                     begin = time.time()
                     self._run(make_app_call, num_calls, current_rate,
                               check_time=bool(exp_time))
-                    self.assertEquals(round(time.time() - begin, 1), exp_time)
+                    self.assertEqual(round(time.time() - begin, 1), exp_time)
                     self._reset_time()
 
     def test_ratelimit_set_incr(self):
@@ -280,7 +281,7 @@ class TestRateLimit(unittest.TestCase):
         with mock.patch('swift.common.middleware.ratelimit.get_account_info',
                         lambda *args, **kwargs: {}):
             self._run(make_app_call, num_calls, current_rate, check_time=False)
-            self.assertEquals(round(time.time() - begin, 1), 9.8)
+            self.assertEqual(round(time.time() - begin, 1), 9.8)
 
     def test_ratelimit_old_white_black_list(self):
         global time_ticker
@@ -313,10 +314,10 @@ class TestRateLimit(unittest.TestCase):
         req = Request.blank('/v/a/c')
         req.environ['swift.cache'] = FakeMemcache()
 
-        class rate_caller(Thread):
+        class rate_caller(threading.Thread):
 
             def __init__(self, parent):
-                Thread.__init__(self)
+                threading.Thread.__init__(self)
                 self.parent = parent
 
             def run(self):
@@ -339,8 +340,8 @@ class TestRateLimit(unittest.TestCase):
             the_498s = [
                 t for t in threads
                 if ''.join(t.result).startswith('Slow down')]
-            self.assertEquals(len(the_498s), 0)
-            self.assertEquals(time_ticker, 0)
+            self.assertEqual(len(the_498s), 0)
+            self.assertEqual(time_ticker, 0)
 
     def test_ratelimit_blacklist(self):
         global time_ticker
@@ -356,10 +357,10 @@ class TestRateLimit(unittest.TestCase):
         req = Request.blank('/v/b/c')
         req.environ['swift.cache'] = FakeMemcache()
 
-        class rate_caller(Thread):
+        class rate_caller(threading.Thread):
 
             def __init__(self, parent):
-                Thread.__init__(self)
+                threading.Thread.__init__(self)
                 self.parent = parent
 
             def run(self):
@@ -382,8 +383,8 @@ class TestRateLimit(unittest.TestCase):
             the_497s = [
                 t for t in threads
                 if ''.join(t.result).startswith('Your account')]
-            self.assertEquals(len(the_497s), 5)
-            self.assertEquals(time_ticker, 0)
+            self.assertEqual(len(the_497s), 5)
+            self.assertEqual(time_ticker, 0)
 
     def test_ratelimit_max_rate_double(self):
         global time_ticker
@@ -408,13 +409,13 @@ class TestRateLimit(unittest.TestCase):
             r = self.test_ratelimit(req.environ, start_response)
             mock_sleep(.1)
             r = self.test_ratelimit(req.environ, start_response)
-            self.assertEquals(r[0], 'Slow down')
+            self.assertEqual(r[0], 'Slow down')
             mock_sleep(.1)
             r = self.test_ratelimit(req.environ, start_response)
-            self.assertEquals(r[0], 'Slow down')
+            self.assertEqual(r[0], 'Slow down')
             mock_sleep(.1)
             r = self.test_ratelimit(req.environ, start_response)
-            self.assertEquals(r[0], '204 No Content')
+            self.assertEqual(r[0], '204 No Content')
 
     def test_ratelimit_max_rate_double_container(self):
         global time_ticker
@@ -442,13 +443,13 @@ class TestRateLimit(unittest.TestCase):
             r = self.test_ratelimit(req.environ, start_response)
             mock_sleep(.1)
             r = self.test_ratelimit(req.environ, start_response)
-            self.assertEquals(r[0], 'Slow down')
+            self.assertEqual(r[0], 'Slow down')
             mock_sleep(.1)
             r = self.test_ratelimit(req.environ, start_response)
-            self.assertEquals(r[0], 'Slow down')
+            self.assertEqual(r[0], 'Slow down')
             mock_sleep(.1)
             r = self.test_ratelimit(req.environ, start_response)
-            self.assertEquals(r[0], '204 No Content')
+            self.assertEqual(r[0], '204 No Content')
 
     def test_ratelimit_max_rate_double_container_listing(self):
         global time_ticker
@@ -476,17 +477,17 @@ class TestRateLimit(unittest.TestCase):
             r = self.test_ratelimit(req.environ, start_response)
             mock_sleep(.1)
             r = self.test_ratelimit(req.environ, start_response)
-            self.assertEquals(r[0], 'Slow down')
+            self.assertEqual(r[0], 'Slow down')
             mock_sleep(.1)
             r = self.test_ratelimit(req.environ, start_response)
-            self.assertEquals(r[0], 'Slow down')
+            self.assertEqual(r[0], 'Slow down')
             mock_sleep(.1)
             r = self.test_ratelimit(req.environ, start_response)
-            self.assertEquals(r[0], '204 No Content')
+            self.assertEqual(r[0], '204 No Content')
             mc = self.test_ratelimit.memcache_client
             try:
                 self.test_ratelimit.memcache_client = None
-                self.assertEquals(
+                self.assertEqual(
                     self.test_ratelimit.handle_ratelimit(req, 'n', 'c', None),
                     None)
             finally:
@@ -505,11 +506,11 @@ class TestRateLimit(unittest.TestCase):
         req.method = 'PUT'
         req.environ = {}
 
-        class rate_caller(Thread):
+        class rate_caller(threading.Thread):
 
             def __init__(self, name):
                 self.myname = name
-                Thread.__init__(self)
+                threading.Thread.__init__(self)
 
             def run(self):
                 for j in range(num_calls):
@@ -529,7 +530,7 @@ class TestRateLimit(unittest.TestCase):
                 thread.join()
 
             time_took = time.time() - begin
-            self.assertEquals(1.5, round(time_took, 1))
+            self.assertEqual(1.5, round(time_took, 1))
 
     def test_call_invalid_path(self):
         env = {'REQUEST_METHOD': 'GET',
@@ -563,7 +564,7 @@ class TestRateLimit(unittest.TestCase):
         begin = time.time()
         self._run(make_app_call, num_calls, current_rate, check_time=False)
         time_took = time.time() - begin
-        self.assertEquals(round(time_took, 1), 0)  # no memcache, no limiting
+        self.assertEqual(round(time_took, 1), 0)  # no memcache, no limiting
 
     def test_restarting_memcache(self):
         current_rate = 2
@@ -582,7 +583,7 @@ class TestRateLimit(unittest.TestCase):
                         lambda *args, **kwargs: {}):
             self._run(make_app_call, num_calls, current_rate, check_time=False)
             time_took = time.time() - begin
-            self.assertEquals(round(time_took, 1), 0)  # no memcache, no limit
+            self.assertEqual(round(time_took, 1), 0)  # no memcache, no limit
 
 
 class TestSwiftInfo(unittest.TestCase):

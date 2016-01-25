@@ -113,15 +113,15 @@ the file are simply ignored).
 __all__ = ['FormPost', 'filter_factory', 'READ_CHUNK_SIZE', 'MAX_VALUE_LENGTH']
 
 import hmac
-import rfc822
 from hashlib import sha1
 from time import time
-from urllib import quote
 
+from six.moves.urllib.parse import quote
 from swift.common.exceptions import MimeInvalid
 from swift.common.middleware.tempurl import get_tempurl_keys_from_metadata
 from swift.common.utils import streq_const_time, register_swift_info, \
-    parse_content_disposition, iter_multipart_mime_documents
+    parse_content_disposition, parse_mime_headers, \
+    iter_multipart_mime_documents
 from swift.common.wsgi import make_pre_authed_env
 from swift.common.swob import HTTPUnauthorized
 from swift.proxy.controllers.base import get_account_info, get_container_info
@@ -254,9 +254,9 @@ class FormPost(object):
         file_count = 0
         for fp in iter_multipart_mime_documents(
                 env['wsgi.input'], boundary, read_chunk_size=READ_CHUNK_SIZE):
-            hdrs = rfc822.Message(fp, 0)
+            hdrs = parse_mime_headers(fp)
             disp, attrs = parse_content_disposition(
-                hdrs.getheader('Content-Disposition', ''))
+                hdrs.get('Content-Disposition', ''))
             if disp == 'form-data' and attrs.get('filename'):
                 file_count += 1
                 try:
@@ -272,7 +272,7 @@ class FormPost(object):
                         hdrs['Content-Type'] or 'application/octet-stream'
                 status, subheaders, message = \
                     self._perform_subrequest(env, attributes, fp, keys)
-                if status[:1] != '2':
+                if not status.startswith('2'):
                     break
             else:
                 data = ''
@@ -337,7 +337,7 @@ class FormPost(object):
             del subenv['QUERY_STRING']
         subenv['HTTP_TRANSFER_ENCODING'] = 'chunked'
         subenv['wsgi.input'] = _CappedFileLikeObject(fp, max_file_size)
-        if subenv['PATH_INFO'][-1] != '/' and \
+        if not subenv['PATH_INFO'].endswith('/') and \
                 subenv['PATH_INFO'].count('/') < 4:
             subenv['PATH_INFO'] += '/'
         subenv['PATH_INFO'] += attributes['filename'] or 'filename'

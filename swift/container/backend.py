@@ -19,8 +19,9 @@ Pluggable Back-ends for Container Server
 import os
 from uuid import uuid4
 import time
-import six.moves.cPickle as pickle
 
+import six
+import six.moves.cPickle as pickle
 from six.moves import range
 import sqlite3
 
@@ -556,7 +557,7 @@ class ContainerBroker(DatabaseBroker):
             conn.commit()
 
     def list_objects_iter(self, limit, marker, end_marker, prefix, delimiter,
-                          path=None, storage_policy_index=0):
+                          path=None, storage_policy_index=0, reverse=False):
         """
         Get a list of objects sorted by name starting at marker onward, up
         to limit entries.  Entries will begin with the prefix and will not
@@ -569,6 +570,7 @@ class ContainerBroker(DatabaseBroker):
         :param delimiter: delimiter for query
         :param path: if defined, will set the prefix and delimiter based on
                      the path
+        :param reverse: reverse the result order.
 
         :returns: list of tuples of (name, created_at, size, content_type,
                   etag)
@@ -577,6 +579,9 @@ class ContainerBroker(DatabaseBroker):
         (marker, end_marker, prefix, delimiter, path) = utf8encode(
             marker, end_marker, prefix, delimiter, path)
         self._commit_puts_stale_ok()
+        if reverse:
+            # Reverse the markers if we are reversing the listing.
+            marker, end_marker = end_marker, marker
         if path is not None:
             prefix = path
             if path:
@@ -584,6 +589,8 @@ class ContainerBroker(DatabaseBroker):
             delimiter = '/'
         elif delimiter and not prefix:
             prefix = ''
+        if prefix:
+            end_prefix = prefix[:-1] + chr(ord(prefix[-1]) + 1)
         orig_marker = marker
         with self.get() as conn:
             results = []
@@ -591,9 +598,13 @@ class ContainerBroker(DatabaseBroker):
                 query = '''SELECT name, created_at, size, content_type, etag
                            FROM object WHERE'''
                 query_args = []
-                if end_marker:
+                if end_marker and (not prefix or end_marker < end_prefix):
                     query += ' name < ? AND'
                     query_args.append(end_marker)
+                elif prefix:
+                    query += ' name < ? AND'
+                    query_args.append(end_prefix)
+
                 if delim_force_gte:
                     query += ' name >= ? AND'
                     query_args.append(marker)
@@ -610,8 +621,8 @@ class ContainerBroker(DatabaseBroker):
                 else:
                     query += ' deleted = 0'
                 orig_tail_query = '''
-                    ORDER BY name LIMIT ?
-                '''
+                    ORDER BY name %s LIMIT ?
+                ''' % ('DESC' if reverse else '')
                 orig_tail_args = [limit - len(results)]
                 # storage policy filter
                 policy_tail_query = '''
@@ -632,26 +643,24 @@ class ContainerBroker(DatabaseBroker):
                                         tuple(query_args + tail_args))
                 curs.row_factory = None
 
-                if prefix is None:
-                    # A delimiter without a specified prefix is ignored
+                # Delimiters without a prefix is ignored, further if there
+                # is no delimiter then we can simply return the result as
+                # prefixes are now handled in the SQL statement.
+                if prefix is None or not delimiter:
                     return [r for r in curs]
-                if not delimiter:
-                    if not prefix:
-                        # It is possible to have a delimiter but no prefix
-                        # specified. As above, the prefix will be set to the
-                        # empty string, so avoid performing the extra work to
-                        # check against an empty prefix.
-                        return [r for r in curs]
-                    else:
-                        return [r for r in curs if r[0].startswith(prefix)]
 
                 # We have a delimiter and a prefix (possibly empty string) to
                 # handle
                 rowcount = 0
                 for row in curs:
                     rowcount += 1
-                    marker = name = row[0]
-                    if len(results) >= limit or not name.startswith(prefix):
+                    name = row[0]
+                    if reverse:
+                        end_marker = name
+                    else:
+                        marker = name
+
+                    if len(results) >= limit:
                         curs.close()
                         return results
                     end = name.find(delimiter, len(prefix))
@@ -659,13 +668,19 @@ class ContainerBroker(DatabaseBroker):
                         if name == path:
                             continue
                         if end >= 0 and len(name) > end + len(delimiter):
-                            marker = name[:end] + chr(ord(delimiter) + 1)
+                            if reverse:
+                                end_marker = name[:end + 1]
+                            else:
+                                marker = name[:end] + chr(ord(delimiter) + 1)
                             curs.close()
                             break
                     elif end > 0:
-                        marker = name[:end] + chr(ord(delimiter) + 1)
-                        # we want result to be inclusive of delim+1
-                        delim_force_gte = True
+                        if reverse:
+                            end_marker = name[:end + 1]
+                        else:
+                            marker = name[:end] + chr(ord(delimiter) + 1)
+                            # we want result to be inclusive of delim+1
+                            delim_force_gte = True
                         dir_name = name[:end + 1]
                         if dir_name != orig_marker:
                             results.append([dir_name, '0', 0, None, ''])
@@ -686,7 +701,7 @@ class ContainerBroker(DatabaseBroker):
         :param source: if defined, update incoming_sync with the source
         """
         for item in item_list:
-            if isinstance(item['name'], unicode):
+            if isinstance(item['name'], six.text_type):
                 item['name'] = item['name'].encode('utf-8')
 
         def _really_merge_items(conn):

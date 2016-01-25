@@ -144,13 +144,13 @@ def _create_test_rings(path, devs=None):
         {'id': 1, 'device': 'sda', 'zone': 1,
          'region': 2, 'ip': '127.0.0.1', 'port': 6000},
         {'id': 2, 'device': 'sda', 'zone': 2,
-         'region': 1, 'ip': '127.0.0.2', 'port': 6000},
+         'region': 3, 'ip': '127.0.0.2', 'port': 6000},
         {'id': 3, 'device': 'sda', 'zone': 4,
          'region': 2, 'ip': '127.0.0.3', 'port': 6000},
         {'id': 4, 'device': 'sda', 'zone': 5,
          'region': 1, 'ip': '127.0.0.4', 'port': 6000},
         {'id': 5, 'device': 'sda', 'zone': 6,
-         'region': 2, 'ip': 'fe80::202:b3ff:fe1e:8329', 'port': 6000},
+         'region': 3, 'ip': 'fe80::202:b3ff:fe1e:8329', 'port': 6000},
         {'id': 6, 'device': 'sda', 'zone': 7, 'region': 1,
          'ip': '2001:0db8:85a3:0000:0000:8a2e:0370:7334', 'port': 6000},
     ]
@@ -179,6 +179,10 @@ class TestObjectReplicator(unittest.TestCase):
     def setUp(self):
         utils.HASH_PATH_SUFFIX = 'endcap'
         utils.HASH_PATH_PREFIX = ''
+        # recon cache path
+        self.recon_cache = tempfile.mkdtemp()
+        rmtree(self.recon_cache, ignore_errors=1)
+        os.mkdir(self.recon_cache)
         # Setup a test ring (stolen from common/test_ring.py)
         self.testdir = tempfile.mkdtemp()
         self.devices = os.path.join(self.testdir, 'node')
@@ -200,6 +204,7 @@ class TestObjectReplicator(unittest.TestCase):
     def tearDown(self):
         self.assertFalse(process_errors)
         rmtree(self.testdir, ignore_errors=1)
+        rmtree(self.recon_cache, ignore_errors=1)
 
     def test_handoff_replication_setting_warnings(self):
         conf_tests = [
@@ -254,11 +259,27 @@ class TestObjectReplicator(unittest.TestCase):
         self.replicator.all_devs_info = set()
         self.df_mgr = diskfile.DiskFileManager(self.conf, self.logger)
 
+    def test_run_once_no_local_device_in_ring(self):
+        conf = dict(swift_dir=self.testdir, devices=self.devices,
+                    bind_ip='1.1.1.1', recon_cache_path=self.recon_cache,
+                    mount_check='false', timeout='300', stats_interval='1')
+        replicator = object_replicator.ObjectReplicator(conf,
+                                                        logger=self.logger)
+        replicator.run_once()
+        expected = [
+            "Can't find itself 1.1.1.1 with port 6000 "
+            "in ring file, not replicating",
+            "Can't find itself 1.1.1.1 with port 6000 "
+            "in ring file, not replicating",
+        ]
+        self.assertEqual(expected, self.logger.get_lines_for_level('error'))
+
     def test_run_once(self):
         conf = dict(swift_dir=self.testdir, devices=self.devices,
-                    bind_ip=_ips()[0],
+                    bind_ip=_ips()[0], recon_cache_path=self.recon_cache,
                     mount_check='false', timeout='300', stats_interval='1')
-        replicator = object_replicator.ObjectReplicator(conf)
+        replicator = object_replicator.ObjectReplicator(conf,
+                                                        logger=self.logger)
         was_connector = object_replicator.http_connect
         object_replicator.http_connect = mock_http_connect(200)
         cur_part = '0'
@@ -286,13 +307,16 @@ class TestObjectReplicator(unittest.TestCase):
         with _mock_process(process_arg_checker):
             replicator.run_once()
         self.assertFalse(process_errors)
+        self.assertFalse(self.logger.get_lines_for_level('error'))
         object_replicator.http_connect = was_connector
 
     # policy 1
     def test_run_once_1(self):
         conf = dict(swift_dir=self.testdir, devices=self.devices,
+                    recon_cache_path=self.recon_cache,
                     mount_check='false', timeout='300', stats_interval='1')
-        replicator = object_replicator.ObjectReplicator(conf)
+        replicator = object_replicator.ObjectReplicator(conf,
+                                                        logger=self.logger)
         was_connector = object_replicator.http_connect
         object_replicator.http_connect = mock_http_connect(200)
         cur_part = '0'
@@ -322,6 +346,7 @@ class TestObjectReplicator(unittest.TestCase):
                             side_effect=_ips):
                 replicator.run_once()
         self.assertFalse(process_errors)
+        self.assertFalse(self.logger.get_lines_for_level('error'))
         object_replicator.http_connect = was_connector
 
     def test_check_ring(self):
@@ -767,8 +792,8 @@ class TestObjectReplicator(unittest.TestCase):
             (0, '/sda/3'): 2,
             (1, '/sda/3'): 2,
         }
-        self.assertEquals(dict(found_replicate_calls),
-                          expected_replicate_calls)
+        self.assertEqual(dict(found_replicate_calls),
+                         expected_replicate_calls)
 
     def test_replicator_skips_bogus_partition_dirs(self):
         # A directory in the wrong place shouldn't crash the replicator
