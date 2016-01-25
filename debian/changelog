@@ -7,6 +7,7 @@ swift (2.6.0-1) UNRELEASED; urgency=medium
   * Removed simplejson dependency.
   * Bumbed eventlet and dnspython dependency to new versions.
   * Added python-os-testr build dependency. 
+  * wrap-and-sort -t -a
 
  -- Ondřej Nový <novy@ondrej.org>  Wed, 20 Jan 2016 05:31:21 -0500
 
