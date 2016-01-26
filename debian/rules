@@ -13,6 +13,7 @@ override_dh_clean:
 	dh_clean
 	rm -f debian/*.upstart
 	rm -f debian/*.init
+	rm -f debian/*.service
 	rm -rf swift.egg-info
 
 # build with sphinx documentation
@@ -29,6 +30,10 @@ override_dh_auto_test:
 		--exclude-test=test.unit.common.test_utils.TestUtils.test_get_logger_sysloghandler_plumbing
 	rm -f $(CURDIR)/swift-test.conf
 endif
+
+override_dh_systemd_enable:
+	# systemd support is not ready
+	rm -f debian/*.service
 
 override_dh_install:
 	dh_install --fail-missing --sourcedir=debian/tmp
@@ -48,6 +53,9 @@ override_dh_install:
 	install -D -m 0644 $(CURDIR)/etc/object-server.conf-sample		$(CURDIR)/debian/swift-object/etc/swift/object-server.conf
 
 override_dh_installinit:
+	# systemd support is not ready
+	rm -f debian/*.service
+
 	if dpkg-vendor --derives-from ubuntu ; then \
 		for i in `ls -1 debian/*.upstart.in` ; do \
 			MYPKG=`echo $$i | sed s/.upstart.in//` ; \
