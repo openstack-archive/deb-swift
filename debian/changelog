@@ -9,6 +9,7 @@ swift (2.6.0-1) UNRELEASED; urgency=medium
   * Added python-os-testr build dependency. 
   * Added git build dependency.
   * wrap-and-sort -t -a
+  * Removed wrong systemd unit files.
 
  -- Ondřej Nový <novy@ondrej.org>  Wed, 20 Jan 2016 05:31:21 -0500
 
