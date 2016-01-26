@@ -16,6 +16,7 @@ swift (2.6.0-1) UNRELEASED; urgency=medium
   [ Ivan Udovichenko ]
 
   * d/rules: Fix config location for swift-object-expirer service.
+  * d/control: Add Breaks field to swift-object-expirer package.
 
  -- Ondřej Nový <novy@ondrej.org>  Wed, 20 Jan 2016 05:31:21 -0500
 
