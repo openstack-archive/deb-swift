@@ -49,7 +49,7 @@ override_dh_install:
 	install -D -m 0644 $(CURDIR)/etc/memcache.conf-sample			$(CURDIR)/debian/swift-proxy/etc/swift/memcache.conf
 	install -D -m 0644 $(CURDIR)/etc/mime.types-sample			$(CURDIR)/debian/swift-proxy/etc/swift/mime.types
 	install -D -m 0644 $(CURDIR)/etc/proxy-server.conf-sample		$(CURDIR)/debian/swift-proxy/etc/swift/proxy-server.conf
-	install -D -m 0644 $(CURDIR)/etc/object-expirer.conf-sample		$(CURDIR)/debian/swift-object/etc/swift/object-expirer.conf
+	install -D -m 0644 $(CURDIR)/etc/object-expirer.conf-sample		$(CURDIR)/debian/swift-object-expirer/etc/swift/object-expirer.conf
 	install -D -m 0644 $(CURDIR)/etc/object-server.conf-sample		$(CURDIR)/debian/swift-object/etc/swift/object-server.conf
 
 override_dh_installinit:
