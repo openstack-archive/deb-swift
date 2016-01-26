@@ -14,7 +14,7 @@ override_dh_clean:
 	rm -f debian/*.upstart
 	rm -f debian/*.init
 	rm -f debian/*.service
-	rm -rf swift.egg-info
+	rm -f $(CURDIR)/swift-test.conf
 
 # build with sphinx documentation
 override_dh_sphinxdoc:
