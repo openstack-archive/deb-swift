@@ -12,6 +12,7 @@ swift (2.6.0-1) UNRELEASED; urgency=medium
   * Added git build dependency.
   * wrap-and-sort -t -a
   * Removed wrong systemd unit files.
+  * Removed libjerasure2 build dependency.
 
   [ Ivan Udovichenko ]
 
