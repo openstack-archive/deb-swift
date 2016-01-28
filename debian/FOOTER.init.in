@@ -3,22 +3,6 @@ SWIFT_INIT_TOOL="/usr/bin/swift-init"
 KILL_WAIT=15
 
 
-kill_service()
-{
-	SERVICE_PIDS=`sed \
-		-e 's/^/-/g' \
-		${PIDS_LOCATION}/${SERVICE_NAME}/*.pid \
-		${PIDS_LOCATION}/${SERVICE_NAME}.pid \
-		2>/dev/null \
-		| tr -s '[:space:]' ' '`
-
-	if [ "${SERVICE_PIDS}" != "" ] ; then
-		kill -9 ${SERVICE_PIDS} >/dev/null 2>&1
-	fi
-
-	return 0
-}
-
 . /lib/lsb/init-functions
 
 # Include Swift defaults if available
@@ -39,24 +23,19 @@ start)
 ;;
 stop)
 	log_daemon_msg "Stopping Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	${SWIFT_INIT_TOOL} --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
-	[ "$?" -ne 0 ] && kill_service
-	log_end_msg 0
-	exit 0
+	${SWIFT_INIT_TOOL} --kill-after-timeout --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
+	log_end_msg $?
+	exit $?
 ;;
 restart)
 	log_daemon_msg "Restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	${SWIFT_INIT_TOOL} --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
-	[ "$?" -ne 0 ] && kill_service
-	${SWIFT_INIT_TOOL} ${SERVICE_NAME} start
+	${SWIFT_INIT_TOOL} --kill-after-timeout --kill-wait=${KILL_WAIT} ${SERVICE_NAME} restart
 	log_end_msg $?
 	exit $?
 ;;
 reload|force-reload)
 	log_daemon_msg "Gracefully restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	${SWIFT_INIT_TOOL} --kill-wait=${KILL_WAIT} ${SERVICE_NAME} shutdown
-	[ "$?" -ne 0 ] && kill_service
-	${SWIFT_INIT_TOOL} ${SERVICE_NAME} start
+	${SWIFT_INIT_TOOL} --kill-after-timeout --kill-wait=${KILL_WAIT} ${SERVICE_NAME} reload
 	log_end_msg $?
 	exit $?
 ;;
