@@ -5,6 +5,7 @@ swift (2.5.0-3) UNRELEASED; urgency=high
   * Removed useless shlibs dependency.
   * Watch file fixed.
   * CVE-2016-0738: Fix memory/socket leak in proxy on truncated SLO/DLO GET
+    (Closes: #812984)
   * Removed wrong systemd unit files.
 
   [ Ivan Udovichenko ]
