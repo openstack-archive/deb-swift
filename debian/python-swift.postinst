@@ -26,6 +26,9 @@ pkgos_adduser () {
 if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	pkgos_adduser swift
 
+	mkdir -p /var/backups/swift
+	chown swift:swift /var/backups/swift
+
 	mkdir -p /var/cache/swift
 	chown swift:swift /var/cache/swift
 fi
