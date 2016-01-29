@@ -6,6 +6,7 @@ swift (2.6.0-3) UNRELEASED; urgency=medium
   [ Thomas Goirand ]
   * Added a backups folder in /etc/swift/backups which links back to
     /var/backups/swift.
+  * Add runtime depends on libjerasure2.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 29 Jan 2016 10:32:45 +0000
 
