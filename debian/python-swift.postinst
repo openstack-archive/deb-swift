@@ -28,6 +28,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 
 	mkdir -p /var/backups/swift
 	chown swift:swift /var/backups/swift
+	chmod 2770 /var/backups/swift
 
 	mkdir -p /var/cache/swift
 	chown swift:swift /var/cache/swift
