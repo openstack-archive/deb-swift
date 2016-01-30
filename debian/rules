@@ -31,10 +31,6 @@ override_dh_auto_test:
 	rm -f $(CURDIR)/swift-test.conf
 endif
 
-override_dh_systemd_enable:
-	# systemd support is not ready
-	rm -f debian/*.service
-
 override_dh_install:
 	dh_install --fail-missing --sourcedir=debian/tmp
 	rm -rf debian/python-swift/usr/lib/python*/dist-packages/test
@@ -53,19 +49,9 @@ override_dh_install:
 	install -D -m 0644 $(CURDIR)/etc/object-server.conf-sample		$(CURDIR)/debian/swift-object/etc/swift/object-server.conf
 
 override_dh_installinit:
-	# systemd support is not ready
-	rm -f debian/*.service
-
-	if dpkg-vendor --derives-from ubuntu ; then \
-		for i in `ls -1 debian/*.upstart.in` ; do \
-			MYPKG=`echo $$i | sed s/.upstart.in//` ; \
-			cp $$MYPKG.upstart.in $$MYPKG.upstart ; \
-		done ; \
-	fi
-
-	for i in `ls -1 debian/*.init.in` ; do \
-		MYPKG=`echo $$i | sed s/.init.in//` ; \
-		cat $$MYPKG.init.in debian/FOOTER.init.in > $$MYPKG.init ; \
+	for i in `ls -1 debian/*.init.head` ; do \
+		MYPKG=`echo $$i | sed s/.init.head//` ; \
+		cat $$MYPKG.init.head debian/TEMPLATE.init.foot > $$MYPKG.init ; \
 	done
 
 	dh_installinit --no-start
