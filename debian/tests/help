@@ -12,7 +12,7 @@ set -e
 #  swift-ring-builder
 #  swift-temp-url
 
-HELP_CMD=(
+CMDS=(
  'swift-account-auditor' 'swift-account-info' 'swift-account-reaper'
  'swift-account-replicator' 'swift-account-server' 'swift-config'
  'swift-container-auditor' 'swift-container-info' 'swift-container-reconciler'
@@ -24,12 +24,12 @@ HELP_CMD=(
  'swift-object-updater' 'swift-oldies' 'swift-orphans' 'swift-proxy-server'
  'swift-recon' 'swift-reconciler-enqueue' 'swift-ring-builder-analyzer'
 )
-for client in "${HELP_CMD[@]}"; do
-    if ! $client -h 2>&1 > /dev/null; then
-        echo "ERROR, ${client} is not running"
+for cmd in "${CMDS[@]}"; do
+    if ! $cmd -h 2>&1 > /dev/null; then
+        echo "ERROR, ${cmd} is not running"
         exit 1
     else
-        echo "OK: ${client} is running"
+        echo "OK: ${cmd} is running"
     fi
 done
 exit 0
