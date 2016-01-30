@@ -1,0 +1,7 @@
+Tests: help
+Depends: swift-proxy,
+         swift-object,
+         swift-container,
+         swift-account,
+         swift-object-expirer,
+         swift-drive-audit,
