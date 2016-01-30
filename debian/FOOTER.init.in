@@ -17,30 +17,30 @@ fi
 case "$1" in
 start)
 	log_daemon_msg "Starting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	${SWIFT_INIT_TOOL} ${SERVICE_NAME} start
+	${SWIFT_INIT_TOOL} --strict ${SERVICE_NAME} start
 	log_end_msg $?
 	exit $?
 ;;
 stop)
 	log_daemon_msg "Stopping Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	${SWIFT_INIT_TOOL} --kill-after-timeout --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
+	${SWIFT_INIT_TOOL} --strict --kill-after-timeout --kill-wait=${KILL_WAIT} ${SERVICE_NAME} stop
 	log_end_msg $?
 	exit $?
 ;;
 restart)
 	log_daemon_msg "Restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	${SWIFT_INIT_TOOL} --kill-after-timeout --kill-wait=${KILL_WAIT} ${SERVICE_NAME} restart
+	${SWIFT_INIT_TOOL} --strict --kill-after-timeout --kill-wait=${KILL_WAIT} ${SERVICE_NAME} restart
 	log_end_msg $?
 	exit $?
 ;;
 reload|force-reload)
 	log_daemon_msg "Gracefully restarting Swift ${PRINT_NAME}" "swift-init ${SERVICE_NAME}"
-	${SWIFT_INIT_TOOL} --kill-after-timeout --kill-wait=${KILL_WAIT} ${SERVICE_NAME} reload
+	${SWIFT_INIT_TOOL} --strict --kill-after-timeout --kill-wait=${KILL_WAIT} ${SERVICE_NAME} reload
 	log_end_msg $?
 	exit $?
 ;;
 status)
-	exec ${SWIFT_INIT_TOOL} ${SERVICE_NAME} status
+	exec ${SWIFT_INIT_TOOL} --strict ${SERVICE_NAME} status
 ;;
 *)
 	echo "Usage: $0 {start|stop|restart|reload|force-reload|status}"
