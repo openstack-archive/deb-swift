@@ -9,5 +9,10 @@
 # Description:       Container server for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="container-server"
-PRINT_NAME="container server"
+PROJECT_NAME=swift
+NAME="${PROJECT_NAME}-container-server"
+DESC="Swift container server"
+SCRIPTNAME=/etc/init.d/swift-container
+DAEMON_ARGS=/etc/${PROJECT_NAME}/container-server.conf
+NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
+USE_LOGFILE=no

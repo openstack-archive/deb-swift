@@ -9,5 +9,10 @@
 # Description:       Object server for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="object-server"
-PRINT_NAME="object server"
+PROJECT_NAME=swift
+NAME="${PROJECT_NAME}-object-server"
+DESC="Swift object server"
+SCRIPTNAME=/etc/init.d/swift-object
+DAEMON_ARGS=/etc/${PROJECT_NAME}/object-server.conf
+NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
+USE_LOGFILE=no

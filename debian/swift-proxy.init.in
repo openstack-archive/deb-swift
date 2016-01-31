@@ -9,5 +9,10 @@
 # Description:       Proxy server for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="proxy-server"
-PRINT_NAME="proxy server"
+PROJECT_NAME=swift
+NAME="${PROJECT_NAME}-proxy-server"
+DESC="Swift proxy server"
+SCRIPTNAME=/etc/init.d/swift-proxy
+DAEMON_ARGS=/etc/${PROJECT_NAME}/proxy-server.conf
+NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
+USE_LOGFILE=no

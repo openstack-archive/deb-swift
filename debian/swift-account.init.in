@@ -9,5 +9,10 @@
 # Description:       Account server for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="account-server"
-PRINT_NAME="account server"
+PROJECT_NAME=swift
+NAME="${PROJECT_NAME}-account-server"
+DESC="Swift account server"
+SCRIPTNAME=/etc/init.d/swift-account
+DAEMON_ARGS=/etc/${PROJECT_NAME}/account-server.conf
+NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
+USE_LOGFILE=no

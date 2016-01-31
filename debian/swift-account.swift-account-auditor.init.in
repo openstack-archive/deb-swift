@@ -5,9 +5,13 @@
 # Required-Stop:     $remote_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: Swift account auditor server
+# Short-Description: Swift account auditor
 # Description:       Account auditor server for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="account-auditor"
-PRINT_NAME="account auditor"
+PROJECT_NAME=swift
+NAME="${PROJECT_NAME}-account-auditor"
+DESC="Swift account auditor"
+DAEMON_ARGS=/etc/${PROJECT_NAME}/account-server.conf
+NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
+USE_LOGFILE=no

@@ -32,6 +32,8 @@ override_dh_auto_test:
 endif
 
 override_dh_install:
+	rm debian/tmp/usr/bin/swift-init
+
 	dh_install --fail-missing --sourcedir=debian/tmp
 	rm -rf debian/python-swift/usr/lib/python*/dist-packages/test
 
@@ -49,11 +51,6 @@ override_dh_install:
 	install -D -m 0644 $(CURDIR)/etc/object-server.conf-sample		$(CURDIR)/debian/swift-object/etc/swift/object-server.conf
 
 override_dh_installinit:
-	for i in `ls -1 debian/*.init.head` ; do \
-		MYPKG=`echo $$i | sed s/.init.head//` ; \
-		cat $$MYPKG.init.head debian/TEMPLATE.init.foot > $$MYPKG.init ; \
-	done
-
 	dh_installinit --no-start
 
 	dh_installinit --no-start -pswift-container --name=swift-container-replicator

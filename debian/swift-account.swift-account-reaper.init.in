@@ -5,9 +5,13 @@
 # Required-Stop:     $remote_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: Swift account reaper server
+# Short-Description: Swift account reaper
 # Description:       Account reaper for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="account-reaper"
-PRINT_NAME="account reaper"
+PROJECT_NAME=swift
+NAME="${PROJECT_NAME}-account-reaper"
+DESC="Swift account reaper"
+DAEMON_ARGS=/etc/${PROJECT_NAME}/account-server.conf
+NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
+USE_LOGFILE=no

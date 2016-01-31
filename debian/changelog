@@ -1,9 +1,10 @@
-swift (2.6.0-3) UNRELEASED; urgency=medium
+swift (2.6.0-2) UNRELEASED; urgency=medium
 
   [ Ondřej Nový ]
   * Use swift-init --kill-after-timeout and --strict options in init scripts
   * Added Debian tests.
-  * Fixed collision with pkgos init.in generator.
+  * Removed swift-init.
+  * Systemd support.
 
   [ Thomas Goirand ]
   * Added a backups folder in /etc/swift/backups which links back to

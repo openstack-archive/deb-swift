@@ -5,9 +5,13 @@
 # Required-Stop:     $remote_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: Swift container sync server
+# Short-Description: Swift container sync
 # Description:       Container sync server for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="container-sync"
-PRINT_NAME="container sync"
+PROJECT_NAME=swift
+NAME="${PROJECT_NAME}-container-sync"
+DESC="Swift container sync"
+DAEMON_ARGS=/etc/${PROJECT_NAME}/container-server.conf
+NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
+USE_LOGFILE=no

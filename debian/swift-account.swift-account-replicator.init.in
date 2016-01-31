@@ -9,5 +9,9 @@
 # Description:       Account replicator for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="account-replicator"
-PRINT_NAME="account replicator"
+PROJECT_NAME=swift
+NAME="${PROJECT_NAME}-account-replicator"
+DESC="Swift account replicator"
+DAEMON_ARGS=/etc/${PROJECT_NAME}/account-server.conf
+NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
+USE_LOGFILE=no

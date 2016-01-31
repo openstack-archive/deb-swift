@@ -5,9 +5,13 @@
 # Required-Stop:     $remote_fs
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: Swift object auditor server
+# Short-Description: Swift object auditor
 # Description:       Object auditor server for Swift.
 ### END INIT INFO
 
-SERVICE_NAME="object-auditor"
-PRINT_NAME="object auditor"
+PROJECT_NAME=swift
+NAME="${PROJECT_NAME}-object-auditor"
+DESC="Swift object auditor"
+DAEMON_ARGS=/etc/${PROJECT_NAME}/object-server.conf
+NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
+USE_LOGFILE=no
