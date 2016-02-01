@@ -5,6 +5,7 @@ swift (2.6.0-2) UNRELEASED; urgency=medium
   * Added Debian tests.
   * Removed swift-init.
   * Systemd support.
+  * Added container-sync config files.
 
   [ Thomas Goirand ]
   * Added a backups folder in /etc/swift/backups which links back to
