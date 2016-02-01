@@ -108,7 +108,7 @@ Package: swift-proxy
 Architecture: all
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
-         swift,
+         swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
 Description: distributed virtual object store - proxy server
@@ -139,7 +139,7 @@ Architecture: all
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
          rsync,
-         swift,
+         swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
 Provides: ${python:Provides},
@@ -171,7 +171,7 @@ Architecture: all
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
          rsync,
-         swift,
+         swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
 Provides: ${python:Provides},
@@ -203,7 +203,7 @@ Architecture: all
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
          rsync,
-         swift,
+         swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
 Provides: ${python:Provides},
@@ -235,7 +235,7 @@ Architecture: all
 Depends: lsb-base (>= 3.0-6),
          python-swift (=${binary:Version}),
          rsync,
-         swift,
+         swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
 Replaces: swift-object (<< 2.6.0-1~)
@@ -296,6 +296,7 @@ Description: distributed virtual object store - documentation
 Package: swift-drive-audit
 Architecture: all
 Depends: python-swift (=${binary:Version}),
+         swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
 Description: distributed virtual object store - drive audit
