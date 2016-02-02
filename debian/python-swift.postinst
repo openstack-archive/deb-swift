@@ -23,7 +23,7 @@ pkgos_adduser () {
 			--shell /bin/false \
 			${VAR_UG_PKG_NAME}
 	fi
-	usermod -a -G adm,${VAR_UG_PKG_NAME} ${VAR_UG_PKG_NAME}
+	usermod -a -G adm ${VAR_UG_PKG_NAME}
 }
 
 
