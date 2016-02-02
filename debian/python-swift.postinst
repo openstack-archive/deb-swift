@@ -21,7 +21,7 @@ pkgos_adduser () {
 	else
 		usermod \
 			--shell /bin/false \
-			${VAR_UG_PKG_NAME}
+			${VAR_UG_PKG_NAME} > /dev/null 2>&1
 	fi
 	usermod -a -G adm ${VAR_UG_PKG_NAME}
 }
