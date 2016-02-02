@@ -16,10 +16,15 @@ pkgos_adduser () {
 			--no-create-home \
 			--quiet \
 			--disabled-password \
-			--shell /bin/bash \
+			--shell /bin/false \
 			--group ${VAR_UG_PKG_NAME}
+	else
+		usermod \
+			--quiet \
+			--shell /bin/false \
+			${VAR_UG_PKG_NAME}
 	fi
-	usermod -G adm ${VAR_UG_PKG_NAME}
+	usermod -a -G adm ${VAR_UG_PKG_NAME}
 }
 
 
