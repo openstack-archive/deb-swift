@@ -31,7 +31,7 @@ Build-Depends-Indep: python-coverage,
                      python-six (>= 1.9.0),
                      python-swiftclient,
                      python-xattr (>= 0.4),
-Standards-Version: 3.9.6
+Standards-Version: 3.9.7
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/swift.git;a=summary
 Vcs-Git: git://anonscm.debian.org/openstack/swift.git
 Homepage: https://github.com/openstack/swift
