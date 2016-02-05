@@ -35,6 +35,7 @@ Standards-Version: 3.9.7
 Vcs-Browser: https://anonscm.debian.org/cgit/openstack/swift.git
 Vcs-Git: https://anonscm.debian.org/git/openstack/swift.git
 Homepage: https://github.com/openstack/swift
+XS-Testsuite: autopkgtest
 
 Package: python-swift
 Architecture: all
