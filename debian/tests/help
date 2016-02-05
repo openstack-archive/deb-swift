@@ -18,7 +18,7 @@ CMDS=(
  'swift-container-auditor' 'swift-container-info' 'swift-container-reconciler'
  'swift-container-replicator' 'swift-container-server' 'swift-container-sync'
  'swift-container-updater' 'swift-dispersion-populate'
- 'swift-dispersion-report' 'swift-get-nodes' 'swift-init'
+ 'swift-dispersion-report' 'swift-get-nodes'
  'swift-object-auditor' 'swift-object-expirer' 'swift-object-info'
  'swift-object-reconstructor' 'swift-object-replicator' 'swift-object-server'
  'swift-object-updater' 'swift-oldies' 'swift-orphans' 'swift-proxy-server'
