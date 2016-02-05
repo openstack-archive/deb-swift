@@ -9,6 +9,7 @@ swift (2.6.0-2) UNRELEASED; urgency=medium
   * Changed shell of "swift" user to /bin/false.
   * Add user "swift" to group "adm", not replace group list.
   * Standards-Version is 3.9.7 now (no change).
+  * Fixed Vcs URL.
 
   [ Thomas Goirand ]
   * Added a backups folder in /etc/swift/backups which links back to
