@@ -15,3 +15,4 @@ DESC="Swift container updater"
 DAEMON_ARGS=/etc/${PROJECT_NAME}/container-server.conf
 NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
 USE_LOGFILE=no
+NO_OPENSTACK_LOGFILE_DAEMON_ARG=yes
