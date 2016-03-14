@@ -84,7 +84,7 @@ override_dh_installinit: gen-init-configurations
 			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ;; \
 		*) \
 			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ; \
-			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME@ ;; \
+			cp debian/$$INITPKG.$$INITNAME@.service debian/$$INITPKG/lib/systemd/system/$$INITNAME@.service ;; \
 		esac ; \
 	done
 
