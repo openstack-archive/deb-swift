@@ -1,0 +1,75 @@
+#!/bin/sh
+
+INIT_TEMPLATE=${1}
+
+# Get the variables defined in the init template
+. ${INIT_TEMPLATE}
+
+SYSTEM_USER=${PROJECT_NAME}
+SYSTEM_GROUP=${PROJECT_NAME}
+
+# Find out what should go in After=
+SHOULD_START=`cat ${INIT_TEMPLATE} | grep "# Should-Start:" | sed 's/# Should-Start://'`
+
+if [ -n "${SHOULD_START}" ] ; then
+	AFTER="After="
+	for i in ${SHOULD_START} ; do
+		AFTER="${AFTER}${i}.service "
+	done
+fi
+
+##############################
+
+SERVICE_FILE=`echo ${INIT_TEMPLATE} | sed 's/.init.in/.service/'`
+
+echo "[Unit]
+Description=${DESC}
+ConditionPathExists=/etc/${PROJECT_NAME}/${CONFIG}.conf
+$AFTER
+
+[Service]
+User=${SYSTEM_USER}
+Group=${SYSTEM_GROUP}
+WorkingDirectory=/var/lib/${PROJECT_NAME}
+PermissionsStartOnly=true
+ExecStartPre=/bin/mkdir -p /var/lock/${PROJECT_NAME} /var/log/${PROJECT_NAME} /var/lib/${PROJECT_NAME}
+ExecStartPre=/bin/chown ${SYSTEM_USER}:${SYSTEM_GROUP} /var/lock/${PROJECT_NAME} /var/log/${PROJECT_NAME} /var/lib/${PROJECT_NAME}
+ExecStart=/usr/bin/${NAME} /etc/${PROJECT_NAME}/${CONFIG}.conf
+Restart=on-failure
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+" >${SERVICE_FILE}
+
+##############################
+
+if [ "$MULTI" ] ; then
+
+SERVICE_FILE=`echo ${INIT_TEMPLATE} | sed 's/.init.in/@.service/'`
+SERVICE_NAME=${INIT_TEMPLATE%.init.in}
+SERVICE_NAME=${SERVICE_NAME##*/}
+SERVICE_NAME=${SERVICE_NAME##*.}
+
+echo "[Unit]
+Description=${DESC}
+PartOf=${SERVICE_NAME}.service
+ReloadPropagatedFrom=${SERVICE_NAME}.service
+$AFTER
+
+[Service]
+User=${SYSTEM_USER}
+Group=${SYSTEM_GROUP}
+WorkingDirectory=/var/lib/${PROJECT_NAME}
+PermissionsStartOnly=true
+ExecStartPre=/bin/mkdir -p /var/lock/${PROJECT_NAME} /var/log/${PROJECT_NAME} /var/lib/${PROJECT_NAME}
+ExecStartPre=/bin/chown ${SYSTEM_USER}:${SYSTEM_GROUP} /var/lock/${PROJECT_NAME} /var/log/${PROJECT_NAME} /var/lib/${PROJECT_NAME}
+ExecStart=/usr/bin/${NAME} /etc/${PROJECT_NAME}/${CONFIG}/%i.conf
+Restart=on-failure
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+" >${SERVICE_FILE}
+
+fi

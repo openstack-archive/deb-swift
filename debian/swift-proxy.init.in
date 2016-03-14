@@ -12,8 +12,5 @@
 PROJECT_NAME=swift
 NAME="${PROJECT_NAME}-proxy-server"
 DESC="OpenStack Swift proxy server"
-SCRIPTNAME=/etc/init.d/swift-proxy
-DAEMON_ARGS=/etc/${PROJECT_NAME}/proxy-server.conf
-NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
-USE_LOGFILE=no
-NO_OPENSTACK_LOGFILE_DAEMON_ARG=yes
+CONFIG=proxy-server
+MULTI=1

@@ -6,3 +6,5 @@ usr/bin/swift-container-server
 usr/bin/swift-container-sync
 usr/bin/swift-container-updater
 usr/bin/swift-reconciler-enqueue
+debian/swift-container-generator /lib/systemd/system-generators
+debian/swift-container@.service /lib/systemd/system

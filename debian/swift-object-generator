@@ -1,0 +1,32 @@
+#!/bin/sh
+
+# This systemd generator creates dependency symlinks that make all
+# Swift account servers be started/stopped/reloaded
+# when swift-account*.service is started/stopped/reloaded.
+
+set -eu
+
+GENDIR="$1"
+LIBDIR="/lib/systemd/system"
+CONFIG=/etc/swift/account-server
+
+if [ ! -d "$CONFIG" ] ; then
+    # Single config mode
+    exit 0
+fi
+
+for NAME in $CONFIG/* ; do
+    NAME=${NAME#$CONFIG}
+    NAME=${NAME#/}
+    NAME=${NAME%.conf}
+
+    for i in object object-auditor object-reconstructor object-replicator object-updater ; do
+        mkdir -p "$GENDIR/swift-$i.service.wants"
+        ln -s \
+            "$LIBDIR/swift-$i@.service" \
+            "$GENDIR/swift-$i.service.wants/swift-$i@$NAME.service"
+    done
+done
+
+exit 0
+

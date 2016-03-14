@@ -12,11 +12,5 @@
 PROJECT_NAME=swift
 NAME="${PROJECT_NAME}-container-reconciler"
 DESC="OpenStack Swift container reconciler"
-if [ -e /etc/${PROJECT_NAME}/container-server.conf ] ; then
-	DAEMON_ARGS=/etc/${PROJECT_NAME}/container-server.conf
-else
-	DAEMON_ARGS=/etc/${PROJECT_NAME}/container-server
-fi
-NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
-USE_LOGFILE=no
-NO_OPENSTACK_LOGFILE_DAEMON_ARG=yes
+CONFIG=container-server
+MULTI=1

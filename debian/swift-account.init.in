@@ -12,12 +12,5 @@
 PROJECT_NAME=swift
 NAME="${PROJECT_NAME}-account-server"
 DESC="OpenStack Swift account server"
-SCRIPTNAME=/etc/init.d/swift-account
-if [ -e /etc/${PROJECT_NAME}/account-server.conf ] ; then
-	DAEMON_ARGS=/etc/${PROJECT_NAME}/account-server.conf
-else
-	DAEMON_ARGS=/etc/${PROJECT_NAME}/account-server
-fi
-NO_OPENSTACK_CONFIG_FILE_DAEMON_ARG=yes
-USE_LOGFILE=no
-NO_OPENSTACK_LOGFILE_DAEMON_ARG=yes
+CONFIG=account-server
+MULTI=1
