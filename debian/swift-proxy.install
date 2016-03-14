@@ -1,2 +1,1 @@
 usr/bin/swift-proxy-server
-debian/swift-proxy@.service /lib/systemd/system
