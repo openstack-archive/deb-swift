@@ -1,6 +1,6 @@
 swift (2.6.0-3) UNRELEASED; urgency=medium
 
-  * Check for existance of .conf files, remove the extension if the file isn't
+  * Check for existence of .conf files, remove the extension if the file isn't
     there, so that it's possible to use for example {1,2,3,4}.conf in the
     /etc/swift/account-server folder instead of /etc/swift/account-server.conf.
 
