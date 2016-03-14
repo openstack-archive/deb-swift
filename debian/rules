@@ -87,34 +87,3 @@ override_dh_installinit: gen-init-configurations
 			cp debian/$$INITPKG.$$INITNAME@.service debian/$$INITPKG/lib/systemd/system/$$INITNAME@.service ;; \
 		esac ; \
 	done
-
-
-
-#	dh_installinit --error-handler=true
-#
-#	dh_installinit --no-start -pswift-container --name=swift-container-replicator
-#	dh_installinit --no-start -pswift-container --name=swift-container-replicator@
-#	dh_installinit --no-start -pswift-container --name=swift-container-auditor
-#	dh_installinit --no-start -pswift-container --name=swift-container-auditor@
-#	dh_installinit --no-start -pswift-container --name=swift-container-updater
-#	dh_installinit --no-start -pswift-container --name=swift-container-updater@
-#	dh_installinit --no-start -pswift-container --name=swift-container-reconciler
-#	dh_installinit --no-start -pswift-container --name=swift-container-reconciler@
-#	dh_installinit --no-start -pswift-container --name=swift-container-sync
-#	dh_installinit --no-start -pswift-container --name=swift-container-sync@
-
-#	dh_installinit --no-start -pswift-account --name=swift-account-replicator
-#	dh_installinit --no-start -pswift-account --name=swift-account-replicator@
-#	dh_installinit --no-start -pswift-account --name=swift-account-auditor
-#	dh_installinit --no-start -pswift-account --name=swift-account-auditor@
-#	dh_installinit --no-start -pswift-account --name=swift-account-reaper
-#	dh_installinit --no-start -pswift-account --name=swift-account-reaper@
-
-#	dh_installinit --no-start -pswift-object --name=swift-object-replicator
-#	dh_installinit --no-start -pswift-object --name=swift-object-replicator@
-#	dh_installinit --no-start -pswift-object --name=swift-object-auditor
-#	dh_installinit --no-start -pswift-object --name=swift-object-auditor@
-#	dh_installinit --no-start -pswift-object --name=swift-object-updater
-#	dh_installinit --no-start -pswift-object --name=swift-object-updater@
-#	dh_installinit --no-start -pswift-object --name=swift-object-reconstructor
-#	dh_installinit --no-start -pswift-object --name=swift-object-reconstructor@
