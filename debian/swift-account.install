@@ -5,4 +5,3 @@ usr/bin/swift-account-reaper
 usr/bin/swift-account-replicator
 usr/bin/swift-account-server
 debian/swift-account-generator /lib/systemd/system-generators
-debian/swift-account@.service /lib/systemd/system

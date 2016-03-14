@@ -6,4 +6,3 @@ usr/bin/swift-object-server
 usr/bin/swift-object-updater
 usr/bin/swift-recon-cron
 debian/swift-object-generator /lib/systemd/system-generators
-debian/swift-object@.service /lib/systemd/system
