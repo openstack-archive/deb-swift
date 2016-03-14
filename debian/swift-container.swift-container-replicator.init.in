@@ -12,7 +12,7 @@
 PROJECT_NAME=swift
 NAME="${PROJECT_NAME}-container-replicator"
 DESC="OpenStack Swift container replicator"
-if [ -e /etc/${PROJECT_NAME}/account-server.conf ] ; then
+if [ -e /etc/${PROJECT_NAME}/container-server.conf ] ; then
 	DAEMON_ARGS=/etc/${PROJECT_NAME}/container-server.conf
 else
 	DAEMON_ARGS=/etc/${PROJECT_NAME}/container-server
