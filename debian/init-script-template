@@ -38,7 +38,7 @@ do_start() {
         SUFFIX=${SUFFIX%.conf}
         if [ "$SUFFIX" ] ; then
             # /etc/swift/${NAME}/*.conf
-            SUFFIX=-${SUFFIX%/}
+            SUFFIX=-${SUFFIX#/}
         fi
         PIDFILE=/var/run/${PROJECT_NAME}/${NAME}${SUFFIX}.pid
 
