@@ -83,7 +83,7 @@ override_dh_installinit: gen-init-configurations
 		swift-object-expirer) \
 			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ;; \
 		*) \
-			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ;; \
+			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ; \
 			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME@ ;; \
 		esac ; \
 	done
