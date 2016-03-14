@@ -72,7 +72,7 @@ do_start() {
 }
 
 do_stop() {
-    for PIDFILE in /var/run/${PROJECT_NAME}/*.pid ; do
+    for PIDFILE in /var/run/${PROJECT_NAME}/${NAME}*.pid ; do
         start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE
         RETVAL=$?
         rm -f $PIDFILE
