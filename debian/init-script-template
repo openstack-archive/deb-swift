@@ -34,6 +34,10 @@ fi
 
 do_start() {
     for CONF_FILE in /etc/swift/${CONFIG}.conf /etc/swift/${CONFIG}/*.conf ; do
+        if [ ! -e "$CONF_FILE" ] ; then
+            continue
+        fi
+
         SUFFIX=${CONF_FILE#/etc/swift/$CONFIG}
         SUFFIX=${SUFFIX%.conf}
         if [ "$SUFFIX" ] ; then
