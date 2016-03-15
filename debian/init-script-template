@@ -28,6 +28,8 @@ fi
 # This defines init_is_upstart which we use later on (+ more...)
 . /lib/lsb/init-functions
 
+RET=0
+
 # Configs
 [ -r /etc/default/openstack ] && . /etc/default/openstack
 [ -r /etc/default/$NAME ] && . /etc/default/$NAME
@@ -95,8 +97,8 @@ start)
 	log_daemon_msg "Starting $DESC" "$NAME"
 	do_start
 	case $? in
-		0|1) log_end_msg 0 ;;
-		2) log_end_msg 1 ;;
+		0|1) log_end_msg 0 ; RET=$? ;;
+		2)   log_end_msg 1 ; RET=$? ;;
 	esac
 ;;
 stop)
@@ -104,12 +106,13 @@ stop)
 	log_daemon_msg "Stopping $DESC" "$NAME"
 	do_stop
 	case $? in
-		0|1) log_end_msg 0 ;;
-		2) log_end_msg 1 ;;
+		0|1) log_end_msg 0 ; RET=$? ;;
+		2)   log_end_msg 1 ; RET=$? ;;
 	esac
 ;;
 status)
-	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
+	status_of_proc "$DAEMON" "$NAME"
+	RET=$?
 ;;
 restart|force-reload)
 	init_is_upstart > /dev/null 2>&1 && exit 1
@@ -119,18 +122,18 @@ restart|force-reload)
 		0|1)
 			do_start
 			case $? in
-				0) log_end_msg 0 ;;
-				1) log_end_msg 1 ;; # Old process is still running
-				*) log_end_msg 1 ;; # Failed to start
+				0) log_end_msg 0 ; RET=$? ;;
+				1) log_end_msg 1 ; RET=$? ;; # Old process is still running
+				*) log_end_msg 1 ; RET=$? ;; # Failed to start
 			esac
 		;;
-		*) log_end_msg 1 ;; # Failed to stop
+		*) log_end_msg 1 ; RET=$? ;; # Failed to stop
 	esac
 ;;
 *)
 	echo "Usage: $0 {start|stop|status|restart|force-reload}" >&2
-	exit 3
+	RET=3
 ;;
 esac
 
-exit 0
+exit $RET
