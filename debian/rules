@@ -71,7 +71,10 @@ gen-init-configurations:
 	# TODO: Upstart
 
 override_dh_systemd_enable: gen-init-configurations
-	dh_systemd_enable
+	echo "Do nothing"
+
+override_dh_systemd_start:
+	echo "Do nothing"
 
 override_dh_installinit: gen-init-configurations
 	set -e ; set -x ; for i in `ls -1 debian/*.init.in` ; do \
@@ -81,9 +84,13 @@ override_dh_installinit: gen-init-configurations
 		echo "Package: $$INITPKG Init: $$INITNAME" ; \
 		case $$INITNAME in \
 		swift-object-expirer) \
-			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ;; \
+			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ; \
+			dh_systemd_enable -p$$INITPKG --name=$$INITNAME ; \
+			dh_systemd_start ;; \
 		*) \
 			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ; \
-			cp debian/$$INITPKG.$$INITNAME@.service debian/$$INITPKG/lib/systemd/system/$$INITNAME@.service ;; \
+			cp debian/$$INITPKG.$$INITNAME@.service debian/$$INITPKG/lib/systemd/system/$$INITNAME@.service ;
+			dh_systemd_enable -p$$INITPKG --name=$$INITNAME ; \
+			dh_systemd_start -p$$INITPKG --name=$$INITNAME ;; \
 		esac ; \
 	done
