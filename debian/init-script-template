@@ -33,6 +33,7 @@ fi
 [ -r /etc/default/$NAME ] && . /etc/default/$NAME
 
 do_start() {
+    STARTED=
     for CONF_FILE in /etc/swift/${CONFIG}.conf /etc/swift/${CONFIG}/*.conf ; do
         if [ ! -e "$CONF_FILE" ] ; then
             continue
@@ -68,7 +69,13 @@ do_start() {
             --startas $DAEMON \
             -- $CONF_FILE \
             || return 2
+
+        STARTED=1
     done
+
+    if [ ! "$STARTED" ] ; then
+        return 2
+    fi
 }
 
 do_stop() {
@@ -76,8 +83,10 @@ do_stop() {
         start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE
         RETVAL=$?
         rm -f $PIDFILE
+        if [ "$RETVAL" != "0" ] ; then
+            return "$RETVAL"
+        fi
     done
-	return "$RETVAL"
 }
 
 case "$1" in
