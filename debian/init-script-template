@@ -82,7 +82,7 @@ do_stop() {
 
 case "$1" in
 start)
-	init_is_upstart > /dev/null 2>&1 && exit 1
+	#init_is_upstart > /dev/null 2>&1 && exit 1
 	log_daemon_msg "Starting $DESC" "$NAME"
 	do_start
 	case $? in
@@ -91,7 +91,7 @@ start)
 	esac
 ;;
 stop)
-	init_is_upstart > /dev/null 2>&1 && exit 0
+	#init_is_upstart > /dev/null 2>&1 && exit 0
 	log_daemon_msg "Stopping $DESC" "$NAME"
 	do_stop
 	case $? in
@@ -103,7 +103,7 @@ status)
 	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
 ;;
 restart|force-reload)
-	init_is_upstart > /dev/null 2>&1 && exit 1
+	#init_is_upstart > /dev/null 2>&1 && exit 1
 	log_daemon_msg "Restarting $DESC" "$NAME"
 	do_stop
 	case $? in
