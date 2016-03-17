@@ -28,56 +28,67 @@ fi
 # This defines init_is_upstart which we use later on (+ more...)
 . /lib/lsb/init-functions
 
+RET=0
+
 # Configs
 [ -r /etc/default/openstack ] && . /etc/default/openstack
 [ -r /etc/default/$NAME ] && . /etc/default/$NAME
 
 do_start() {
-    for CONF_FILE in /etc/swift/${CONFIG}.conf /etc/swift/${CONFIG}/*.conf ; do
-        if [ ! -e "$CONF_FILE" ] ; then
-            continue
-        fi
+	STARTED=
+	for CONF_FILE in /etc/swift/${CONFIG}.conf /etc/swift/${CONFIG}/*.conf ; do
+		if [ ! -e "$CONF_FILE" ] ; then
+			continue
+		fi
 
-        SUFFIX=${CONF_FILE#/etc/swift/$CONFIG}
-        SUFFIX=${SUFFIX%.conf}
-        if [ "$SUFFIX" ] ; then
-            # /etc/swift/${NAME}/*.conf
-            SUFFIX=-${SUFFIX#/}
-        fi
-        PIDFILE=/var/run/${PROJECT_NAME}/${NAME}${SUFFIX}.pid
+		SUFFIX=${CONF_FILE#/etc/swift/$CONFIG}
+		SUFFIX=${SUFFIX%.conf}
+		if [ "$SUFFIX" ] ; then
+			# /etc/swift/${NAME}/*.conf
+			SUFFIX=-${SUFFIX#/}
+		fi
+		PIDFILE=/var/run/${PROJECT_NAME}/${NAME}${SUFFIX}.pid
 
-        start-stop-daemon \
-            --start \
-            --quiet \
-            --background \
-            --chuid ${SYSTEM_USER}:${SYSTEM_GROUP} \
-            --make-pidfile \
-            --pidfile ${PIDFILE} \
-            --chdir /var/lib/${PROJECT_NAME} \
-            --startas $DAEMON \
-            --test > /dev/null \
-            || return 1
-        start-stop-daemon \
-            --start \
-            --quiet \
-            --background \
-            --chuid ${SYSTEM_USER}:${SYSTEM_GROUP} \
-            --make-pidfile \
-            --pidfile ${PIDFILE} \
-            --chdir /var/lib/${PROJECT_NAME} \
-            --startas $DAEMON \
-            -- $CONF_FILE \
-            || return 2
-    done
+		start-stop-daemon \
+			--start \
+			--quiet \
+			--background \
+			--chuid ${SYSTEM_USER}:${SYSTEM_GROUP} \
+			--make-pidfile \
+			--pidfile ${PIDFILE} \
+			--chdir /var/lib/${PROJECT_NAME} \
+			--startas $DAEMON \
+			--test > /dev/null \
+			|| return 1
+		start-stop-daemon \
+			--start \
+			--quiet \
+			--background \
+			--chuid ${SYSTEM_USER}:${SYSTEM_GROUP} \
+			--make-pidfile \
+			--pidfile ${PIDFILE} \
+			--chdir /var/lib/${PROJECT_NAME} \
+			--startas $DAEMON \
+			-- $CONF_FILE \
+			|| return 2
+
+		STARTED=1
+	done
+
+	if [ ! "$STARTED" ] ; then
+		return 2
+	fi
 }
 
 do_stop() {
-    for PIDFILE in /var/run/${PROJECT_NAME}/${NAME}*.pid ; do
-        start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE
-        RETVAL=$?
-        rm -f $PIDFILE
-    done
-	return "$RETVAL"
+	for PIDFILE in /var/run/${PROJECT_NAME}/${NAME}*.pid ; do
+		start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE
+		RETVAL=$?
+		rm -f $PIDFILE
+		if [ "$RETVAL" != "0" ] ; then
+			return "$RETVAL"
+		fi
+	done
 }
 
 case "$1" in
@@ -86,8 +97,8 @@ start)
 	log_daemon_msg "Starting $DESC" "$NAME"
 	do_start
 	case $? in
-		0|1) log_end_msg 0 ;;
-		2) log_end_msg 1 ;;
+		0|1) log_end_msg 0 ; RET=$? ;;
+		2)   log_end_msg 1 ; RET=$? ;;
 	esac
 ;;
 stop)
@@ -95,33 +106,34 @@ stop)
 	log_daemon_msg "Stopping $DESC" "$NAME"
 	do_stop
 	case $? in
-		0|1) log_end_msg 0 ;;
-		2) log_end_msg 1 ;;
+		0|1) log_end_msg 0 ; RET=$? ;;
+		2)   log_end_msg 1 ; RET=$? ;;
 	esac
 ;;
 status)
-	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
+	status_of_proc "$DAEMON" "$NAME"
+	RET=$?
 ;;
 restart|force-reload)
 	#init_is_upstart > /dev/null 2>&1 && exit 1
 	log_daemon_msg "Restarting $DESC" "$NAME"
 	do_stop
 	case $? in
-        0|1)
-            do_start
-            case $? in
-                0) log_end_msg 0 ;;
-                1) log_end_msg 1 ;; # Old process is still running
-                *) log_end_msg 1 ;; # Failed to start
-            esac
-        ;;
-        *) log_end_msg 1 ;; # Failed to stop
+		0|1)
+			do_start
+			case $? in
+				0) log_end_msg 0 ; RET=$? ;;
+				1) log_end_msg 1 ; RET=$? ;; # Old process is still running
+				*) log_end_msg 1 ; RET=$? ;; # Failed to start
+			esac
+		;;
+		*) log_end_msg 1 ; RET=$? ;; # Failed to stop
 	esac
 ;;
 *)
 	echo "Usage: $0 {start|stop|status|restart|force-reload}" >&2
-	exit 3
+	RET=3
 ;;
 esac
 
-exit 0
+exit $RET
