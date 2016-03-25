@@ -83,7 +83,7 @@ override_dh_installinit: gen-init-configurations
 		INITNAME=`echo $$MYINIT | cut -d. -f2` ; \
 		echo "Package: $$INITPKG Init: $$INITNAME" ; \
 		case $$INITNAME in \
-		swift-object-expirer) \
+		swift-object-expirer|swift-container-reconciler) \
 			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ;; \
 		*) \
 			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ; \
