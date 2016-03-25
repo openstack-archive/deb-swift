@@ -443,10 +443,10 @@ class RingBuilder(object):
         self._set_parts_wanted(replica_plan)
 
         assign_parts = defaultdict(list)
-        # gather parts from failed devices
-        removed_devs = self._gather_parts_from_failed_devices(assign_parts)
         # gather parts from replica count adjustment
         self._adjust_replica2part2dev_size(assign_parts)
+        # gather parts from failed devices
+        removed_devs = self._gather_parts_from_failed_devices(assign_parts)
         # gather parts for dispersion (N.B. this only picks up parts that
         # *must* disperse according to the replica plan)
         self._gather_parts_for_dispersion(assign_parts, replica_plan)
@@ -978,12 +978,6 @@ class RingBuilder(object):
                 if dev_id == NONE_DEV:
                     continue
                 dev = self.devs[dev_id]
-                # the min part hour check is ignored iff a device has more
-                # than one replica of a part assigned to it - which would have
-                # only been possible on rings built with older version of code
-                if (self._last_part_moves[part] < self.min_part_hours and
-                        not replicas_at_tier[dev['tiers'][-1]] > 1):
-                    break
                 if all(replicas_at_tier[tier] <=
                        replica_plan[tier]['max']
                        for tier in dev['tiers']):
@@ -996,8 +990,12 @@ class RingBuilder(object):
             undispersed_dev_replicas.sort(
                 key=lambda dr: dr[0]['parts_wanted'])
             for dev, replica in undispersed_dev_replicas:
-                if self._last_part_moves[part] < self.min_part_hours:
-                    break
+                # the min part hour check is ignored iff a device has more
+                # than one replica of a part assigned to it - which would have
+                # only been possible on rings built with older version of code
+                if (self._last_part_moves[part] < self.min_part_hours and
+                        not replicas_at_tier[dev['tiers'][-1]] > 1):
+                    continue
                 dev['parts_wanted'] += 1
                 dev['parts'] -= 1
                 assign_parts[part].append(replica)
@@ -1690,3 +1688,38 @@ class RingBuilder(object):
             if matched:
                 matched_devs.append(dev)
         return matched_devs
+
+    def increase_partition_power(self):
+        """ Increases ring partition power by one.
+
+        Devices will be assigned to partitions like this:
+
+        OLD: 0, 3, 7, 5, 2, 1, ...
+        NEW: 0, 0, 3, 3, 7, 7, 5, 5, 2, 2, 1, 1, ...
+
+        """
+
+        new_replica2part2dev = []
+        for replica in self._replica2part2dev:
+            new_replica = array('H')
+            for device in replica:
+                new_replica.append(device)
+                new_replica.append(device)  # append device a second time
+            new_replica2part2dev.append(new_replica)
+        self._replica2part2dev = new_replica2part2dev
+
+        for device in self._iter_devs():
+            device['parts'] *= 2
+
+        # We need to update the time when a partition has been moved the last
+        # time. Since this is an array of all partitions, we need to double it
+        # two
+        new_last_part_moves = []
+        for partition in self._last_part_moves:
+            new_last_part_moves.append(partition)
+            new_last_part_moves.append(partition)
+        self._last_part_moves = new_last_part_moves
+
+        self.part_power += 1
+        self.parts *= 2
+        self.version += 1

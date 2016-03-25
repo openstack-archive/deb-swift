@@ -34,7 +34,8 @@ from tempfile import mkdtemp
 from shutil import rmtree
 from swift.common.utils import Timestamp, NOTICE
 from test import get_config
-from swift.common import swob, utils
+from swift.common import utils
+from swift.common.header_key_dict import HeaderKeyDict
 from swift.common.ring import Ring, RingData
 from hashlib import md5
 import logging.handlers
@@ -607,12 +608,19 @@ class FakeLogger(logging.Logger, object):
         pass
 
 
+class DebugSwiftLogFormatter(utils.SwiftLogFormatter):
+
+    def format(self, record):
+        msg = super(DebugSwiftLogFormatter, self).format(record)
+        return msg.replace('#012', '\n')
+
+
 class DebugLogger(FakeLogger):
     """A simple stdout logging version of FakeLogger"""
 
     def __init__(self, *args, **kwargs):
         FakeLogger.__init__(self, *args, **kwargs)
-        self.formatter = logging.Formatter(
+        self.formatter = DebugSwiftLogFormatter(
             "%(server)s %(levelname)s: %(message)s")
 
     def handle(self, record):
@@ -894,7 +902,7 @@ def fake_http_connect(*code_iter, **kwargs):
                 else:
                     etag = '"68b329da9893e34099c7d8ad5cb9c940"'
 
-            headers = swob.HeaderKeyDict({
+            headers = HeaderKeyDict({
                 'content-length': len(self.body),
                 'content-type': 'x-application/test',
                 'x-timestamp': self.timestamp,
@@ -953,7 +961,7 @@ def fake_http_connect(*code_iter, **kwargs):
                     eventlet.sleep(value)
 
         def getheader(self, name, default=None):
-            return swob.HeaderKeyDict(self.getheaders()).get(name, default)
+            return HeaderKeyDict(self.getheaders()).get(name, default)
 
         def close(self):
             pass

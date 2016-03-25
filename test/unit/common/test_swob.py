@@ -98,64 +98,6 @@ class TestHeaderEnvironProxy(unittest.TestCase):
             set(('Content-Length', 'Content-Type', 'Something-Else')))
 
 
-class TestHeaderKeyDict(unittest.TestCase):
-    def test_case_insensitive(self):
-        headers = swift.common.swob.HeaderKeyDict()
-        headers['Content-Length'] = 0
-        headers['CONTENT-LENGTH'] = 10
-        headers['content-length'] = 20
-        self.assertEqual(headers['Content-Length'], '20')
-        self.assertEqual(headers['content-length'], '20')
-        self.assertEqual(headers['CONTENT-LENGTH'], '20')
-
-    def test_setdefault(self):
-        headers = swift.common.swob.HeaderKeyDict()
-
-        # it gets set
-        headers.setdefault('x-rubber-ducky', 'the one')
-        self.assertEqual(headers['X-Rubber-Ducky'], 'the one')
-
-        # it has the right return value
-        ret = headers.setdefault('x-boat', 'dinghy')
-        self.assertEqual(ret, 'dinghy')
-
-        ret = headers.setdefault('x-boat', 'yacht')
-        self.assertEqual(ret, 'dinghy')
-
-        # shouldn't crash
-        headers.setdefault('x-sir-not-appearing-in-this-request', None)
-
-    def test_del_contains(self):
-        headers = swift.common.swob.HeaderKeyDict()
-        headers['Content-Length'] = 0
-        self.assertTrue('Content-Length' in headers)
-        del headers['Content-Length']
-        self.assertTrue('Content-Length' not in headers)
-
-    def test_update(self):
-        headers = swift.common.swob.HeaderKeyDict()
-        headers.update({'Content-Length': '0'})
-        headers.update([('Content-Type', 'text/plain')])
-        self.assertEqual(headers['Content-Length'], '0')
-        self.assertEqual(headers['Content-Type'], 'text/plain')
-
-    def test_get(self):
-        headers = swift.common.swob.HeaderKeyDict()
-        headers['content-length'] = 20
-        self.assertEqual(headers.get('CONTENT-LENGTH'), '20')
-        self.assertEqual(headers.get('something-else'), None)
-        self.assertEqual(headers.get('something-else', True), True)
-
-    def test_keys(self):
-        headers = swift.common.swob.HeaderKeyDict()
-        headers['content-length'] = 20
-        headers['cOnTent-tYpe'] = 'text/plain'
-        headers['SomeThing-eLse'] = 'somevalue'
-        self.assertEqual(
-            set(headers.keys()),
-            set(('Content-Length', 'Content-Type', 'Something-Else')))
-
-
 class TestRange(unittest.TestCase):
     def test_range(self):
         swob_range = swift.common.swob.Range('bytes=1-7')
@@ -337,6 +279,41 @@ class TestMatch(unittest.TestCase):
         self.assertTrue('a' in match)
         self.assertTrue('b' in match)
         self.assertTrue('c' not in match)
+
+
+class TestTransferEncoding(unittest.TestCase):
+    def test_is_chunked(self):
+        headers = {}
+        self.assertFalse(swift.common.swob.is_chunked(headers))
+
+        headers['Transfer-Encoding'] = 'chunked'
+        self.assertTrue(swift.common.swob.is_chunked(headers))
+
+        headers['Transfer-Encoding'] = 'gzip,chunked'
+        try:
+            swift.common.swob.is_chunked(headers)
+        except AttributeError as e:
+            self.assertEqual(str(e), "Unsupported Transfer-Coding header"
+                             " value specified in Transfer-Encoding header")
+        else:
+            self.fail("Expected an AttributeError raised for 'gzip'")
+
+        headers['Transfer-Encoding'] = 'gzip'
+        try:
+            swift.common.swob.is_chunked(headers)
+        except ValueError as e:
+            self.assertEqual(str(e), "Invalid Transfer-Encoding header value")
+        else:
+            self.fail("Expected a ValueError raised for 'gzip'")
+
+        headers['Transfer-Encoding'] = 'gzip,identity'
+        try:
+            swift.common.swob.is_chunked(headers)
+        except AttributeError as e:
+            self.assertEqual(str(e), "Unsupported Transfer-Coding header"
+                             " value specified in Transfer-Encoding header")
+        else:
+            self.fail("Expected an AttributeError raised for 'gzip,identity'")
 
 
 class TestAccept(unittest.TestCase):

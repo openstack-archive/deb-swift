@@ -115,7 +115,7 @@ class TestBaseSsync(BaseTest):
         return wrapped_connect, trace
 
     def _create_ondisk_files(self, df_mgr, obj_name, policy, timestamp,
-                             frag_indexes=None):
+                             frag_indexes=None, commit=True):
         frag_indexes = [None] if frag_indexes is None else frag_indexes
         metadata = {'Content-Type': 'plain/text'}
         diskfiles = []
@@ -123,16 +123,18 @@ class TestBaseSsync(BaseTest):
             object_data = '/a/c/%s___%s' % (obj_name, frag_index)
             if frag_index is not None:
                 metadata['X-Object-Sysmeta-Ec-Frag-Index'] = str(frag_index)
-            df = self._make_open_diskfile(
+            df = self._make_diskfile(
                 device=self.device, partition=self.partition, account='a',
                 container='c', obj=obj_name, body=object_data,
                 extra_metadata=metadata, timestamp=timestamp, policy=policy,
-                frag_index=frag_index, df_mgr=df_mgr)
-            # sanity checks
-            listing = os.listdir(df._datadir)
-            self.assertTrue(listing)
-            for filename in listing:
-                self.assertTrue(filename.startswith(timestamp.internal))
+                frag_index=frag_index, df_mgr=df_mgr, commit=commit)
+            if commit:
+                df.open()
+                # sanity checks
+                listing = os.listdir(df._datadir)
+                self.assertTrue(listing)
+                for filename in listing:
+                    self.assertTrue(filename.startswith(timestamp.internal))
             diskfiles.append(df)
         return diskfiles
 
@@ -325,10 +327,12 @@ class TestSsyncEC(TestBaseSsync):
         t2 = next(self.ts_iter)
         tx_objs['o2'] = self._create_ondisk_files(
             tx_df_mgr, 'o2', policy, t2, (tx_node_index,))
-        # o3 only has handoff
+        # o3 only has handoff, rx has other frag index
         t3 = next(self.ts_iter)
         tx_objs['o3'] = self._create_ondisk_files(
             tx_df_mgr, 'o3', policy, t3, (rx_node_index,))
+        rx_objs['o3'] = self._create_ondisk_files(
+            rx_df_mgr, 'o3', policy, t3, (14,))
         # o4 primary and handoff fragment archives on tx, handoff in sync on rx
         t4 = next(self.ts_iter)
         tx_objs['o4'] = self._create_ondisk_files(
@@ -385,6 +389,111 @@ class TestSsyncEC(TestBaseSsync):
         self._verify_ondisk_files(
             tx_objs, policy, frag_index, rx_node_index)
         self._verify_tombstones(tx_tombstones, policy)
+
+    def test_handoff_fragment_only_missing_durable(self):
+        # test that a sync_revert type job does not PUT when the rx is only
+        # missing a durable file
+        policy = POLICIES.default
+        rx_node_index = frag_index = 0
+        tx_node_index = 1
+
+        # create sender side diskfiles...
+        tx_objs = {}
+        rx_objs = {}
+        tx_df_mgr = self.daemon._diskfile_router[policy]
+        rx_df_mgr = self.rx_controller._diskfile_router[policy]
+
+        expected_subreqs = defaultdict(list)
+
+        # o1 in sync on rx but rx missing .durable - no PUT required
+        t1a = next(self.ts_iter)  # older rx .data with .durable
+        t1b = next(self.ts_iter)  # rx .meta
+        t1c = next(self.ts_iter)  # tx .data with .durable, rx missing .durable
+        obj_name = 'o1'
+        tx_objs[obj_name] = self._create_ondisk_files(
+            tx_df_mgr, obj_name, policy, t1c, (tx_node_index, rx_node_index,))
+        rx_objs[obj_name] = self._create_ondisk_files(
+            rx_df_mgr, obj_name, policy, t1a, (rx_node_index,))
+        metadata = {'X-Timestamp': t1b.internal}
+        rx_objs[obj_name][0].write_metadata(metadata)
+        rx_objs[obj_name] = self._create_ondisk_files(
+            rx_df_mgr, obj_name, policy, t1c, (rx_node_index, 9), commit=False)
+
+        # o2 on rx has wrong frag_indexes and missing .durable - PUT required
+        t2 = next(self.ts_iter)
+        obj_name = 'o2'
+        tx_objs[obj_name] = self._create_ondisk_files(
+            tx_df_mgr, obj_name, policy, t2, (tx_node_index, rx_node_index,))
+        rx_objs[obj_name] = self._create_ondisk_files(
+            rx_df_mgr, obj_name, policy, t2, (13, 14), commit=False)
+        expected_subreqs['PUT'].append(obj_name)
+
+        # o3 on rx has frag at other time missing .durable - PUT required
+        t3 = next(self.ts_iter)
+        obj_name = 'o3'
+        tx_objs[obj_name] = self._create_ondisk_files(
+            tx_df_mgr, obj_name, policy, t3, (tx_node_index, rx_node_index,))
+        t3b = next(self.ts_iter)
+        rx_objs[obj_name] = self._create_ondisk_files(
+            rx_df_mgr, obj_name, policy, t3b, (rx_node_index,), commit=False)
+        expected_subreqs['PUT'].append(obj_name)
+
+        # o4 on rx has a newer tombstone and even newer frags - no PUT required
+        t4 = next(self.ts_iter)
+        obj_name = 'o4'
+        tx_objs[obj_name] = self._create_ondisk_files(
+            tx_df_mgr, obj_name, policy, t4, (tx_node_index, rx_node_index,))
+        rx_objs[obj_name] = self._create_ondisk_files(
+            rx_df_mgr, obj_name, policy, t4, (rx_node_index,))
+        t4b = next(self.ts_iter)
+        rx_objs[obj_name][0].delete(t4b)
+        t4c = next(self.ts_iter)
+        rx_objs[obj_name] = self._create_ondisk_files(
+            rx_df_mgr, obj_name, policy, t4c, (rx_node_index,), commit=False)
+
+        suffixes = set()
+        for diskfiles in tx_objs.values():
+            for df in diskfiles:
+                suffixes.add(os.path.basename(os.path.dirname(df._datadir)))
+
+        # create ssync sender instance...
+        job = {'device': self.device,
+               'partition': self.partition,
+               'policy': policy,
+               'frag_index': frag_index}
+        node = dict(self.rx_node)
+        node.update({'index': rx_node_index})
+        sender = ssync_sender.Sender(self.daemon, node, job, suffixes)
+        # wrap connection from tx to rx to capture ssync messages...
+        sender.connect, trace = self.make_connect_wrapper(sender)
+
+        # run the sync protocol...
+        sender()
+
+        # verify protocol
+        results = self._analyze_trace(trace)
+        self.assertEqual(4, len(results['tx_missing']))
+        self.assertEqual(2, len(results['rx_missing']))
+        self.assertEqual(2, len(results['tx_updates']))
+        self.assertFalse(results['rx_updates'])
+        for subreq in results.get('tx_updates'):
+            obj = subreq['path'].split('/')[3]
+            method = subreq['method']
+            self.assertTrue(obj in expected_subreqs[method],
+                            'Unexpected %s subreq for object %s, expected %s'
+                            % (method, obj, expected_subreqs[method]))
+            expected_subreqs[method].remove(obj)
+            if method == 'PUT':
+                expected_body = '%s___%s' % (subreq['path'], rx_node_index)
+                self.assertEqual(expected_body, subreq['body'])
+        # verify all expected subreqs consumed
+        for _method, expected in expected_subreqs.items():
+            self.assertFalse(expected)
+
+        # verify on disk files...
+        tx_objs.pop('o4')  # o4 should not have been sync'd
+        self._verify_ondisk_files(
+            tx_objs, policy, frag_index, rx_node_index)
 
     def test_fragment_sync(self):
         # check that a sync_only type job does call reconstructor to build a
@@ -904,6 +1013,165 @@ class TestSsyncReplication(TestBaseSsync):
         # tx meta file should not have been sync'd to rx data file
         self.assertNotIn('X-Object-Meta-Test', rx_obj.get_metadata())
 
+    def test_content_type_sync(self):
+        policy = POLICIES.default
+        rx_node_index = 0
+
+        # create diskfiles...
+        tx_objs = {}
+        rx_objs = {}
+        tx_df_mgr = self.daemon._diskfile_router[policy]
+        rx_df_mgr = self.rx_controller._diskfile_router[policy]
+
+        expected_subreqs = defaultdict(list)
+
+        # o1 on tx only with two meta files
+        name = 'o1'
+        t1 = self.ts_iter.next()
+        tx_objs[name] = self._create_ondisk_files(tx_df_mgr, name, policy, t1)
+        t1_type = self.ts_iter.next()
+        metadata_1 = {'X-Timestamp': t1_type.internal,
+                      'Content-Type': 'text/test',
+                      'Content-Type-Timestamp': t1_type.internal}
+        tx_objs[name][0].write_metadata(metadata_1)
+        t1_meta = self.ts_iter.next()
+        metadata_2 = {'X-Timestamp': t1_meta.internal,
+                      'X-Object-Meta-Test': name}
+        tx_objs[name][0].write_metadata(metadata_2)
+        expected_subreqs['PUT'].append(name)
+        expected_subreqs['POST'].append(name)
+
+        # o2 on tx with two meta files, rx has .data and newest .meta but is
+        # missing latest content-type
+        name = 'o2'
+        t2 = self.ts_iter.next()
+        tx_objs[name] = self._create_ondisk_files(tx_df_mgr, name, policy, t2)
+        t2_type = self.ts_iter.next()
+        metadata_1 = {'X-Timestamp': t2_type.internal,
+                      'Content-Type': 'text/test',
+                      'Content-Type-Timestamp': t2_type.internal}
+        tx_objs[name][0].write_metadata(metadata_1)
+        t2_meta = self.ts_iter.next()
+        metadata_2 = {'X-Timestamp': t2_meta.internal,
+                      'X-Object-Meta-Test': name}
+        tx_objs[name][0].write_metadata(metadata_2)
+        rx_objs[name] = self._create_ondisk_files(rx_df_mgr, name, policy, t2)
+        rx_objs[name][0].write_metadata(metadata_2)
+        expected_subreqs['POST'].append(name)
+
+        # o3 on tx with two meta files, rx has .data and one .meta but does
+        # have latest content-type so nothing to sync
+        name = 'o3'
+        t3 = self.ts_iter.next()
+        tx_objs[name] = self._create_ondisk_files(tx_df_mgr, name, policy, t3)
+        t3_type = self.ts_iter.next()
+        metadata_1 = {'X-Timestamp': t3_type.internal,
+                      'Content-Type': 'text/test',
+                      'Content-Type-Timestamp': t3_type.internal}
+        tx_objs[name][0].write_metadata(metadata_1)
+        t3_meta = self.ts_iter.next()
+        metadata_2 = {'X-Timestamp': t3_meta.internal,
+                      'X-Object-Meta-Test': name}
+        tx_objs[name][0].write_metadata(metadata_2)
+        rx_objs[name] = self._create_ondisk_files(rx_df_mgr, name, policy, t3)
+        metadata_2b = {'X-Timestamp': t3_meta.internal,
+                       'X-Object-Meta-Test': name,
+                       'Content-Type': 'text/test',
+                       'Content-Type-Timestamp': t3_type.internal}
+        rx_objs[name][0].write_metadata(metadata_2b)
+
+        # o4 on tx with one meta file having latest content-type, rx has
+        # .data and two .meta having latest content-type so nothing to sync
+        # i.e. o4 is the reverse of o3 scenario
+        name = 'o4'
+        t4 = self.ts_iter.next()
+        tx_objs[name] = self._create_ondisk_files(tx_df_mgr, name, policy, t4)
+        t4_type = self.ts_iter.next()
+        t4_meta = self.ts_iter.next()
+        metadata_2b = {'X-Timestamp': t4_meta.internal,
+                       'X-Object-Meta-Test': name,
+                       'Content-Type': 'text/test',
+                       'Content-Type-Timestamp': t4_type.internal}
+        tx_objs[name][0].write_metadata(metadata_2b)
+        rx_objs[name] = self._create_ondisk_files(rx_df_mgr, name, policy, t4)
+        metadata_1 = {'X-Timestamp': t4_type.internal,
+                      'Content-Type': 'text/test',
+                      'Content-Type-Timestamp': t4_type.internal}
+        rx_objs[name][0].write_metadata(metadata_1)
+        metadata_2 = {'X-Timestamp': t4_meta.internal,
+                      'X-Object-Meta-Test': name}
+        rx_objs[name][0].write_metadata(metadata_2)
+
+        # o5 on tx with one meta file having latest content-type, rx has
+        # .data and no .meta
+        name = 'o5'
+        t5 = self.ts_iter.next()
+        tx_objs[name] = self._create_ondisk_files(tx_df_mgr, name, policy, t5)
+        t5_type = self.ts_iter.next()
+        t5_meta = self.ts_iter.next()
+        metadata = {'X-Timestamp': t5_meta.internal,
+                    'X-Object-Meta-Test': name,
+                    'Content-Type': 'text/test',
+                    'Content-Type-Timestamp': t5_type.internal}
+        tx_objs[name][0].write_metadata(metadata)
+        rx_objs[name] = self._create_ondisk_files(rx_df_mgr, name, policy, t5)
+        expected_subreqs['POST'].append(name)
+
+        suffixes = set()
+        for diskfiles in tx_objs.values():
+            for df in diskfiles:
+                suffixes.add(os.path.basename(os.path.dirname(df._datadir)))
+
+        # create ssync sender instance...
+        job = {'device': self.device,
+               'partition': self.partition,
+               'policy': policy}
+        node = dict(self.rx_node)
+        node.update({'index': rx_node_index})
+        sender = ssync_sender.Sender(self.daemon, node, job, suffixes)
+        # wrap connection from tx to rx to capture ssync messages...
+        sender.connect, trace = self.make_connect_wrapper(sender)
+
+        # run the sync protocol...
+        success, in_sync_objs = sender()
+
+        self.assertEqual(5, len(in_sync_objs), trace['messages'])
+        self.assertTrue(success)
+
+        # verify protocol
+        results = self._analyze_trace(trace)
+        self.assertEqual(5, len(results['tx_missing']))
+        self.assertEqual(3, len(results['rx_missing']))
+        for subreq in results.get('tx_updates'):
+            obj = subreq['path'].split('/')[3]
+            method = subreq['method']
+            self.assertTrue(obj in expected_subreqs[method],
+                            'Unexpected %s subreq for object %s, expected %s'
+                            % (method, obj, expected_subreqs[method]))
+            expected_subreqs[method].remove(obj)
+            if method == 'PUT':
+                expected_body = '%s___None' % subreq['path']
+                self.assertEqual(expected_body, subreq['body'])
+        # verify all expected subreqs consumed
+        for _method, expected in expected_subreqs.items():
+            self.assertFalse(expected,
+                             'Expected subreqs not seen for %s for objects %s'
+                             % (_method, expected))
+        self.assertFalse(results['rx_updates'])
+
+        # verify on disk files...
+        self._verify_ondisk_files(tx_objs, policy)
+        for oname, rx_obj in rx_objs.items():
+            df = rx_obj[0].open()
+            metadata = df.get_metadata()
+            self.assertEqual(metadata['X-Object-Meta-Test'], oname)
+            self.assertEqual(metadata['Content-Type'], 'text/test')
+        # verify that tx and rx both generate the same suffix hashes...
+        tx_hashes = tx_df_mgr.get_hashes(
+            self.device, self.partition, suffixes, policy)
+        rx_hashes = rx_df_mgr.get_hashes(
+            self.device, self.partition, suffixes, policy)
+        self.assertEqual(tx_hashes, rx_hashes)
 
 if __name__ == '__main__':
     unittest.main()

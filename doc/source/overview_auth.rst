@@ -154,11 +154,14 @@ add the configuration for the authtoken middleware::
 
   [filter:authtoken]
   paste.filter_factory = keystonemiddleware.auth_token:filter_factory
-  identity_uri = http://keystonehost:35357/
-  admin_tenant_name = service
-  admin_user = swift
-  admin_password = password
   auth_uri = http://keystonehost:5000/
+  auth_url = http://keystonehost:35357/
+  auth_plugin = password
+  project_domain_id = default
+  user_domain_id = default
+  project_name = service
+  username = swift
+  password = password
   cache = swift.cache
   include_service_catalog = False
   delay_auth_decision = True
@@ -166,16 +169,17 @@ add the configuration for the authtoken middleware::
 The actual values for these variables will need to be set depending on
 your situation, but in short:
 
-* ``identity_uri`` points to the Keystone Admin service. This information is
-  used by the middleware to actually query Keystone about the validity of the
-  authentication tokens. It is not necessary to append any Keystone API version
-  number to this URI.
-* The admin auth credentials (``admin_user``, ``admin_tenant_name``,
-  ``admin_password``) will be used to retrieve an admin token. That
-  token will be used to authorize user tokens behind the scenes.
 * ``auth_uri`` should point to a Keystone service from which users may
   retrieve tokens. This value is used in the `WWW-Authenticate` header that
   auth_token sends with any denial response.
+* ``auth_url`` points to the Keystone Admin service. This information is
+  used by the middleware to actually query Keystone about the validity of the
+  authentication tokens. It is not necessary to append any Keystone API version
+  number to this URI.
+* The auth credentials (``project_domain_id``, ``user_domain_id``,
+  ``username``, ``project_name``, ``password``) will be used to retrieve an
+  admin token. That token will be used to authorize user tokens behind the
+  scenes.
 * ``cache`` is set to ``swift.cache``. This means that the middleware
   will get the Swift memcache from the request environment.
 * ``include_service_catalog`` defaults to ``True`` if not set. This means
@@ -207,7 +211,7 @@ that the user is allowed to operate on project resources.
 OpenStack Service Using Composite Tokens
 ----------------------------------------
 
-Some Openstack services such as Cinder and Glance may use
+Some OpenStack services such as Cinder and Glance may use
 a "service account". In this mode, you configure a separate account where
 the service stores project data that it manages. This account is not used
 directly by the end-user. Instead, all access is done through the service.
@@ -234,19 +238,19 @@ situation as follows:
   (see ``/etc/keystone/default_catalog.templates`` above). Normally
   this is ``AUTH``.
 * The second item in the reseller_prefix list is the prefix used by the
-  Openstack services(s). You must configure this value (``SERVICE`` in the
-  example) with whatever the other Openstack service(s) use.
+  OpenStack services(s). You must configure this value (``SERVICE`` in the
+  example) with whatever the other OpenStack service(s) use.
 * Set the operator_roles option to contain a role or roles that end-user's
   have on project's they use.
 * Set the SERVICE_service_roles value to a role or roles that only the
-  Openstack service user has. Do not use a role that is assigned to
+  OpenStack service user has. Do not use a role that is assigned to
   "normal" end users. In this example, the role ``service`` is used.
   The service user is granted this role to a *single* project only. You do
   not need to make the service user a member of every project.
 
 This configuration works as follows:
 
-* The end-user presents a user token to an Openstack service. The service
+* The end-user presents a user token to an OpenStack service. The service
   then makes a Swift request to the account with the ``SERVICE`` prefix.
 * The service forwards the original user token with the request. It also
   adds it's own service token.

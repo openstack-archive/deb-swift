@@ -44,7 +44,7 @@ bind_port = 6000
 # log_udp_port = 514
 #
 # You can enable StatsD logging here:
-# log_statsd_host = localhost
+# log_statsd_host =
 # log_statsd_port = 8125
 # log_statsd_default_sample_rate = 1.0
 # log_statsd_sample_rate_factor = 1.0
@@ -82,6 +82,11 @@ use = egg:swift#object
 # set log_address = /dev/log
 #
 # max_upload_time = 86400
+#
+# slow is the total amount of seconds an object PUT/DELETE request takes at
+# least. If it is faster, the object server will sleep this amount of time minus
+# the already passed transaction time.  This is only useful for simulating slow
+# devices on storage nodes during testing and development.
 # slow = 0
 #
 # Objects smaller than this are not evicted from the buffercache once read
@@ -113,14 +118,15 @@ use = egg:swift#object
 # should not specify any value for "replication_server".
 # replication_server = false
 #
-# Set to restrict the number of concurrent incoming REPLICATION requests
+# Set to restrict the number of concurrent incoming SSYNC requests
 # Set to 0 for unlimited
-# Note that REPLICATION is currently an ssync only item
+# Note that SSYNC requests are only used by the object reconstructor or the
+# object replicator when configured to use ssync.
 # replication_concurrency = 4
 #
-# Restricts incoming REPLICATION requests to one per device,
+# Restricts incoming SSYNC requests to one per device,
 # replication_currency above allowing. This can help control I/O to each
-# device, but you may wish to set this to False to allow multiple REPLICATION
+# device, but you may wish to set this to False to allow multiple SSYNC
 # requests (up to the above replication_concurrency setting) per device.
 # replication_one_per_device = True
 #
@@ -128,8 +134,8 @@ use = egg:swift#object
 # giving up.
 # replication_lock_timeout = 15
 #
-# These next two settings control when the REPLICATION subrequest handler will
-# abort an incoming REPLICATION attempt. An abort will occur if there are at
+# These next two settings control when the SSYNC subrequest handler will
+# abort an incoming SSYNC attempt. An abort will occur if there are at
 # least threshold number of failures and the value of failures / successes
 # exceeds the ratio. The defaults of 100 and 1.0 means that at least 100
 # failures have to occur and there have to be more failures than successes for
@@ -299,6 +305,13 @@ use = egg:swift#recon
 # increment a counter for every object whose size is <= to the given break
 # points and report the result after a full scan.
 # object_size_stats =
+
+# The auditor will cleanup old rsync tempfiles after they are "old
+# enough" to delete.  You can configure the time elapsed in seconds
+# before rsync tempfiles will be unlinked, or the default value of
+# "auto" try to use object-replicator's rsync_timeout + 900 and fallback
+# to 86400 (1 day).
+# rsync_tempfile_timeout = auto
 
 # Note: Put it at the beginning of the pipleline to profile all middleware. But
 # it is safer to put this after healthcheck.

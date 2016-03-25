@@ -23,12 +23,12 @@ from swift.proxy.controllers.base import headers_to_container_info, \
     get_object_env_key, get_info, get_object_info, \
     Controller, GetOrHeadHandler, _set_info_cache, _set_object_info_cache, \
     bytes_to_skip
-from swift.common.swob import Request, HTTPException, HeaderKeyDict, \
-    RESPONSE_REASONS
+from swift.common.swob import Request, HTTPException, RESPONSE_REASONS
 from swift.common import exceptions
 from swift.common.utils import split_path
+from swift.common.header_key_dict import HeaderKeyDict
 from swift.common.http import is_success
-from swift.common.storage_policy import StoragePolicy
+from swift.common.storage_policy import StoragePolicy, POLICIES
 from test.unit import fake_http_connect, FakeRing, FakeMemcache
 from swift.proxy import server as proxy_server
 from swift.common.request_helpers import get_sys_meta_prefix
@@ -192,6 +192,52 @@ class TestFuncs(unittest.TestCase):
                                        '/a')
         self.assertTrue('swift.account/a' in resp.environ)
         self.assertEqual(resp.environ['swift.account/a']['status'], 200)
+
+        # Run the above tests again, but this time with concurrent_reads
+        # turned on
+        policy = next(iter(POLICIES))
+        concurrent_get_threads = policy.object_ring.replica_count
+        for concurrency_timeout in (0, 2):
+            self.app.concurrency_timeout = concurrency_timeout
+            req = Request.blank('/v1/a/c/o/with/slashes')
+            # NOTE: We are using slow_connect of fake_http_connect as using
+            # a concurrency of 0 when mocking the connection is a little too
+            # fast for eventlet. Network i/o will make this fine, but mocking
+            # it seems is too instantaneous.
+            with patch('swift.proxy.controllers.base.http_connect',
+                       fake_http_connect(200, slow_connect=True)):
+                resp = base.GETorHEAD_base(
+                    req, 'object', iter(nodes), 'part', '/a/c/o/with/slashes',
+                    concurrency=concurrent_get_threads)
+            self.assertTrue('swift.object/a/c/o/with/slashes' in resp.environ)
+            self.assertEqual(
+                resp.environ['swift.object/a/c/o/with/slashes']['status'], 200)
+            req = Request.blank('/v1/a/c/o')
+            with patch('swift.proxy.controllers.base.http_connect',
+                       fake_http_connect(200, slow_connect=True)):
+                resp = base.GETorHEAD_base(
+                    req, 'object', iter(nodes), 'part', '/a/c/o',
+                    concurrency=concurrent_get_threads)
+            self.assertTrue('swift.object/a/c/o' in resp.environ)
+            self.assertEqual(resp.environ['swift.object/a/c/o']['status'], 200)
+            req = Request.blank('/v1/a/c')
+            with patch('swift.proxy.controllers.base.http_connect',
+                       fake_http_connect(200, slow_connect=True)):
+                resp = base.GETorHEAD_base(
+                    req, 'container', iter(nodes), 'part', '/a/c',
+                    concurrency=concurrent_get_threads)
+            self.assertTrue('swift.container/a/c' in resp.environ)
+            self.assertEqual(resp.environ['swift.container/a/c']['status'],
+                             200)
+
+            req = Request.blank('/v1/a')
+            with patch('swift.proxy.controllers.base.http_connect',
+                       fake_http_connect(200, slow_connect=True)):
+                resp = base.GETorHEAD_base(
+                    req, 'account', iter(nodes), 'part', '/a',
+                    concurrency=concurrent_get_threads)
+            self.assertTrue('swift.account/a' in resp.environ)
+            self.assertEqual(resp.environ['swift.account/a']['status'], 200)
 
     def test_get_info(self):
         app = FakeApp()
@@ -790,6 +836,46 @@ class TestFuncs(unittest.TestCase):
 
         source1 = TestSource(['abcd', '1234', 'abc', None])
         source2 = TestSource(['efgh5678'])
+        req = Request.blank('/v1/a/c/o')
+        handler = GetOrHeadHandler(
+            self.app, req, 'Object', None, None, None, {},
+            client_chunk_size=8)
+
+        app_iter = handler._make_app_iter(req, node, source1)
+        with patch.object(handler, '_get_source_and_node',
+                          lambda: (source2, node)):
+            client_chunks = list(app_iter)
+        self.assertEqual(client_chunks, ['abcd1234', 'efgh5678'])
+
+    def test_client_chunk_size_resuming_chunked(self):
+
+        class TestChunkedSource(object):
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+                self.status = 200
+                self.headers = {'transfer-encoding': 'chunked',
+                                'content-type': 'text/plain'}
+
+            def read(self, _read_size):
+                if self.chunks:
+                    chunk = self.chunks.pop(0)
+                    if chunk is None:
+                        raise exceptions.ChunkReadTimeout()
+                    else:
+                        return chunk
+                else:
+                    return ''
+
+            def getheader(self, header):
+                return self.headers.get(header.lower())
+
+            def getheaders(self):
+                return self.headers
+
+        node = {'ip': '1.2.3.4', 'port': 6000, 'device': 'sda'}
+
+        source1 = TestChunkedSource(['abcd', '1234', 'abc', None])
+        source2 = TestChunkedSource(['efgh5678'])
         req = Request.blank('/v1/a/c/o')
         handler = GetOrHeadHandler(
             self.app, req, 'Object', None, None, None, {},

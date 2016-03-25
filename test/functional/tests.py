@@ -90,6 +90,14 @@ class Base(unittest2.TestCase):
             'Status returned: %d Expected: %s' %
             (self.env.conn.response.status, status_or_statuses))
 
+    def assert_header(self, header_name, expected_value):
+        try:
+            actual_value = self.env.conn.response.getheader(header_name)
+        except KeyError:
+            self.fail(
+                'Expected header name %r not found in response.' % header_name)
+        self.assertEqual(expected_value, actual_value)
+
 
 class Base2(object):
     def setUp(self):
@@ -1108,6 +1116,15 @@ class TestFileEnv(object):
 
         cls.file_size = 128
 
+        # With keystoneauth we need the accounts to have had the project
+        # domain id persisted as sysmeta prior to testing ACLs. This may
+        # not be the case if, for example, the account was created using
+        # a request with reseller_admin role, when project domain id may
+        # not have been known. So we ensure that the project domain id is
+        # in sysmeta by making a POST to the accounts using an admin role.
+        cls.account.update_metadata()
+        cls.account2.update_metadata()
+
 
 class TestFileDev(Base):
     env = TestFileEnv
@@ -1631,32 +1648,35 @@ class TestFile(Base):
                 self.assert_status(416)
             else:
                 self.assertEqual(file_item.read(hdrs=hdrs), data[-i:])
+            self.assert_header('etag', file_item.md5)
+            self.assert_header('accept-ranges', 'bytes')
 
             range_string = 'bytes=%d-' % (i)
             hdrs = {'Range': range_string}
-            self.assertTrue(
-                file_item.read(hdrs=hdrs) == data[i - file_length:],
+            self.assertEqual(
+                file_item.read(hdrs=hdrs), data[i - file_length:],
                 range_string)
 
         range_string = 'bytes=%d-%d' % (file_length + 1000, file_length + 2000)
         hdrs = {'Range': range_string}
         self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
         self.assert_status(416)
+        self.assert_header('etag', file_item.md5)
+        self.assert_header('accept-ranges', 'bytes')
 
         range_string = 'bytes=%d-%d' % (file_length - 1000, file_length + 2000)
         hdrs = {'Range': range_string}
-        self.assertTrue(
-            file_item.read(hdrs=hdrs) == data[-1000:], range_string)
+        self.assertEqual(file_item.read(hdrs=hdrs), data[-1000:], range_string)
 
         hdrs = {'Range': '0-4'}
-        self.assertTrue(file_item.read(hdrs=hdrs) == data, range_string)
+        self.assertEqual(file_item.read(hdrs=hdrs), data, '0-4')
 
         # RFC 2616 14.35.1
         # "If the entity is shorter than the specified suffix-length, the
         # entire entity-body is used."
         range_string = 'bytes=-%d' % (file_length + 10)
         hdrs = {'Range': range_string}
-        self.assertTrue(file_item.read(hdrs=hdrs) == data, range_string)
+        self.assertEqual(file_item.read(hdrs=hdrs), data, range_string)
 
     def testMultiRangeGets(self):
         file_length = 10000
@@ -2176,6 +2196,56 @@ class TestFile(Base):
             info = file_item.info()
             self.assertEqual(etag, info['etag'])
 
+    def test_POST(self):
+        # verify consistency between object and container listing metadata
+        file_name = Utils.create_name()
+        file_item = self.env.container.file(file_name)
+        file_item.content_type = 'text/foobar'
+        file_item.write_random(1024)
+
+        # sanity check
+        file_item = self.env.container.file(file_name)
+        file_item.initialize()
+        self.assertEqual('text/foobar', file_item.content_type)
+        self.assertEqual(1024, file_item.size)
+        etag = file_item.etag
+
+        # check container listing is consistent
+        listing = self.env.container.files(parms={'format': 'json'})
+        for f_dict in listing:
+            if f_dict['name'] == file_name:
+                break
+        else:
+            self.fail('Failed to find file %r in listing' % file_name)
+        self.assertEqual(1024, f_dict['bytes'])
+        self.assertEqual('text/foobar', f_dict['content_type'])
+        self.assertEqual(etag, f_dict['hash'])
+
+        # now POST updated content-type to each file
+        file_item = self.env.container.file(file_name)
+        file_item.content_type = 'image/foobarbaz'
+        file_item.sync_metadata({'Test': 'blah'})
+
+        # sanity check object metadata
+        file_item = self.env.container.file(file_name)
+        file_item.initialize()
+
+        self.assertEqual(1024, file_item.size)
+        self.assertEqual('image/foobarbaz', file_item.content_type)
+        self.assertEqual(etag, file_item.etag)
+        self.assertIn('test', file_item.metadata)
+
+        # check for consistency between object and container listing
+        listing = self.env.container.files(parms={'format': 'json'})
+        for f_dict in listing:
+            if f_dict['name'] == file_name:
+                break
+        else:
+            self.fail('Failed to find file %r in listing' % file_name)
+        self.assertEqual(1024, f_dict['bytes'])
+        self.assertEqual('image/foobarbaz', f_dict['content_type'])
+        self.assertEqual(etag, f_dict['hash'])
+
 
 class TestFileUTF8(Base2, TestFile):
     set_up = False
@@ -2477,6 +2547,7 @@ class TestFileComparison(Base):
             hdrs = {'If-Match': 'bogus'}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(412)
+            self.assert_header('etag', file_item.md5)
 
     def testIfMatchMultipleEtags(self):
         for file_item in self.env.files:
@@ -2486,6 +2557,7 @@ class TestFileComparison(Base):
             hdrs = {'If-Match': '"bogus1", "bogus2", "bogus3"'}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(412)
+            self.assert_header('etag', file_item.md5)
 
     def testIfNoneMatch(self):
         for file_item in self.env.files:
@@ -2495,6 +2567,8 @@ class TestFileComparison(Base):
             hdrs = {'If-None-Match': file_item.md5}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(304)
+            self.assert_header('etag', file_item.md5)
+            self.assert_header('accept-ranges', 'bytes')
 
     def testIfNoneMatchMultipleEtags(self):
         for file_item in self.env.files:
@@ -2505,6 +2579,8 @@ class TestFileComparison(Base):
                     '"bogus1", "bogus2", "%s"' % file_item.md5}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(304)
+            self.assert_header('etag', file_item.md5)
+            self.assert_header('accept-ranges', 'bytes')
 
     def testIfModifiedSince(self):
         for file_item in self.env.files:
@@ -2515,8 +2591,12 @@ class TestFileComparison(Base):
             hdrs = {'If-Modified-Since': self.env.time_new}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(304)
+            self.assert_header('etag', file_item.md5)
+            self.assert_header('accept-ranges', 'bytes')
             self.assertRaises(ResponseError, file_item.info, hdrs=hdrs)
             self.assert_status(304)
+            self.assert_header('etag', file_item.md5)
+            self.assert_header('accept-ranges', 'bytes')
 
     def testIfUnmodifiedSince(self):
         for file_item in self.env.files:
@@ -2527,8 +2607,10 @@ class TestFileComparison(Base):
             hdrs = {'If-Unmodified-Since': self.env.time_old_f2}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(412)
+            self.assert_header('etag', file_item.md5)
             self.assertRaises(ResponseError, file_item.info, hdrs=hdrs)
             self.assert_status(412)
+            self.assert_header('etag', file_item.md5)
 
     def testIfMatchAndUnmodified(self):
         for file_item in self.env.files:
@@ -2540,33 +2622,38 @@ class TestFileComparison(Base):
                     'If-Unmodified-Since': self.env.time_new}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(412)
+            self.assert_header('etag', file_item.md5)
 
             hdrs = {'If-Match': file_item.md5,
                     'If-Unmodified-Since': self.env.time_old_f3}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
             self.assert_status(412)
+            self.assert_header('etag', file_item.md5)
 
     def testLastModified(self):
         file_name = Utils.create_name()
         content_type = Utils.create_name()
 
-        file = self.env.container.file(file_name)
-        file.content_type = content_type
-        resp = file.write_random_return_resp(self.env.file_size)
+        file_item = self.env.container.file(file_name)
+        file_item.content_type = content_type
+        resp = file_item.write_random_return_resp(self.env.file_size)
         put_last_modified = resp.getheader('last-modified')
+        etag = file_item.md5
 
-        file = self.env.container.file(file_name)
-        info = file.info()
+        file_item = self.env.container.file(file_name)
+        info = file_item.info()
         self.assertIn('last_modified', info)
         last_modified = info['last_modified']
         self.assertEqual(put_last_modified, info['last_modified'])
 
         hdrs = {'If-Modified-Since': last_modified}
-        self.assertRaises(ResponseError, file.read, hdrs=hdrs)
+        self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
         self.assert_status(304)
+        self.assert_header('etag', etag)
+        self.assert_header('accept-ranges', 'bytes')
 
         hdrs = {'If-Unmodified-Since': last_modified}
-        self.assertTrue(file.read(hdrs=hdrs))
+        self.assertTrue(file_item.read(hdrs=hdrs))
 
 
 class TestFileComparisonUTF8(Base2, TestFileComparison):
@@ -2767,6 +2854,42 @@ class TestSlo(Base):
         self.assertEqual('b', file_contents[1024 * 1024])
         self.assertEqual('d', file_contents[-2])
         self.assertEqual('e', file_contents[-1])
+
+    def test_slo_container_listing(self):
+        # the listing object size should equal the sum of the size of the
+        # segments, not the size of the manifest body
+        raise SkipTest('Only passes with object_post_as_copy=False')
+        file_item = self.env.container.file(Utils.create_name)
+        file_item.write(
+            json.dumps([self.env.seg_info['seg_a']]),
+            parms={'multipart-manifest': 'put'})
+
+        files = self.env.container.files(parms={'format': 'json'})
+        for f_dict in files:
+            if f_dict['name'] == file_item.name:
+                self.assertEqual(1024 * 1024, f_dict['bytes'])
+                self.assertEqual('application/octet-stream',
+                                 f_dict['content_type'])
+                break
+        else:
+            self.fail('Failed to find manifest file in container listing')
+
+        # now POST updated content-type file
+        file_item.content_type = 'image/jpeg'
+        file_item.sync_metadata({'X-Object-Meta-Test': 'blah'})
+        file_item.initialize()
+        self.assertEqual('image/jpeg', file_item.content_type)  # sanity
+
+        # verify that the container listing is consistent with the file
+        files = self.env.container.files(parms={'format': 'json'})
+        for f_dict in files:
+            if f_dict['name'] == file_item.name:
+                self.assertEqual(1024 * 1024, f_dict['bytes'])
+                self.assertEqual(file_item.content_type,
+                                 f_dict['content_type'])
+                break
+        else:
+            self.fail('Failed to find manifest file in container listing')
 
     def test_slo_get_nested_manifest(self):
         file_item = self.env.container.file('manifest-abcde-submanifest')
@@ -3119,6 +3242,39 @@ class TestSlo(Base):
         self.assertEqual(value[1]['name'],
                          '/%s/seg_b' % self.env.container.name.decode("utf-8"))
 
+    def test_slo_get_raw_the_manifest_with_details_from_server(self):
+        manifest = self.env.container.file("manifest-db")
+        got_body = manifest.read(parms={'multipart-manifest': 'get',
+                                        'format': 'raw'})
+
+        self.assertEqual('application/json; charset=utf-8',
+                         manifest.content_type)
+        try:
+            value = json.loads(got_body)
+        except ValueError:
+            msg = "GET with multipart-manifest=get&format=raw got invalid json"
+            self.fail(msg)
+
+        self.assertEqual(
+            set(value[0].keys()), set(('size_bytes', 'etag', 'path')))
+        self.assertEqual(len(value), 2)
+        self.assertEqual(value[0]['size_bytes'], 1024 * 1024)
+        self.assertEqual(value[0]['etag'],
+                         hashlib.md5('d' * 1024 * 1024).hexdigest())
+        self.assertEqual(value[0]['path'],
+                         '/%s/seg_d' % self.env.container.name.decode("utf-8"))
+        self.assertEqual(value[1]['size_bytes'], 1024 * 1024)
+        self.assertEqual(value[1]['etag'],
+                         hashlib.md5('b' * 1024 * 1024).hexdigest())
+        self.assertEqual(value[1]['path'],
+                         '/%s/seg_b' % self.env.container.name.decode("utf-8"))
+
+        file_item = self.env.container.file("manifest-from-get-raw")
+        file_item.write(got_body, parms={'multipart-manifest': 'put'})
+
+        file_contents = file_item.read()
+        self.assertEqual(2 * 1024 * 1024, len(file_contents))
+
     def test_slo_head_the_manifest(self):
         manifest = self.env.container.file("manifest-abcde")
         got_info = manifest.info(parms={'multipart-manifest': 'get'})
@@ -3359,15 +3515,18 @@ class TestObjectVersioning(Base):
                 "Expected versioning_enabled to be True/False, got %r" %
                 (self.env.versioning_enabled,))
 
-    def tearDown(self):
-        super(TestObjectVersioning, self).tearDown()
+    def _tear_down_files(self):
         try:
-            # only delete files and not container
+            # only delete files and not containers
             # as they were configured in self.env
             self.env.versions_container.delete_files()
             self.env.container.delete_files()
         except ResponseError:
             pass
+
+    def tearDown(self):
+        super(TestObjectVersioning, self).tearDown()
+        self._tear_down_files()
 
     def test_clear_version_option(self):
         # sanity
@@ -3601,6 +3760,10 @@ class TestObjectVersioning(Base):
 
 class TestObjectVersioningUTF8(Base2, TestObjectVersioning):
     set_up = False
+
+    def tearDown(self):
+        self._tear_down_files()
+        super(TestObjectVersioningUTF8, self).tearDown()
 
 
 class TestCrossPolicyObjectVersioning(TestObjectVersioning):
@@ -4309,7 +4472,7 @@ class TestServiceToken(unittest2.TestCase):
         a token from the test service user. We save options here so that
         do_request() can make the appropriate request.
 
-        :param method: The operation (e.g'. 'HEAD')
+        :param method: The operation (e.g. 'HEAD')
         :param use_service_account: Optional. Set True to change the path to
                be the service account
         :param container: Optional. Adds a container name to the path

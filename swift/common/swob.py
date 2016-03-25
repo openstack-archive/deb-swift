@@ -50,6 +50,7 @@ from six import BytesIO
 from six import StringIO
 from six.moves import urllib
 
+from swift.common.header_key_dict import HeaderKeyDict
 from swift.common.utils import reiterate, split_path, Timestamp, pairs, \
     close_if_possible
 from swift.common.exceptions import InvalidTimestamp
@@ -164,7 +165,7 @@ def _datetime_property(header):
                 return None
 
     def setter(self, value):
-        if isinstance(value, (float, int, long)):
+        if isinstance(value, (float,) + six.integer_types):
             self.headers[header] = time.strftime(
                 "%a, %d %b %Y %H:%M:%S GMT", time.gmtime(value))
         elif isinstance(value, datetime):
@@ -269,53 +270,6 @@ class HeaderEnvironProxy(MutableMapping):
         if 'CONTENT_TYPE' in self.environ:
             keys.append('Content-Type')
         return keys
-
-
-class HeaderKeyDict(dict):
-    """
-    A dict that title-cases all keys on the way in, so as to be
-    case-insensitive.
-    """
-    def __init__(self, base_headers=None, **kwargs):
-        if base_headers:
-            self.update(base_headers)
-        self.update(kwargs)
-
-    def update(self, other):
-        if hasattr(other, 'keys'):
-            for key in other.keys():
-                self[key.title()] = other[key]
-        else:
-            for key, value in other:
-                self[key.title()] = value
-
-    def __getitem__(self, key):
-        return dict.get(self, key.title())
-
-    def __setitem__(self, key, value):
-        if value is None:
-            self.pop(key.title(), None)
-        elif isinstance(value, six.text_type):
-            return dict.__setitem__(self, key.title(), value.encode('utf-8'))
-        else:
-            return dict.__setitem__(self, key.title(), str(value))
-
-    def __contains__(self, key):
-        return dict.__contains__(self, key.title())
-
-    def __delitem__(self, key):
-        return dict.__delitem__(self, key.title())
-
-    def get(self, key, default=None):
-        return dict.get(self, key.title(), default)
-
-    def setdefault(self, key, value=None):
-        if key not in self:
-            self[key] = value
-        return self[key]
-
-    def pop(self, key, default=None):
-        return dict.pop(self, key.title(), default)
 
 
 def _resp_status_property():
@@ -804,6 +758,27 @@ def _host_url_property():
     return property(getter, doc="Get url for request/response up to path")
 
 
+def is_chunked(headers):
+    te = None
+    for key in headers:
+        if key.lower() == 'transfer-encoding':
+            te = headers.get(key)
+    if te:
+        encodings = te.split(',')
+        if len(encodings) > 1:
+            raise AttributeError('Unsupported Transfer-Coding header'
+                                 ' value specified in Transfer-Encoding'
+                                 ' header')
+        # If there are more than one transfer encoding value, the last
+        # one must be chunked, see RFC 2616 Sec. 3.6
+        if encodings[-1].lower() == 'chunked':
+            return True
+        else:
+            raise ValueError('Invalid Transfer-Encoding header value')
+    else:
+        return False
+
+
 class Request(object):
     """
     WSGI Request object.
@@ -955,7 +930,7 @@ class Request(object):
 
     @property
     def is_chunked(self):
-        return 'chunked' in self.headers.get('transfer-encoding', '')
+        return is_chunked(self.headers)
 
     @property
     def url(self):
@@ -1061,22 +1036,7 @@ class Request(object):
         :raises AttributeError: if the last value of the transfer-encoding
             header is not "chunked"
         """
-        te = self.headers.get('transfer-encoding')
-        if te:
-            encodings = te.split(',')
-            if len(encodings) > 1:
-                raise AttributeError('Unsupported Transfer-Coding header'
-                                     ' value specified in Transfer-Encoding'
-                                     ' header')
-            # If there are more than one transfer encoding value, the last
-            # one must be chunked, see RFC 2616 Sec. 3.6
-            if encodings[-1].lower() == 'chunked':
-                chunked = True
-            else:
-                raise ValueError('Invalid Transfer-Encoding header value')
-        else:
-            chunked = False
-        if not chunked:
+        if not is_chunked(self.headers):
             # Because we are not using chunked transfer encoding we can pay
             # attention to the content-length header.
             fsize = self.headers.get('content-length', None)
@@ -1339,7 +1299,7 @@ class Response(object):
         object length and body or app_iter to reset the content_length
         properties on the request.
 
-        It is ok to not call this method, the conditional resposne will be
+        It is ok to not call this method, the conditional response will be
         maintained for you when you __call__ the response.
         """
         self.response_iter = self._response_iter(self.app_iter, self._body)

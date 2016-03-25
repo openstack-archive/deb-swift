@@ -9,63 +9,64 @@ Coding Guidelines
 For the most part we try to follow PEP 8 guidelines which can be viewed
 here: http://www.python.org/dev/peps/pep-0008/
 
-There is a useful pep8 command line tool for checking files for pep8
-compliance which can be installed with ``easy_install pep8``.
-
 ------------------
 Testing Guidelines
 ------------------
 
-Swift has a comprehensive suite of tests that are run on all submitted code,
-and it is recommended that developers execute the tests themselves to
-catch regressions early.  Developers are also expected to keep the
-test suite up-to-date with any submitted code changes.
+Swift has a comprehensive suite of tests and pep8 checks that are run on all
+submitted code, and it is recommended that developers execute the tests
+themselves to catch regressions early.  Developers are also expected to keep
+the test suite up-to-date with any submitted code changes.
 
-Swift's suite of unit tests can be executed in an isolated environment
+Swift's tests and pep8 checks can be executed in an isolated environment
 with Tox: http://tox.testrun.org/
 
-To execute the unit tests:
+To execute the tests:
 
-* Install Tox:
+* Install Tox::
 
-  - `pip install tox`
+    pip install tox
 
-* If you do not have python 2.6 installed (as in 12.04):
 
-  - Add `export TOXENV=py27,pep8` to your `~/.bashrc`
+* Run Tox from the root of the swift repo::
 
-  - `. ~/.bashrc`
-
-* Run Tox from the root of the swift repo:
-
-  - `tox`
+    tox
 
   Remarks:
-  If you installed using: `cd ~/swift; sudo python setup.py develop`,
-  you may need to do: `cd ~/swift; sudo chown -R ${USER}:${USER} swift.egg-info`
-  prior to running tox.
+  If you installed using ``cd ~/swift; sudo python setup.py develop``, you may
+  need to do ``cd ~/swift; sudo chown -R ${USER}:${USER} swift.egg-info`` prior
+  to running tox.
 
-* Optionally, run only specific tox builds:
+* By default ``tox`` will run all of the unit test and pep8 checks listed in
+  the ``tox.ini`` file ``envlist`` option. A subset of the test environments
+  can be specified on the tox command line or by setting the ``TOXENV``
+  environment variable. For example, to run only the pep8 checks and python2.7
+  unit tests use::
 
-  - `tox -e pep8,py27`
+    tox -e pep8,py27
+
+  or::
+
+    TOXENV=py27,pep8 tox
 
 .. note::
   As of tox version 2.0.0, most environment variables are not automatically
-  passed to the test environment. Swift's `tox.ini` overrides this default
+  passed to the test environment. Swift's ``tox.ini`` overrides this default
   behavior so that variable names matching ``SWIFT_*`` and ``*_proxy`` will be
-  passed, but you may need to run `tox --recreate` for this to take effect
+  passed, but you may need to run ``tox --recreate`` for this to take effect
   after upgrading from tox<2.0.0.
 
   Conversely, if you do not want those environment variables to be passed to
-  the test environment then you will need to unset them before calling tox.
+  the test environment then you will need to unset them before calling ``tox``.
 
-  Also, if you ever encounter DistributionNotFound, try to use `tox --recreate`
-  or remove the `.tox` directory to force tox to recreate the dependency list.
+  Also, if you ever encounter DistributionNotFound, try to use ``tox
+  --recreate`` or remove the ``.tox`` directory to force tox to recreate the
+  dependency list.
 
-The functional tests may be executed against a :doc:`development_saio` or
-other running Swift cluster using the command:
+Swift's functional tests may be executed against a :doc:`development_saio` or
+other running Swift cluster using the command::
 
-- `tox -e func`
+  tox -e func
 
 The endpoint and authorization credentials to be used by functional tests
 should be configured in the ``test.conf`` file as described in the section
@@ -83,15 +84,35 @@ For example, this command would run the functional tests using policy
 
   SWIFT_TEST_POLICY=silver tox -e func
 
+
+In-process functional testing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 If the ``test.conf`` file is not found then the functional test framework will
 instantiate a set of Swift servers in the same process that executes the
 functional tests. This 'in-process test' mode may also be enabled (or disabled)
 by setting the environment variable ``SWIFT_TEST_IN_PROCESS`` to a true (or
 false) value prior to executing `tox -e func`.
 
-When using the 'in-process test' mode, the optional in-memory
-object server may be selected by setting the environment variable
-``SWIFT_TEST_IN_MEMORY_OBJ`` to a true value.
+When using the 'in-process test' mode some server configuration options may be
+set using environment variables:
+
+- the optional in-memory object server may be selected by setting the
+  environment variable ``SWIFT_TEST_IN_MEMORY_OBJ`` to a true value.
+
+- the proxy-server ``object_post_as_copy`` option may be set using the
+  environment variable ``SWIFT_TEST_IN_PROCESS_OBJECT_POST_AS_COPY``.
+
+For example, this command would run the in-process mode functional tests with
+the proxy-server using object_post_as_copy=False (the 'fast-POST' mode)::
+
+    SWIFT_TEST_IN_PROCESS=1 SWIFT_TEST_IN_PROCESS_OBJECT_POST_AS_COPY=False \
+        tox -e func
+
+This particular example may also be run using the ``func-in-process-fast-post``
+tox environment::
+
+    tox -e func-in-process-fast-post
 
 The 'in-process test' mode searches for ``proxy-server.conf`` and
 ``swift.conf`` config files from which it copies config options and overrides
@@ -127,7 +148,7 @@ using config files found in ``$HOME/my_tests`` and policy 'silver'::
 Coding Style
 ------------
 
-Swift use flake8 with the OpenStack `hacking`_ module to enforce
+Swift uses flake8 with the OpenStack `hacking`_ module to enforce
 coding style.
 
 Install flake8 and hacking with pip or by the packages of your
@@ -164,6 +185,14 @@ Installing Sphinx:
   #. Install sphinx (On Ubuntu: `sudo apt-get install python-sphinx`)
   #. `python setup.py build_sphinx`
 
+--------
+Manpages
+--------
+
+For sanity check of your change in manpage, use this command in the root
+of your Swift repo::
+
+  ./.manpages
 
 ---------------------
 License and Copyright

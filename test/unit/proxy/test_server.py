@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) 2010-2012 OpenStack Foundation
+# Copyright (c) 2010-2016 OpenStack Foundation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,6 +39,7 @@ from swift.obj import diskfile
 import re
 import random
 from collections import defaultdict
+import uuid
 
 import mock
 from eventlet import sleep, spawn, wsgi, listen, Timeout, debug
@@ -71,14 +72,16 @@ from swift.common.utils import mkdirs, normalize_timestamp, NullLogger
 from swift.common.wsgi import monkey_patch_mimetools, loadapp
 from swift.proxy.controllers import base as proxy_base
 from swift.proxy.controllers.base import get_container_memcache_key, \
-    get_account_memcache_key, cors_validation
+    get_account_memcache_key, cors_validation, _get_info_cache
 import swift.proxy.controllers
 import swift.proxy.controllers.obj
+from swift.common.header_key_dict import HeaderKeyDict
 from swift.common.swob import Request, Response, HTTPUnauthorized, \
-    HTTPException, HeaderKeyDict, HTTPBadRequest
+    HTTPException, HTTPBadRequest
 from swift.common import storage_policy
 from swift.common.storage_policy import StoragePolicy, ECStoragePolicy, \
     StoragePolicyCollection, POLICIES
+import swift.common.request_helpers
 from swift.common.request_helpers import get_sys_meta_prefix
 
 # mocks
@@ -681,6 +684,37 @@ class TestController(unittest.TestCase):
             test(404, 507, 503)
             test(503, 503, 503)
 
+    def test_get_info_cache_returns_values_as_strings(self):
+        app = mock.MagicMock()
+        app.memcache = mock.MagicMock()
+        app.memcache.get = mock.MagicMock()
+        app.memcache.get.return_value = {
+            u'foo': u'\u2603',
+            u'meta': {u'bar': u'\u2603'},
+            u'sysmeta': {u'baz': u'\u2603'},
+            u'cors': {u'expose_headers': u'\u2603'}}
+        env = {}
+        r = _get_info_cache(app, env, 'account', 'container')
+
+        # Test info is returned as strings
+        self.assertEqual(r.get('foo'), '\xe2\x98\x83')
+        self.assertTrue(isinstance(r.get('foo'), str))
+
+        # Test info['meta'] is returned as strings
+        m = r.get('meta', {})
+        self.assertEqual(m.get('bar'), '\xe2\x98\x83')
+        self.assertTrue(isinstance(m.get('bar'), str))
+
+        # Test info['sysmeta'] is returned as strings
+        m = r.get('sysmeta', {})
+        self.assertEqual(m.get('baz'), '\xe2\x98\x83')
+        self.assertTrue(isinstance(m.get('baz'), str))
+
+        # Test info['cors'] is returned as strings
+        m = r.get('cors', {})
+        self.assertEqual(m.get('expose_headers'), '\xe2\x98\x83')
+        self.assertTrue(isinstance(m.get('expose_headers'), str))
+
 
 @patch_policies([StoragePolicy(0, 'zero', True, object_ring=FakeRing())])
 class TestProxyServer(unittest.TestCase):
@@ -894,6 +928,88 @@ class TestProxyServer(unittest.TestCase):
             exp_sorted = [{'region': 1, 'zone': 2, 'ip': '127.0.0.2'},
                           {'region': 2, 'zone': 1, 'ip': '127.0.0.1'}]
             self.assertEqual(exp_sorted, app_sorted)
+
+    def test_node_concurrency(self):
+        nodes = [{'region': 1, 'zone': 1, 'ip': '127.0.0.1', 'port': 6010,
+                  'device': 'sda'},
+                 {'region': 2, 'zone': 2, 'ip': '127.0.0.2', 'port': 6010,
+                  'device': 'sda'},
+                 {'region': 3, 'zone': 3, 'ip': '127.0.0.3', 'port': 6010,
+                  'device': 'sda'}]
+        timings = {'127.0.0.1': 2, '127.0.0.2': 1, '127.0.0.3': 0}
+        statuses = {'127.0.0.1': 200, '127.0.0.2': 200, '127.0.0.3': 200}
+        req = Request.blank('/v1/account', environ={'REQUEST_METHOD': 'GET'})
+
+        def fake_iter_nodes(*arg, **karg):
+            return iter(nodes)
+
+        class FakeConn(object):
+            def __init__(self, ip, *args, **kargs):
+                self.ip = ip
+                self.args = args
+                self.kargs = kargs
+
+            def getresponse(self):
+                def mygetheader(header, *args, **kargs):
+                    if header == "Content-Type":
+                        return ""
+                    else:
+                        return 1
+
+                resp = mock.Mock()
+                resp.read.side_effect = ['Response from %s' % self.ip, '']
+                resp.getheader = mygetheader
+                resp.getheaders.return_value = {}
+                resp.reason = ''
+                resp.status = statuses[self.ip]
+                sleep(timings[self.ip])
+                return resp
+
+        def myfake_http_connect_raw(ip, *args, **kargs):
+            conn = FakeConn(ip, *args, **kargs)
+            return conn
+
+        with mock.patch('swift.proxy.server.Application.iter_nodes',
+                        fake_iter_nodes):
+            with mock.patch('swift.common.bufferedhttp.http_connect_raw',
+                            myfake_http_connect_raw):
+                app_conf = {'concurrent_gets': 'on',
+                            'concurrency_timeout': 0}
+                baseapp = proxy_server.Application(app_conf,
+                                                   FakeMemcache(),
+                                                   container_ring=FakeRing(),
+                                                   account_ring=FakeRing())
+                self.assertEqual(baseapp.concurrent_gets, True)
+                self.assertEqual(baseapp.concurrency_timeout, 0)
+                baseapp.update_request(req)
+                resp = baseapp.handle_request(req)
+
+                # Should get 127.0.0.3 as this has a wait of 0 seconds.
+                self.assertEqual(resp.body, 'Response from 127.0.0.3')
+
+                # lets try again, with 127.0.0.1 with 0 timing but returns an
+                # error.
+                timings['127.0.0.1'] = 0
+                statuses['127.0.0.1'] = 500
+
+                # Should still get 127.0.0.3 as this has a wait of 0 seconds
+                # and a success
+                baseapp.update_request(req)
+                resp = baseapp.handle_request(req)
+                self.assertEqual(resp.body, 'Response from 127.0.0.3')
+
+                # Now lets set the concurrency_timeout
+                app_conf['concurrency_timeout'] = 2
+                baseapp = proxy_server.Application(app_conf,
+                                                   FakeMemcache(),
+                                                   container_ring=FakeRing(),
+                                                   account_ring=FakeRing())
+                self.assertEqual(baseapp.concurrency_timeout, 2)
+                baseapp.update_request(req)
+                resp = baseapp.handle_request(req)
+
+                # Should get 127.0.0.2 as this has a wait of 1 seconds.
+                self.assertEqual(resp.body, 'Response from 127.0.0.2')
 
     def test_info_defaults(self):
         app = proxy_server.Application({}, FakeMemcache(),
@@ -1573,7 +1689,8 @@ class TestObjectController(unittest.TestCase):
                 bytes_before_timeout[0] -= len(result)
                 return result
 
-        orig_hrtdi = proxy_base.http_response_to_document_iters
+        orig_hrtdi = swift.common.request_helpers. \
+            http_response_to_document_iters
 
         # Use this to mock out http_response_to_document_iters. On the first
         # call, the result will be sabotaged to blow up with
@@ -1604,7 +1721,8 @@ class TestObjectController(unittest.TestCase):
         # do is mock out stuff so the proxy thinks it only read a certain
         # number of bytes before it got a timeout.
         bytes_before_timeout[0] = 300
-        with mock.patch.object(proxy_base, 'http_response_to_document_iters',
+        with mock.patch.object(proxy_base,
+                               'http_response_to_document_iters',
                                single_sabotage_hrtdi):
             req = Request.blank(
                 path,
@@ -1629,7 +1747,8 @@ class TestObjectController(unittest.TestCase):
         kaboomed[0] = 0
         sabotaged[0] = False
         prosrv._error_limiting = {}  # clear out errors
-        with mock.patch.object(proxy_base, 'http_response_to_document_iters',
+        with mock.patch.object(proxy_base,
+                               'http_response_to_document_iters',
                                sabotaged_hrtdi):  # perma-broken
             req = Request.blank(
                 path,
@@ -1666,7 +1785,8 @@ class TestObjectController(unittest.TestCase):
         kaboomed[0] = 0
         sabotaged[0] = False
         prosrv._error_limiting = {}  # clear out errors
-        with mock.patch.object(proxy_base, 'http_response_to_document_iters',
+        with mock.patch.object(proxy_base,
+                               'http_response_to_document_iters',
                                single_sabotage_hrtdi):
             req = Request.blank(
                 path,
@@ -1703,7 +1823,8 @@ class TestObjectController(unittest.TestCase):
         kaboomed[0] = 0
         sabotaged[0] = False
         prosrv._error_limiting = {}  # clear out errors
-        with mock.patch.object(proxy_base, 'http_response_to_document_iters',
+        with mock.patch.object(proxy_base,
+                               'http_response_to_document_iters',
                                single_sabotage_hrtdi):
             req = Request.blank(
                 path,
@@ -1740,7 +1861,8 @@ class TestObjectController(unittest.TestCase):
         kaboomed[0] = 0
         sabotaged[0] = False
         prosrv._error_limiting = {}  # clear out errors
-        with mock.patch.object(proxy_base, 'http_response_to_document_iters',
+        with mock.patch.object(proxy_base,
+                               'http_response_to_document_iters',
                                single_sabotage_hrtdi):
             req = Request.blank(
                 path,
@@ -2234,9 +2356,10 @@ class TestObjectController(unittest.TestCase):
         self.assertEqual(len(error_lines), 0)  # sanity
         self.assertEqual(len(warn_lines), 0)  # sanity
 
-    @unpatch_policies
-    def test_conditional_GET_ec(self):
-        self.put_container("ec", "ec-con")
+    def _test_conditional_GET(self, policy):
+        container_name = uuid.uuid4().hex
+        object_path = '/v1/a/%s/conditionals' % container_name
+        self.put_container(policy.name, container_name)
 
         obj = 'this object has an etag and is otherwise unimportant'
         etag = md5(obj).hexdigest()
@@ -2246,13 +2369,13 @@ class TestObjectController(unittest.TestCase):
         prosrv = _test_servers[0]
         sock = connect_tcp(('localhost', prolis.getsockname()[1]))
         fd = sock.makefile()
-        fd.write('PUT /v1/a/ec-con/conditionals HTTP/1.1\r\n'
+        fd.write('PUT %s HTTP/1.1\r\n'
                  'Host: localhost\r\n'
                  'Connection: close\r\n'
                  'Content-Length: %d\r\n'
                  'X-Storage-Token: t\r\n'
                  'Content-Type: application/octet-stream\r\n'
-                 '\r\n%s' % (len(obj), obj))
+                 '\r\n%s' % (object_path, len(obj), obj))
         fd.flush()
         headers = readuntil2crlfs(fd)
         exp = 'HTTP/1.1 201'
@@ -2261,54 +2384,78 @@ class TestObjectController(unittest.TestCase):
         for verb, body in (('GET', obj), ('HEAD', '')):
             # If-Match
             req = Request.blank(
-                '/v1/a/ec-con/conditionals',
+                object_path,
                 environ={'REQUEST_METHOD': verb},
                 headers={'If-Match': etag})
             resp = req.get_response(prosrv)
             self.assertEqual(resp.status_int, 200)
             self.assertEqual(resp.body, body)
+            self.assertEqual(etag, resp.headers.get('etag'))
+            self.assertEqual('bytes', resp.headers.get('accept-ranges'))
 
             req = Request.blank(
-                '/v1/a/ec-con/conditionals',
+                object_path,
                 environ={'REQUEST_METHOD': verb},
                 headers={'If-Match': not_etag})
             resp = req.get_response(prosrv)
             self.assertEqual(resp.status_int, 412)
+            self.assertEqual(etag, resp.headers.get('etag'))
 
             req = Request.blank(
-                '/v1/a/ec-con/conditionals',
+                object_path,
                 environ={'REQUEST_METHOD': verb},
                 headers={'If-Match': "*"})
             resp = req.get_response(prosrv)
             self.assertEqual(resp.status_int, 200)
             self.assertEqual(resp.body, body)
+            self.assertEqual(etag, resp.headers.get('etag'))
+            self.assertEqual('bytes', resp.headers.get('accept-ranges'))
 
             # If-None-Match
             req = Request.blank(
-                '/v1/a/ec-con/conditionals',
+                object_path,
                 environ={'REQUEST_METHOD': verb},
                 headers={'If-None-Match': etag})
             resp = req.get_response(prosrv)
             self.assertEqual(resp.status_int, 304)
+            self.assertEqual(etag, resp.headers.get('etag'))
+            self.assertEqual('bytes', resp.headers.get('accept-ranges'))
 
             req = Request.blank(
-                '/v1/a/ec-con/conditionals',
+                object_path,
                 environ={'REQUEST_METHOD': verb},
                 headers={'If-None-Match': not_etag})
             resp = req.get_response(prosrv)
             self.assertEqual(resp.status_int, 200)
             self.assertEqual(resp.body, body)
+            self.assertEqual(etag, resp.headers.get('etag'))
+            self.assertEqual('bytes', resp.headers.get('accept-ranges'))
 
             req = Request.blank(
-                '/v1/a/ec-con/conditionals',
+                object_path,
                 environ={'REQUEST_METHOD': verb},
                 headers={'If-None-Match': "*"})
             resp = req.get_response(prosrv)
             self.assertEqual(resp.status_int, 304)
+            self.assertEqual(etag, resp.headers.get('etag'))
+            self.assertEqual('bytes', resp.headers.get('accept-ranges'))
+
         error_lines = prosrv.logger.get_lines_for_level('error')
         warn_lines = prosrv.logger.get_lines_for_level('warning')
         self.assertEqual(len(error_lines), 0)  # sanity
         self.assertEqual(len(warn_lines), 0)  # sanity
+
+    @unpatch_policies
+    def test_conditional_GET_ec(self):
+        policy = POLICIES[3]
+        self.assertEqual('erasure_coding', policy.policy_type)  # sanity
+        self._test_conditional_GET(policy)
+
+    @unpatch_policies
+    def test_conditional_GET_replication(self):
+        policy = POLICIES[0]
+        self.assertEqual('replication', policy.policy_type)  # sanity
+        self._test_conditional_GET(policy)
 
     @unpatch_policies
     def test_GET_ec_big(self):
@@ -2867,8 +3014,50 @@ class TestObjectController(unittest.TestCase):
             self.assertEqual(headers[:len(exp)], exp)
 
     @unpatch_policies
-    def test_PUT_last_modified(self):
+    def test_PUT_POST_last_modified(self):
         prolis = _test_sockets[0]
+        prosrv = _test_servers[0]
+
+        def _do_HEAD():
+            # do a HEAD to get reported last modified time
+            sock = connect_tcp(('localhost', prolis.getsockname()[1]))
+            fd = sock.makefile()
+            fd.write('HEAD /v1/a/c/o.last_modified HTTP/1.1\r\n'
+                     'Host: localhost\r\nConnection: close\r\n'
+                     'X-Storage-Token: t\r\n\r\n')
+            fd.flush()
+            headers = readuntil2crlfs(fd)
+            exp = 'HTTP/1.1 200'
+            self.assertEqual(headers[:len(exp)], exp)
+            last_modified_head = [line for line in headers.split('\r\n')
+                                  if lm_hdr in line][0][len(lm_hdr):]
+            return last_modified_head
+
+        def _do_conditional_GET_checks(last_modified_time):
+            # check If-(Un)Modified-Since GETs
+            sock = connect_tcp(('localhost', prolis.getsockname()[1]))
+            fd = sock.makefile()
+            fd.write('GET /v1/a/c/o.last_modified HTTP/1.1\r\n'
+                     'Host: localhost\r\nConnection: close\r\n'
+                     'If-Modified-Since: %s\r\n'
+                     'X-Storage-Token: t\r\n\r\n' % last_modified_time)
+            fd.flush()
+            headers = readuntil2crlfs(fd)
+            exp = 'HTTP/1.1 304'
+            self.assertEqual(headers[:len(exp)], exp)
+
+            sock = connect_tcp(('localhost', prolis.getsockname()[1]))
+            fd = sock.makefile()
+            fd.write('GET /v1/a/c/o.last_modified HTTP/1.1\r\n'
+                     'Host: localhost\r\nConnection: close\r\n'
+                     'If-Unmodified-Since: %s\r\n'
+                     'X-Storage-Token: t\r\n\r\n' % last_modified_time)
+            fd.flush()
+            headers = readuntil2crlfs(fd)
+            exp = 'HTTP/1.1 200'
+            self.assertEqual(headers[:len(exp)], exp)
+
+        # PUT the object
         sock = connect_tcp(('localhost', prolis.getsockname()[1]))
         fd = sock.makefile()
         fd.write('PUT /v1/a/c/o.last_modified HTTP/1.1\r\n'
@@ -2882,40 +3071,59 @@ class TestObjectController(unittest.TestCase):
 
         last_modified_put = [line for line in headers.split('\r\n')
                              if lm_hdr in line][0][len(lm_hdr):]
-        sock = connect_tcp(('localhost', prolis.getsockname()[1]))
-        fd = sock.makefile()
-        fd.write('HEAD /v1/a/c/o.last_modified HTTP/1.1\r\n'
-                 'Host: localhost\r\nConnection: close\r\n'
-                 'X-Storage-Token: t\r\n\r\n')
-        fd.flush()
-        headers = readuntil2crlfs(fd)
-        exp = 'HTTP/1.1 200'
-        self.assertEqual(headers[:len(exp)], exp)
-        last_modified_head = [line for line in headers.split('\r\n')
-                              if lm_hdr in line][0][len(lm_hdr):]
+
+        last_modified_head = _do_HEAD()
         self.assertEqual(last_modified_put, last_modified_head)
 
-        sock = connect_tcp(('localhost', prolis.getsockname()[1]))
-        fd = sock.makefile()
-        fd.write('GET /v1/a/c/o.last_modified HTTP/1.1\r\n'
-                 'Host: localhost\r\nConnection: close\r\n'
-                 'If-Modified-Since: %s\r\n'
-                 'X-Storage-Token: t\r\n\r\n' % last_modified_put)
-        fd.flush()
-        headers = readuntil2crlfs(fd)
-        exp = 'HTTP/1.1 304'
-        self.assertEqual(headers[:len(exp)], exp)
+        _do_conditional_GET_checks(last_modified_put)
+
+        # now POST to the object using default object_post_as_copy setting
+        orig_post_as_copy = prosrv.object_post_as_copy
+
+        # last-modified rounded in sec so sleep a sec to increment
+        sleep(1)
 
         sock = connect_tcp(('localhost', prolis.getsockname()[1]))
         fd = sock.makefile()
-        fd.write('GET /v1/a/c/o.last_modified HTTP/1.1\r\n'
+        fd.write('POST /v1/a/c/o.last_modified HTTP/1.1\r\n'
                  'Host: localhost\r\nConnection: close\r\n'
-                 'If-Unmodified-Since: %s\r\n'
-                 'X-Storage-Token: t\r\n\r\n' % last_modified_put)
+                 'X-Storage-Token: t\r\nContent-Length: 0\r\n\r\n')
         fd.flush()
         headers = readuntil2crlfs(fd)
-        exp = 'HTTP/1.1 200'
+        exp = 'HTTP/1.1 202'
         self.assertEqual(headers[:len(exp)], exp)
+        for line in headers.split('\r\n'):
+            self.assertFalse(line.startswith(lm_hdr))
+
+        # last modified time will have changed due to POST
+        last_modified_head = _do_HEAD()
+        self.assertNotEqual(last_modified_put, last_modified_head)
+        _do_conditional_GET_checks(last_modified_head)
+
+        # now POST using non-default object_post_as_copy setting
+        try:
+            # last-modified rounded in sec so sleep a sec to increment
+            last_modified_post = last_modified_head
+            sleep(1)
+            prosrv.object_post_as_copy = not orig_post_as_copy
+            sock = connect_tcp(('localhost', prolis.getsockname()[1]))
+            fd = sock.makefile()
+            fd.write('POST /v1/a/c/o.last_modified HTTP/1.1\r\n'
+                     'Host: localhost\r\nConnection: close\r\n'
+                     'X-Storage-Token: t\r\nContent-Length: 0\r\n\r\n')
+            fd.flush()
+            headers = readuntil2crlfs(fd)
+            exp = 'HTTP/1.1 202'
+            self.assertEqual(headers[:len(exp)], exp)
+            for line in headers.split('\r\n'):
+                self.assertFalse(line.startswith(lm_hdr))
+        finally:
+            prosrv.object_post_as_copy = orig_post_as_copy
+
+        # last modified time will have changed due to POST
+        last_modified_head = _do_HEAD()
+        self.assertNotEqual(last_modified_post, last_modified_head)
+        _do_conditional_GET_checks(last_modified_head)
 
     def test_PUT_auto_content_type(self):
         with save_globals():
@@ -3120,7 +3328,8 @@ class TestObjectController(unittest.TestCase):
             backend_requests.append((method, path, headers))
 
         req = Request.blank('/v1/a/c/o', {}, method='POST',
-                            headers={'X-Object-Meta-Color': 'Blue'})
+                            headers={'X-Object-Meta-Color': 'Blue',
+                                     'Content-Type': 'text/plain'})
 
         # we want the container_info response to says a policy index of 1
         resp_headers = {'X-Backend-Storage-Policy-Index': 1}
@@ -3181,6 +3390,7 @@ class TestObjectController(unittest.TestCase):
         backend_requests = []
         req = Request.blank('/v1/a/c/o', {}, method='POST',
                             headers={'X-Object-Meta-Color': 'Blue',
+                                     'Content-Type': 'text/plain',
                                      'X-Backend-Storage-Policy-Index': 0})
         with mocked_http_conn(
                 200, 200, 202, 202, 202,
@@ -6441,7 +6651,7 @@ class TestObjectECRangedGET(unittest.TestCase):
             str(s) for s in range(431))
         assert seg_size * 4 > len(cls.obj) > seg_size * 3, \
             "object is wrong number of segments"
-
+        cls.obj_etag = md5(cls.obj).hexdigest()
         cls.tiny_obj = 'tiny, tiny object'
         assert len(cls.tiny_obj) < seg_size, "tiny_obj too large"
 
@@ -6589,9 +6799,11 @@ class TestObjectECRangedGET(unittest.TestCase):
     def test_unsatisfiable(self):
         # Goes just one byte too far off the end of the object, so it's
         # unsatisfiable
-        status, _junk, _junk = self._get_obj(
+        status, headers, _junk = self._get_obj(
             "bytes=%d-%d" % (len(self.obj), len(self.obj) + 100))
         self.assertEqual(status, 416)
+        self.assertEqual(self.obj_etag, headers.get('Etag'))
+        self.assertEqual('bytes', headers.get('Accept-Ranges'))
 
     def test_off_end(self):
         # Ranged GET that's mostly off the end of the object, but overlaps
@@ -8790,7 +9002,7 @@ class TestAccountControllerFakeGetResponse(unittest.TestCase):
                 req = make_test_request(verb, swift_owner=False)
                 resp = app.handle_request(req)
                 h = resp.headers
-                self.assertEqual(None, h.get(ext_header))
+                self.assertIsNone(h.get(ext_header))
 
                 # swift_owner unset: GET/HEAD shouldn't return sensitive info
                 make_canned_response(verb)
@@ -8798,7 +9010,7 @@ class TestAccountControllerFakeGetResponse(unittest.TestCase):
                 del req.environ['swift_owner']
                 resp = app.handle_request(req)
                 h = resp.headers
-                self.assertEqual(None, h.get(ext_header))
+                self.assertIsNone(h.get(ext_header))
 
         # Verify that PUT/POST requests remap sysmeta headers from acct server
         with patch_account_controller_method('make_requests'):
