@@ -4,6 +4,7 @@ swift (2.7.0-1) UNRELEASED; urgency=medium
   * Support of multiple conf files in /etc/swift/*-server/ directories
   * Added dh-python build-depends
   * Bumped python-pyeclib required version
+  * Enabled autostarting of all daemons
 
  -- Ondřej Nový <novy@ondrej.org>  Mon, 14 Mar 2016 18:34:26 +0100
 

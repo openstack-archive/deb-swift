@@ -82,13 +82,13 @@ override_dh_installinit: gen-init-configurations
 		INITPKG=`echo $$MYINIT | cut -d. -f1` ; \
 		INITNAME=`echo $$MYINIT | cut -d. -f2` ; \
 		echo "Package: $$INITPKG Init: $$INITNAME" ; \
+		dh_systemd_enable -p$$INITPKG --name=$$INITNAME ; \
 		case $$INITNAME in \
 		swift-object-expirer|swift-container-reconciler) \
-			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ;; \
+			dh_installinit --restart-after-upgrade -p$$INITPKG --name=$$INITNAME ;; \
 		*) \
-			dh_installinit --no-start -p$$INITPKG --name=$$INITNAME ; \
+			dh_installinit --restart-after-upgrade -p$$INITPKG --name=$$INITNAME ; \
 			cp debian/$$INITPKG.$$INITNAME@.service debian/$$INITPKG/lib/systemd/system/$$INITNAME@.service ;; \
 		esac ; \
-		dh_systemd_enable -p$$INITPKG --name=$$INITNAME ; \
 		dh_systemd_start -p$$INITPKG --name=$$INITNAME ; \
 	done
