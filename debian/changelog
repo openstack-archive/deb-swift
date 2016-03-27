@@ -1,4 +1,4 @@
-swift (2.7.0-1) UNRELEASED; urgency=medium
+swift (2.7.0-1) experimental; urgency=medium
 
   * New upstream release
   * Support of multiple conf files in /etc/swift/*-server/ directories
@@ -6,7 +6,7 @@ swift (2.7.0-1) UNRELEASED; urgency=medium
   * Bumped python-pyeclib required version
   * Enabled autostarting of all daemons
 
- -- Ondřej Nový <novy@ondrej.org>  Mon, 14 Mar 2016 18:34:26 +0100
+ -- Ondřej Nový <novy@ondrej.org>  Sun, 27 Mar 2016 23:24:34 +0200
 
 swift (2.6.0-2) experimental; urgency=medium
 
