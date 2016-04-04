@@ -1,8 +1,9 @@
-swift (2.7.0-2) UNRELEASED; urgency=medium
+swift (2.7.0-2) unstable; urgency=medium
 
+  * Uploading to unstable
   * Ignore errors when starting daemons during package install
 
- -- Ondřej Nový <novy@ondrej.org>  Tue, 29 Mar 2016 22:40:14 +0200
+ -- Ondřej Nový <novy@ondrej.org>  Mon, 04 Apr 2016 10:53:24 +0200
 
 swift (2.7.0-1) experimental; urgency=medium
 
