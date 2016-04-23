@@ -1,3 +1,8 @@
+Description: Use SOURCE_DATE_EPOCH for copyright year to make build reproducible
+Author: Ondřej Nový <novy@ondrej.org>
+Forwarded: not-needed
+Last-Update: 2016-04-23
+
 --- a/doc/source/conf.py
 +++ b/doc/source/conf.py
 @@ -68,7 +68,11 @@
