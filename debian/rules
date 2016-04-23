@@ -14,6 +14,7 @@ override_dh_clean:
 	rm -f debian/*.upstart
 	rm -f debian/*.init
 	rm -f debian/*.service
+	rm -f debian/python-swift.postinst
 	rm -f $(CURDIR)/swift-test.conf
 
 # build with sphinx documentation
@@ -30,6 +31,10 @@ override_dh_auto_test:
 		--exclude-test=test.unit.common.test_utils.TestUtils.test_get_logger_sysloghandler_plumbing
 	rm -f $(CURDIR)/swift-test.conf
 endif
+
+override_dh_auto_build:
+	dh_auto_build
+	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func python-swift.postinst
 
 override_dh_install:
 	rm debian/tmp/usr/bin/swift-init

@@ -2,6 +2,7 @@ swift (2.7.0-3) UNRELEASED; urgency=medium
 
   * Standards-Version is 3.9.8 now (no change)
   * Fix copyright year in documentation to make build reproducible
+  * Use pkgos includes inside postinst
 
  -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:32:36 +0200
 
