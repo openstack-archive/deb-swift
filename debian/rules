@@ -40,7 +40,7 @@ override_dh_install:
 	rm debian/tmp/usr/bin/swift-init
 
 	# Create the init scripts and systemd unit files from the template
-	for i in `ls -1 debian/*.init.in` ; do \
+	set -e ; for i in $(sort $(wildcard debian/*.init.in)) ; do \
 		MYINIT=`echo $$i | sed s/.init.in//` ; \
 		cp $$i $$MYINIT.init ; \
 		cat debian/init-script-template >>$$MYINIT.init ; \
@@ -67,7 +67,7 @@ override_dh_install:
 
 gen-init-configurations:
 	# Create the init scripts and systemd unit files from the template
-	for i in `ls -1 debian/*.init.in` ; do \
+	set -e ; for i in $(sort $(wildcard debian/*.init.in)) ; do \
 		MYINIT=`echo $$i | sed s/.init.in//` ; \
 		cp $$i $$MYINIT.init ; \
 		cat debian/init-script-template >>$$MYINIT.init ; \
@@ -82,7 +82,7 @@ override_dh_systemd_start:
 	echo "Do nothing"
 
 override_dh_installinit: gen-init-configurations
-	set -e ; set -x ; for i in `ls -1 debian/*.init.in` ; do \
+	set -e ; for i in $(sort $(wildcard debian/*.init.in)) ; do \
 		MYINIT=`echo $$i | sed -e s/.init.in// -e s:debian/::` ; \
 		INITPKG=`echo $$MYINIT | cut -d. -f1` ; \
 		INITNAME=`echo $$MYINIT | cut -d. -f2` ; \
