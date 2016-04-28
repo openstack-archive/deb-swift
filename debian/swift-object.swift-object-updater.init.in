@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-object-updater"
 DESC="OpenStack Swift object updater"
 CONFIG=object-server
 MULTI=1
-SYSTEMD_DOC="man:swift-object-updater(1)"
+SYSTEMD_DOC="man:${NAME}(1)"

@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-container-updater"
 DESC="OpenStack Swift container updater"
 CONFIG=container-server
 MULTI=1
-SYSTEMD_DOC="man:swift-container-updater(1)"
+SYSTEMD_DOC="man:${NAME}(1)"

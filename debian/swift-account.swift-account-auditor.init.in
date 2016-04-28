@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-account-auditor"
 DESC="OpenStack Swift account auditor"
 CONFIG=account-server
 MULTI=1
-SYSTEMD_DOC="man:swift-account-auditor(1)"
+SYSTEMD_DOC="man:${NAME}(1)"

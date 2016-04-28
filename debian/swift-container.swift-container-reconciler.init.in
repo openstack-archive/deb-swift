@@ -13,4 +13,4 @@ PROJECT_NAME=swift
 NAME="${PROJECT_NAME}-container-reconciler"
 DESC="OpenStack Swift container reconciler"
 CONFIG=container-reconciler
-SYSTEMD_DOC="man:swift-container-reconciler(1)"
+SYSTEMD_DOC="man:${NAME}(1)"

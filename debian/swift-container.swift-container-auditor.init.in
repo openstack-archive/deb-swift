@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-container-auditor"
 DESC="OpenStack Swift container auditor"
 CONFIG=container-server
 MULTI=1
-SYSTEMD_DOC="man:swift-container-auditor(1)"
+SYSTEMD_DOC="man:${NAME}(1)"

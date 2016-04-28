@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-object-auditor"
 DESC="OpenStack Swift object auditor"
 CONFIG=object-server
 MULTI=1
-SYSTEMD_DOC="man:swift-object-auditor(1)"
+SYSTEMD_DOC="man:${NAME}(1)"

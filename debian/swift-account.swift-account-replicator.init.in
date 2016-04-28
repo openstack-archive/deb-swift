@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-account-replicator"
 DESC="OpenStack Swift account replicator"
 CONFIG=account-server
 MULTI=1
-SYSTEMD_DOC="man:swift-account-replicator(1)"
+SYSTEMD_DOC="man:${NAME}(1)"

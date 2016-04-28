@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-container-replicator"
 DESC="OpenStack Swift container replicator"
 CONFIG=container-server
 MULTI=1
-SYSTEMD_DOC="man:swift-container-replicator(1)"
+SYSTEMD_DOC="man:${NAME}(1)"

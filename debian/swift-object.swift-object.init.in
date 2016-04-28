@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-object-server"
 DESC="OpenStack Swift object server"
 CONFIG=object-server
 MULTI=1
-SYSTEMD_DOC="man:swift-object-server(1)"
+SYSTEMD_DOC="man:${NAME}(1)"
