@@ -1,4 +1,4 @@
-swift (2.7.0-3) UNRELEASED; urgency=medium
+swift (2.7.0-3) unstable; urgency=medium
 
   * Standards-Version is 3.9.8 now (no change)
   * Fix copyright year in documentation to make build reproducible
@@ -10,7 +10,7 @@ swift (2.7.0-3) UNRELEASED; urgency=medium
   * wrap-and-sort -t -a
   * Added Documentation to systemd units
 
- -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:32:36 +0200
+ -- Ondřej Nový <novy@ondrej.org>  Thu, 28 Apr 2016 21:33:07 +0200
 
 swift (2.7.0-2) unstable; urgency=medium
 
