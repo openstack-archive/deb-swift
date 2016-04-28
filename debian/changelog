@@ -5,6 +5,7 @@ swift (2.7.0-3) UNRELEASED; urgency=medium
   * Use pkgos includes inside postinst
   * Sort inputs in d/rules to make build reproducible
   * Override false-positive Lintian: spelling-error-in-copyright Thier Their
+  * Removed d/source/include-binaries, not needed anymore
 
  -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:32:36 +0200
 
