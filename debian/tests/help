@@ -4,6 +4,8 @@
 #-----------------------
 set -e
 
+cd "$ADTTMP"
+
 # Not working
 #  swift-account-audit
 #  swift-drive-audit
