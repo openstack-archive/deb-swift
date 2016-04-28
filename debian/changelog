@@ -7,6 +7,7 @@ swift (2.7.0-3) UNRELEASED; urgency=medium
   * Override false-positive Lintian: spelling-error-in-copyright Thier Their
   * Removed d/source/include-binaries, not needed anymore
   * Change directory to $ADTTMP before running Debian tests
+  * wrap-and-sort -t -a
 
  -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:32:36 +0200
 

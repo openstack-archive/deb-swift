@@ -1,7 +1,7 @@
+debian/swift-account-generator /lib/systemd/system-generators
 usr/bin/swift-account-audit
 usr/bin/swift-account-auditor
 usr/bin/swift-account-info
 usr/bin/swift-account-reaper
 usr/bin/swift-account-replicator
 usr/bin/swift-account-server
-debian/swift-account-generator /lib/systemd/system-generators
