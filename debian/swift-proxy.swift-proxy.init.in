@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-proxy-server"
 DESC="OpenStack Swift proxy server"
 CONFIG=proxy-server
 MULTI=1
-SYSTEMD_DOC=man:swift-proxy-server
+SYSTEMD_DOC="man:swift-proxy-server(1)"

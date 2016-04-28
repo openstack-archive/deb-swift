@@ -14,4 +14,4 @@ NAME="${PROJECT_NAME}-account-reaper"
 DESC="OpenStack Swift account reaper"
 CONFIG=account-server
 MULTI=1
-SYSTEMD_DOC=man:swift-account-reaper
+SYSTEMD_DOC="man:swift-account-reaper(1)"
