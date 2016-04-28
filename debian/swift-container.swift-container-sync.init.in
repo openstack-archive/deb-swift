@@ -14,3 +14,4 @@ NAME="${PROJECT_NAME}-container-sync"
 DESC="OpenStack Swift container sync"
 CONFIG=container-server
 MULTI=1
+SYSTEMD_DOC=man:swift-container-sync

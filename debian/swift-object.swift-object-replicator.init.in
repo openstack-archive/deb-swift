@@ -14,3 +14,4 @@ NAME="${PROJECT_NAME}-object-replicator"
 DESC="OpenStack Swift object replicator"
 CONFIG=object-server
 MULTI=1
+SYSTEMD_DOC=man:swift-object-replicator

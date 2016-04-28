@@ -14,3 +14,4 @@ NAME="${PROJECT_NAME}-account-server"
 DESC="OpenStack Swift account server"
 CONFIG=account-server
 MULTI=1
+SYSTEMD_DOC=man:swift-account-server

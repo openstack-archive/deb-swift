@@ -18,6 +18,10 @@ if [ -n "${SHOULD_START}" ] ; then
 	done
 fi
 
+if [ -n "$SYSTEMD_DOC" ] ; then
+    SYSTEMD_DOC="Documentation=$SYSTEMD_DOC"
+fi
+
 ##############################
 
 SERVICE_FILE=`echo ${INIT_TEMPLATE} | sed 's/.init.in/.service/'`
@@ -25,6 +29,7 @@ SERVICE_FILE=`echo ${INIT_TEMPLATE} | sed 's/.init.in/.service/'`
 echo "[Unit]
 Description=${DESC}
 ConditionPathExists=/etc/${PROJECT_NAME}/${CONFIG}.conf
+$SYSTEMD_DOC
 $AFTER
 
 [Service]
@@ -55,6 +60,7 @@ echo "[Unit]
 Description=${DESC}
 PartOf=${SERVICE_NAME}.service
 ReloadPropagatedFrom=${SERVICE_NAME}.service
+$SYSTEMD_DOC
 $AFTER
 
 [Service]

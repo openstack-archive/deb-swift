@@ -8,6 +8,7 @@ swift (2.7.0-3) UNRELEASED; urgency=medium
   * Removed d/source/include-binaries, not needed anymore
   * Change directory to $ADTTMP before running Debian tests
   * wrap-and-sort -t -a
+  * Added Documentation to systemd units
 
  -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:32:36 +0200
 

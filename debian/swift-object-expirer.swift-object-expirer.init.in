@@ -13,3 +13,4 @@ PROJECT_NAME=swift
 NAME="${PROJECT_NAME}-object-expirer"
 DESC="OpenStack Swift object expirer"
 CONFIG=object-expirer
+SYSTEMD_DOC=man:swift-object-expirer
