@@ -4,6 +4,7 @@ swift (2.7.0-3) UNRELEASED; urgency=medium
   * Fix copyright year in documentation to make build reproducible
   * Use pkgos includes inside postinst
   * Sort inputs in d/rules to make build reproducible
+  * Override false-positive Lintian: spelling-error-in-copyright Thier Their
 
  -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:32:36 +0200
 
