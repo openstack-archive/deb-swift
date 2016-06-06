@@ -4,6 +4,7 @@ swift (2.7.0-4) UNRELEASED; urgency=medium
   * Removed run depends on python-setuptools
   * Removed (build-)depends on python-paste, it's satisfied by
     python-pastedeploy
+  * Added python-keystoneclient to Build-Depends-Indep
 
  -- Ondřej Nový <novy@ondrej.org>  Mon, 06 Jun 2016 14:32:05 +0200
 
