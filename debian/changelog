@@ -2,6 +2,8 @@ swift (2.7.0-4) UNRELEASED; urgency=medium
 
   * Bump required openstack-pkg-tools version to 45
   * Removed run depends on python-setuptools
+  * Removed (build-)depends on python-paste, it's satisfied by
+    python-pastedeploy
 
  -- Ondřej Nový <novy@ondrej.org>  Mon, 06 Jun 2016 14:32:05 +0200
 
