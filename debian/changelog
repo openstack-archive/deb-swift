@@ -1,4 +1,4 @@
-swift (2.7.0-4) UNRELEASED; urgency=medium
+swift (2.7.0-4) unstable; urgency=medium
 
   * Bump required openstack-pkg-tools version to 45
   * Removed run depends on python-setuptools
@@ -6,7 +6,7 @@ swift (2.7.0-4) UNRELEASED; urgency=medium
     python-pastedeploy
   * Added python-keystoneclient to Build-Depends-Indep
 
- -- Ondřej Nový <novy@ondrej.org>  Mon, 06 Jun 2016 14:32:05 +0200
+ -- Ondřej Nový <novy@ondrej.org>  Thu, 09 Jun 2016 08:40:52 +0200
 
 swift (2.7.0-3) unstable; urgency=medium
 
