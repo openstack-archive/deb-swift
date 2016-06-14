@@ -2,6 +2,7 @@ swift (2.8.0-1) UNRELEASED; urgency=medium
 
   * New upstream release
   * Removed build depend on git, not needed anymore
+  * Added missed example configs to docs
 
  -- Ondřej Nový <novy@ondrej.org>  Tue, 14 Jun 2016 17:01:13 +0200
 
