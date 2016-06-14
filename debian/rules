@@ -96,3 +96,8 @@ override_dh_installinit: gen-init-configurations
 		esac ; \
 		dh_systemd_start -p$$INITPKG --name=$$INITNAME ; \
 	done
+
+override_dh_installdocs:
+	dh_installdocs
+
+	dh_installdocs -A AUTHORS
