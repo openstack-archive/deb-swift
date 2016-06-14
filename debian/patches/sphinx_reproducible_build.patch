@@ -5,7 +5,7 @@ Last-Update: 2016-04-23
 
 --- a/doc/source/conf.py
 +++ b/doc/source/conf.py
-@@ -68,7 +68,11 @@
+@@ -69,7 +69,11 @@
  
  # General information about the project.
  project = u'Swift'
