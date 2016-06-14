@@ -1,3 +1,9 @@
+swift (2.8.0-1) UNRELEASED; urgency=medium
+
+  * New upstream release
+
+ -- Ondřej Nový <novy@ondrej.org>  Tue, 14 Jun 2016 17:01:13 +0200
+
 swift (2.7.0-5) unstable; urgency=medium
 
   * Bumped required version of python-setuptools to 20.6.8
