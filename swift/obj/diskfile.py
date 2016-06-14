@@ -55,9 +55,10 @@ from swift.common.constraints import check_mount, check_dir
 from swift.common.request_helpers import is_sys_meta
 from swift.common.utils import mkdirs, Timestamp, \
     storage_directory, hash_path, renamer, fallocate, fsync, fdatasync, \
-    fsync_dir, drop_buffer_cache, ThreadPool, lock_path, write_pickle, \
+    fsync_dir, drop_buffer_cache, lock_path, write_pickle, \
     config_true_value, listdir, split_path, ismount, remove_file, \
-    get_md5_socket, F_SETPIPE_SZ, decode_timestamps, encode_timestamps
+    get_md5_socket, F_SETPIPE_SZ, decode_timestamps, encode_timestamps, \
+    tpool_reraise
 from swift.common.splice import splice, tee
 from swift.common.exceptions import DiskFileQuarantined, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
@@ -361,15 +362,25 @@ def object_audit_location_generator(devices, mount_check=True, logger=None,
                     _('Skipping %s as it is not mounted'), device)
             continue
         # loop through object dirs for all policies
-        for dir_ in os.listdir(os.path.join(devices, device)):
+        device_dir = os.path.join(devices, device)
+        try:
+            dirs = os.listdir(device_dir)
+        except OSError as e:
+            if logger:
+                logger.debug(
+                    _('Skipping %(dir)s: %(err)s') % {'dir': device_dir,
+                                                      'err': e.strerror})
+            continue
+        for dir_ in dirs:
             if not dir_.startswith(DATADIR_BASE):
                 continue
             try:
                 base, policy = split_policy_string(dir_)
             except PolicyError as e:
                 if logger:
-                    logger.warning(_('Directory %r does not map '
-                                     'to a valid policy (%s)') % (dir_, e))
+                    logger.warning(_('Directory %(directory)r does not map '
+                                     'to a valid policy (%(error)s)') % {
+                                   'directory': dir_, 'error': e})
                 continue
             datadir_path = os.path.join(devices, device, dir_)
 
@@ -410,13 +421,15 @@ def get_auditor_status(datadir_path, logger, auditor_type):
             status = statusfile.read()
     except (OSError, IOError) as e:
         if e.errno != errno.ENOENT and logger:
-            logger.warning(_('Cannot read %s (%s)') % (auditor_status, e))
+            logger.warning(_('Cannot read %(auditor_status)s (%(err)s)') %
+                           {'auditor_status': auditor_status, 'err': e})
         return listdir(datadir_path)
     try:
         status = json.loads(status)
     except ValueError as e:
-        logger.warning(_('Loading JSON from %s failed (%s)') % (
-                       auditor_status, e))
+        logger.warning(_('Loading JSON from %(auditor_status)s failed'
+                         ' (%(err)s)') %
+                       {'auditor_status': auditor_status, 'err': e})
         return listdir(datadir_path)
     return status['partitions']
 
@@ -430,7 +443,8 @@ def update_auditor_status(datadir_path, logger, partitions, auditor_type):
             statusfile.write(status)
     except (OSError, IOError) as e:
         if logger:
-            logger.warning(_('Cannot write %s (%s)') % (auditor_status, e))
+            logger.warning(_('Cannot write %(auditor_status)s (%(err)s)') %
+                           {'auditor_status': auditor_status, 'err': e})
 
 
 def clear_auditor_status(devices, auditor_type="ALL"):
@@ -524,9 +538,6 @@ class BaseDiskFileManager(object):
             conf.get('replication_one_per_device', 'true'))
         self.replication_lock_timeout = int(conf.get(
             'replication_lock_timeout', 15))
-        threads_per_disk = int(conf.get('threads_per_disk', '0'))
-        self.threadpools = defaultdict(
-            lambda: ThreadPool(nthreads=threads_per_disk))
 
         self.use_splice = False
         self.pipe_size = None
@@ -811,7 +822,7 @@ class BaseDiskFileManager(object):
         if exts.get('.ts'):
             results['ts_info'] = exts['.ts'][0]
         if 'data_info' in results and exts.get('.meta'):
-            # only report meta files if there is a data file
+            # only report a meta file if a data file has been chosen
             results['meta_info'] = exts['.meta'][0]
             ctype_info = exts['.meta'].pop()
             if (ctype_info['ctype_timestamp']
@@ -859,7 +870,7 @@ class BaseDiskFileManager(object):
             remove_file(join(hsh_path, results['ts_info']['filename']))
             files.remove(results.pop('ts_info')['filename'])
         for file_info in results.get('possible_reclaim', []):
-            # stray fragments are not deleted until reclaim-age
+            # stray files are not deleted until reclaim-age
             if is_reclaimable(file_info['timestamp']):
                 results.setdefault('obsolete', []).append(file_info)
         for file_info in results.get('obsolete', []):
@@ -1105,8 +1116,7 @@ class BaseDiskFileManager(object):
         device_path = self.construct_dev_path(device)
         async_dir = os.path.join(device_path, get_async_dir(policy))
         ohash = hash_path(account, container, obj)
-        self.threadpools[device].run_in_thread(
-            write_pickle,
+        write_pickle(
             data,
             os.path.join(async_dir, ohash[-3:], ohash + '-' +
                          Timestamp(timestamp).internal),
@@ -1129,7 +1139,7 @@ class BaseDiskFileManager(object):
         dev_path = self.get_dev_path(device)
         if not dev_path:
             raise DiskFileDeviceUnavailable()
-        return self.diskfile_cls(self, dev_path, self.threadpools[device],
+        return self.diskfile_cls(self, dev_path,
                                  partition, account, container, obj,
                                  policy=policy, use_splice=self.use_splice,
                                  pipe_size=self.pipe_size, **kwargs)
@@ -1205,7 +1215,7 @@ class BaseDiskFileManager(object):
                 metadata.get('name', ''), 3, 3, True)
         except ValueError:
             raise DiskFileNotExist()
-        return self.diskfile_cls(self, dev_path, self.threadpools[device],
+        return self.diskfile_cls(self, dev_path,
                                  partition, account, container, obj,
                                  policy=policy, **kwargs)
 
@@ -1225,7 +1235,7 @@ class BaseDiskFileManager(object):
                                       partition)
         if not os.path.exists(partition_path):
             mkdirs(partition_path)
-        _junk, hashes = self.threadpools[device].force_run_in_thread(
+        _junk, hashes = tpool_reraise(
             self._get_hashes, partition_path, recalculate=suffixes)
         return hashes
 
@@ -1277,10 +1287,10 @@ class BaseDiskFileManager(object):
 
         timestamps is a dict which may contain items mapping:
 
-            ts_data -> timestamp of data or tombstone file,
-            ts_meta -> timestamp of meta file, if one exists
-            ts_ctype -> timestamp of meta file containing most recent
-                        content-type value, if one exists
+        - ts_data -> timestamp of data or tombstone file,
+        - ts_meta -> timestamp of meta file, if one exists
+        - ts_ctype -> timestamp of meta file containing most recent
+                      content-type value, if one exists
 
         where timestamps are instances of
         :class:`~swift.common.utils.Timestamp`
@@ -1358,19 +1368,16 @@ class BaseDiskFileWriter(object):
     :param fd: open file descriptor of temporary file to receive data
     :param tmppath: full path name of the opened file descriptor
     :param bytes_per_sync: number bytes written between sync calls
-    :param threadpool: internal thread pool to use for disk operations
     :param diskfile: the diskfile creating this DiskFileWriter instance
     """
 
-    def __init__(self, name, datadir, fd, tmppath, bytes_per_sync, threadpool,
-                 diskfile):
+    def __init__(self, name, datadir, fd, tmppath, bytes_per_sync, diskfile):
         # Parameter tracking
         self._name = name
         self._datadir = datadir
         self._fd = fd
         self._tmppath = tmppath
         self._bytes_per_sync = bytes_per_sync
-        self._threadpool = threadpool
         self._diskfile = diskfile
 
         # Internal attributes
@@ -1399,18 +1406,15 @@ class BaseDiskFileWriter(object):
         :returns: the total number of bytes written to an object
         """
 
-        def _write_entire_chunk(chunk):
-            while chunk:
-                written = os.write(self._fd, chunk)
-                self._upload_size += written
-                chunk = chunk[written:]
-
-        self._threadpool.run_in_thread(_write_entire_chunk, chunk)
+        while chunk:
+            written = os.write(self._fd, chunk)
+            self._upload_size += written
+            chunk = chunk[written:]
 
         # For large files sync every 512MB (by default) written
         diff = self._upload_size - self._last_sync
         if diff >= self._bytes_per_sync:
-            self._threadpool.force_run_in_thread(fdatasync, self._fd)
+            tpool_reraise(fdatasync, self._fd)
             drop_buffer_cache(self._fd, self._last_sync, diff)
             self._last_sync = self._upload_size
 
@@ -1467,8 +1471,7 @@ class BaseDiskFileWriter(object):
         metadata['name'] = self._name
         target_path = join(self._datadir, filename)
 
-        self._threadpool.force_run_in_thread(
-            self._finalize_put, metadata, target_path, cleanup)
+        tpool_reraise(self._finalize_put, metadata, target_path, cleanup)
 
     def put(self, metadata):
         """
@@ -1511,7 +1514,6 @@ class BaseDiskFileReader(object):
     :param data_file: on-disk data file name for the object
     :param obj_size: verified on-disk size of the object
     :param etag: expected metadata etag value for entire file
-    :param threadpool: thread pool to use for read operations
     :param disk_chunk_size: size of reads from disk in bytes
     :param keep_cache_size: maximum object size that will be kept in cache
     :param device_path: on-disk device path, used when quarantining an obj
@@ -1522,7 +1524,7 @@ class BaseDiskFileReader(object):
     :param diskfile: the diskfile creating this DiskFileReader instance
     :param keep_cache: should resulting reads be kept in the buffer cache
     """
-    def __init__(self, fp, data_file, obj_size, etag, threadpool,
+    def __init__(self, fp, data_file, obj_size, etag,
                  disk_chunk_size, keep_cache_size, device_path, logger,
                  quarantine_hook, use_splice, pipe_size, diskfile,
                  keep_cache=False):
@@ -1531,7 +1533,6 @@ class BaseDiskFileReader(object):
         self._data_file = data_file
         self._obj_size = obj_size
         self._etag = etag
-        self._threadpool = threadpool
         self._diskfile = diskfile
         self._disk_chunk_size = disk_chunk_size
         self._device_path = device_path
@@ -1570,8 +1571,7 @@ class BaseDiskFileReader(object):
                 self._started_at_0 = True
                 self._iter_etag = hashlib.md5()
             while True:
-                chunk = self._threadpool.run_in_thread(
-                    self._fp.read, self._disk_chunk_size)
+                chunk = self._fp.read(self._disk_chunk_size)
                 if chunk:
                     if self._iter_etag:
                         self._iter_etag.update(chunk)
@@ -1624,8 +1624,8 @@ class BaseDiskFileReader(object):
         try:
             while True:
                 # Read data from disk to pipe
-                (bytes_in_pipe, _1, _2) = self._threadpool.run_in_thread(
-                    splice, rfd, None, client_wpipe, None, pipe_size, 0)
+                (bytes_in_pipe, _1, _2) = splice(
+                    rfd, None, client_wpipe, None, pipe_size, 0)
                 if bytes_in_pipe == 0:
                     self._read_to_eof = True
                     self._drop_cache(rfd, dropped_cache,
@@ -1748,9 +1748,8 @@ class BaseDiskFileReader(object):
             drop_buffer_cache(fd, offset, length)
 
     def _quarantine(self, msg):
-        self._quarantined_dir = self._threadpool.run_in_thread(
-            self.manager.quarantine_renamer, self._device_path,
-            self._data_file)
+        self._quarantined_dir = self.manager.quarantine_renamer(
+            self._device_path, self._data_file)
         self._logger.warning("Quarantined object %s: %s" % (
             self._data_file, msg))
         self._logger.increment('quarantines')
@@ -1814,7 +1813,6 @@ class BaseDiskFile(object):
 
     :param mgr: associated DiskFileManager instance
     :param device_path: path to the target device or drive
-    :param threadpool: thread pool to use for blocking operations
     :param partition: partition on the device in which the object lives
     :param account: account name for the object
     :param container: container name for the object
@@ -1827,12 +1825,11 @@ class BaseDiskFile(object):
     reader_cls = None  # must be set by subclasses
     writer_cls = None  # must be set by subclasses
 
-    def __init__(self, mgr, device_path, threadpool, partition,
+    def __init__(self, mgr, device_path, partition,
                  account=None, container=None, obj=None, _datadir=None,
                  policy=None, use_splice=False, pipe_size=None, **kwargs):
         self._manager = mgr
         self._device_path = device_path
-        self._threadpool = threadpool or ThreadPool(nthreads=0)
         self._logger = mgr.logger
         self._disk_chunk_size = mgr.disk_chunk_size
         self._bytes_per_sync = mgr.bytes_per_sync
@@ -2033,8 +2030,8 @@ class BaseDiskFile(object):
         :param msg: reason for quarantining to be included in the exception
         :returns: DiskFileQuarantined exception object
         """
-        self._quarantined_dir = self._threadpool.run_in_thread(
-            self.manager.quarantine_renamer, self._device_path, data_file)
+        self._quarantined_dir = self.manager.quarantine_renamer(
+            self._device_path, data_file)
         self._logger.warning("Quarantined object %s: %s" % (
             data_file, msg))
         self._logger.increment('quarantines')
@@ -2323,7 +2320,7 @@ class BaseDiskFile(object):
         """
         dr = self.reader_cls(
             self._fp, self._data_file, int(self._metadata['Content-Length']),
-            self._metadata['ETag'], self._threadpool, self._disk_chunk_size,
+            self._metadata['ETag'], self._disk_chunk_size,
             self._manager.keep_cache_size, self._device_path, self._logger,
             use_splice=self._use_splice, quarantine_hook=_quarantine_hook,
             pipe_size=self._pipe_size, diskfile=self, keep_cache=keep_cache)
@@ -2368,7 +2365,6 @@ class BaseDiskFile(object):
                     raise
             dfw = self.writer_cls(self._name, self._datadir, fd, tmppath,
                                   bytes_per_sync=self._bytes_per_sync,
-                                  threadpool=self._threadpool,
                                   diskfile=self)
             yield dfw
         finally:
@@ -2476,6 +2472,11 @@ class DiskFileManager(BaseDiskFileManager):
             # set results
             results['data_info'] = exts['.data'][0]
 
+        # .meta files *may* be ready for reclaim if there is no data
+        if exts.get('.meta') and not exts.get('.data'):
+            results.setdefault('possible_reclaim', []).extend(
+                exts.get('.meta'))
+
     def _update_suffix_hashes(self, hashes, ondisk_info):
         """
         Applies policy specific updates to the given dict of md5 hashes for
@@ -2521,8 +2522,8 @@ class ECDiskFileWriter(BaseDiskFileWriter):
                 if err.errno not in (errno.ENOSPC, errno.EDQUOT):
                     # re-raise to catch all handler
                     raise
-                msg = (_('No space left on device for %s (%s)') %
-                       (durable_file_path, err))
+                msg = (_('No space left on device for %(file)s (%(err)s)') %
+                       {'file': durable_file_path, 'err': err})
                 self.manager.logger.error(msg)
                 exc = DiskFileNoSpace(str(err))
             else:
@@ -2530,11 +2531,11 @@ class ECDiskFileWriter(BaseDiskFileWriter):
                     self.manager.cleanup_ondisk_files(self._datadir)['files']
                 except OSError as os_err:
                     self.manager.logger.exception(
-                        _('Problem cleaning up %s (%s)') %
-                        (self._datadir, os_err))
+                        _('Problem cleaning up %(datadir)s (%(err)s)') %
+                        {'datadir': self._datadir, 'err': os_err})
         except Exception as err:
-            msg = (_('Problem writing durable state file %s (%s)') %
-                   (durable_file_path, err))
+            msg = (_('Problem writing durable state file %(file)s (%(err)s)') %
+                   {'file': durable_file_path, 'err': err})
             self.manager.logger.exception(msg)
             exc = DiskFileError(msg)
         if exc:
@@ -2551,8 +2552,7 @@ class ECDiskFileWriter(BaseDiskFileWriter):
         """
         durable_file_path = os.path.join(
             self._datadir, timestamp.internal + '.durable')
-        self._threadpool.force_run_in_thread(
-            self._finalize_durable, durable_file_path)
+        tpool_reraise(self._finalize_durable, durable_file_path)
 
     def put(self, metadata):
         """
@@ -2642,7 +2642,7 @@ class ECDiskFile(BaseDiskFile):
         reverting it to its primary node.
 
         The hash will be invalidated, and if empty or invalid the
-        hsh_path will be removed on next hash_cleanup_listdir.
+        hsh_path will be removed on next cleanup_ondisk_files.
 
         :param timestamp: the object timestamp, an instance of
                           :class:`~swift.common.utils.Timestamp`
@@ -2816,12 +2816,16 @@ class ECDiskFileManager(BaseDiskFileManager):
             results.setdefault('obsolete', []).extend(exts['.durable'])
             exts.pop('.durable')
 
-        # Fragments *may* be ready for reclaim, unless they are durable or
-        # at the timestamp we have just chosen for constructing the diskfile.
+        # Fragments *may* be ready for reclaim, unless they are durable
         for frag_set in frag_sets.values():
             if frag_set == durable_frag_set:
                 continue
             results.setdefault('possible_reclaim', []).extend(frag_set)
+
+        # .meta files *may* be ready for reclaim if there is no durable data
+        if exts.get('.meta') and not durable_frag_set:
+            results.setdefault('possible_reclaim', []).extend(
+                exts.get('.meta'))
 
     def _verify_ondisk_files(self, results, frag_index=None, **kwargs):
         """

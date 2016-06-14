@@ -3,18 +3,16 @@
 # This file is distributed under the same license as the swift project.
 #
 # Translators:
-# Lucas Palm <lapalm@us.ibm.com>, 2015. #zanata
-# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
-# Jennifer <cristxu@tw.ibm.com>, 2016. #zanata
+# Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: swift 2.6.1.dev235\n"
-"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2016-03-18 23:11+0000\n"
+"Project-Id-Version: swift 2.7.1.dev169\n"
+"Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
+"POT-Creation-Date: 2016-06-02 04:58+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"PO-Revision-Date: 2016-03-19 12:55+0000\n"
+"PO-Revision-Date: 2016-03-24 01:54+0000\n"
 "Last-Translator: Jennifer <cristxu@tw.ibm.com>\n"
 "Language: zh-TW\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
@@ -78,14 +76,6 @@ msgid "%(type)s returning 503 for %(statuses)s"
 msgstr "%(type)s 針對 %(statuses)s 正在傳回 503"
 
 #, python-format
-msgid "%s #%d not running (%s)"
-msgstr "%s #%d 未在執行中 (%s)"
-
-#, python-format
-msgid "%s (%s) appears to have stopped"
-msgstr "%s (%s) 似乎已停止"
-
-#, python-format
 msgid "%s already started..."
 msgstr "%s 已啟動..."
 
@@ -100,14 +90,6 @@ msgstr "未裝載 %s"
 #, python-format
 msgid "%s responded as unmounted"
 msgstr "%s 已回應為未裝載"
-
-#, python-format
-msgid "%s running (%s - %s)"
-msgstr "%s 在執行中 (%s - %s)"
-
-#, python-format
-msgid "%s: %s"
-msgstr "%s：%s"
 
 #, python-format
 msgid "%s: Connection reset by peer"
@@ -148,10 +130,6 @@ msgid "Account"
 msgstr "帳戶"
 
 #, python-format
-msgid "Account %s has not been reaped since %s"
-msgstr "尚未回收帳戶 %s（自 %s 之後）"
-
-#, python-format
 msgid "Account audit \"once\" mode completed: %.02fs"
 msgstr "帳戶審核「一次性」模式已完成：%.02fs"
 
@@ -163,10 +141,6 @@ msgstr "帳戶審核通過已完成：%.02fs"
 msgid ""
 "Attempted to replicate %(count)d dbs in %(time).5f seconds (%(rate).5f/s)"
 msgstr "已嘗試在 %(time).5f 秒內抄寫 %(count)d 個資料庫 (%(rate).5f/s)"
-
-#, python-format
-msgid "Audit Failed for %s: %s"
-msgstr "%s 的審核失敗：%s"
 
 #, python-format
 msgid "Bad rsync return code: %(ret)d <- %(args)s"
@@ -192,10 +166,6 @@ msgstr "開始儲存器更新單一執行緒清理"
 
 msgid "Begin container update sweep"
 msgstr "開始儲存器更新清理"
-
-#, python-format
-msgid "Begin object audit \"%s\" mode (%s%s)"
-msgstr "開始物件審核 \"%s\" 模式 (%s%s)"
 
 msgid "Begin object update single threaded sweep"
 msgstr "開始物件更新單一執行緒清理"
@@ -288,24 +258,12 @@ msgstr ""
 "功，%(fail)s 個失敗，%(no_change)s 個無變更"
 
 #, python-format
-msgid "Could not bind to %s:%s after trying for %s seconds"
-msgstr "嘗試 %s 秒後仍無法連結至 %s:%s"
-
-#, python-format
-msgid "Could not load %r: %s"
-msgstr "無法載入 %r：%s"
-
-#, python-format
 msgid "Data download error: %s"
 msgstr "資料下載錯誤：%s"
 
 #, python-format
 msgid "Devices pass completed: %.02fs"
 msgstr "裝置通過已完成：%.02fs"
-
-#, python-format
-msgid "Directory %r does not map to a valid policy (%s)"
-msgstr "目錄 %r 未對映至有效的原則 (%s)"
 
 #, python-format
 msgid "ERROR %(db_file)s: %(validate_sync_to_err)s"
@@ -336,12 +294,6 @@ msgstr ""
 "%(status)s %(reason)s"
 
 #, python-format
-msgid ""
-"ERROR Account update failed: different  numbers of hosts and devices in "
-"request: \"%s\" vs \"%s\""
-msgstr "錯誤：帳戶更新失敗：要求中的主機與裝置數目不同：\"%s\" 對 \"%s\""
-
-#, python-format
 msgid "ERROR Bad response %(status)s from %(host)s"
 msgstr "錯誤：來自 %(host)s 的回應 %(status)s 不當"
 
@@ -356,12 +308,6 @@ msgid ""
 msgstr ""
 "錯誤：儲存器更新失敗（儲存以稍後進行非同步更新）：%(status)d回應（來自 "
 "%(ip)s:%(port)s/%(dev)s）"
-
-#, python-format
-msgid ""
-"ERROR Container update failed: different numbers of hosts and devices in "
-"request: \"%s\" vs \"%s\""
-msgstr "錯誤：儲存器更新失敗：要求中的主機與裝置數目不同：\"%s\" 對 \"%s\""
 
 #, python-format
 msgid "ERROR Could not get account info %s"
@@ -511,10 +457,6 @@ msgid "Error hashing suffix"
 msgstr "混合字尾時發生錯誤"
 
 #, python-format
-msgid "Error in %r with mtime_check_interval: %s"
-msgstr "在 mtime_check_interval 中，%r 發生錯誤：%s"
-
-#, python-format
 msgid "Error limiting server %s"
 msgstr "限制伺服器 %s 時發生錯誤"
 
@@ -575,14 +517,6 @@ msgstr "最上層抄寫迴圈中發生異常狀況"
 
 msgid "Exception in top-levelreconstruction loop"
 msgstr "最上層重新建構迴圈中發生異常狀況"
-
-#, python-format
-msgid "Exception while deleting container %s %s"
-msgstr "刪除儲存器 %s %s 時發生異常狀況"
-
-#, python-format
-msgid "Exception while deleting object %s %s %s"
-msgstr "刪除物件 %s %s %s 時發生異常狀況"
 
 #, python-format
 msgid "Exception with %(ip)s:%(port)s/%(device)s"
@@ -667,10 +601,6 @@ msgid "No %s running"
 msgstr "沒有 %s 在執行中"
 
 #, python-format
-msgid "No cluster endpoint for %r %r"
-msgstr "沒有 %r %r 的叢集端點"
-
-#, python-format
 msgid "No permission to signal PID %d"
 msgstr "沒有信號 PID %d 的許可權"
 
@@ -681,10 +611,6 @@ msgstr "沒有具有索引 %s 的原則"
 #, python-format
 msgid "No realm key for %r"
 msgstr "沒有 %r 的範圍金鑰"
-
-#, python-format
-msgid "No space left on device for %s (%s)"
-msgstr "裝置上沒有用於 %s 的剩餘空間 (%s)"
 
 #, python-format
 msgid "Node error limited %(ip)s:%(port)s (%(device)s)"
@@ -797,32 +723,12 @@ msgstr "X-Container-Sync-To 中不容許參數、查詢及片段"
 msgid "Partition times: max %(max).4fs, min %(min).4fs, med %(med).4fs"
 msgstr "分割區時間：最大 %(max).4fs，最小 %(min).4fs，中間 %(med).4fs"
 
-#, python-format
-msgid "Pass beginning; %s possible containers; %s possible objects"
-msgstr "通過正在開始；%s 個可能儲存器；%s 個可能物件"
-
-#, python-format
-msgid "Pass completed in %ds; %d objects expired"
-msgstr "已完成通過 %ds 個；%d 個物件已過期"
-
-#, python-format
-msgid "Pass so far %ds; %d objects expired"
-msgstr "目前為止通過 %ds 個；%d 個物件過期"
-
 msgid "Path required in X-Container-Sync-To"
 msgstr "X-Container-Sync-To 中需要路徑"
 
 #, python-format
 msgid "Problem cleaning up %s"
 msgstr "清除 %s 時發生問題"
-
-#, python-format
-msgid "Problem cleaning up %s (%s)"
-msgstr "清除 %s 時發生問題  (%s)"
-
-#, python-format
-msgid "Problem writing durable state file %s (%s)"
-msgstr "寫入可延續狀態檔 %s 時發生問題 (%s)"
 
 #, python-format
 msgid "Profiling Error: %s"
@@ -836,10 +742,6 @@ msgstr "已將 %(hsh_path)s 隔離至 %(quar_path)s，原因是它不是目錄"
 msgid ""
 "Quarantined %(object_path)s to %(quar_path)s because it is not a directory"
 msgstr "已將 %(object_path)s 隔離至 %(quar_path)s，原因是它不是目錄"
-
-#, python-format
-msgid "Quarantined %s to %s due to %s database"
-msgstr "已將 %s 隔離至 %s，原因是 %s 資料庫"
 
 #, python-format
 msgid "Quarantining DB %s"
@@ -903,10 +805,6 @@ msgstr "正在 Script 模式下執行物件重新建構器。"
 
 msgid "Running object replicator in script mode."
 msgstr "正在 Script 模式下執行物件抄寫器"
-
-#, python-format
-msgid "Signal %s  pid: %s  signal: %s"
-msgstr "信號 %s  PID：%s  信號：%s"
 
 #, python-format
 msgid ""
@@ -985,10 +883,6 @@ msgid "Trying to GET %(full_path)s"
 msgstr "正在嘗試對 %(full_path)s 執行 GET 動作"
 
 #, python-format
-msgid "Trying to get %s status of PUT to %s"
-msgstr "正在嘗試使 PUT 的 %s 狀態為 %s"
-
-#, python-format
 msgid "Trying to get final status of PUT to %s"
 msgstr "正在嘗試使 PUT 的最終狀態為 %s"
 
@@ -1013,14 +907,6 @@ msgid "UNCAUGHT EXCEPTION"
 msgstr "未捕捉的異常狀況"
 
 #, python-format
-msgid "Unable to find %s config section in %s"
-msgstr "找不到 %s 配置區段（在 %s 中）"
-
-#, python-format
-msgid "Unable to load internal client from config: %r (%s)"
-msgstr "無法從配置載入內部用戶端：%r (%s)"
-
-#, python-format
 msgid "Unable to locate %s in libc.  Leaving as a no-op."
 msgstr "在 libc 中找不到 %s。保留為 no-op。"
 
@@ -1028,17 +914,9 @@ msgstr "在 libc 中找不到 %s。保留為 no-op。"
 msgid "Unable to locate config for %s"
 msgstr "找不到 %s 的配置"
 
-#, python-format
-msgid "Unable to locate config number %s for %s"
-msgstr "找不到配置號碼 %s（針對 %s）"
-
 msgid ""
 "Unable to locate fallocate, posix_fallocate in libc.  Leaving as a no-op."
 msgstr "在 libc 中找不到 fallocate、posix_fallocate。保留為 no-op。"
-
-#, python-format
-msgid "Unable to perform fsync() on directory %s: %s"
-msgstr "無法在目錄 %s 上執行 fsync()：%s"
 
 #, python-format
 msgid "Unable to read config from %s"
@@ -1082,14 +960,6 @@ msgstr "警告：無法修改處理程序數上限限制。以非 root 使用者
 
 msgid "WARNING: Unable to modify memory limit.  Running as non-root?"
 msgstr "警告：無法修改記憶體限制。以非 root 使用者身分執行？"
-
-#, python-format
-msgid "Waited %s seconds for %s to die; giving up"
-msgstr "已等待 %s 秒以讓 %s 當掉；正在放棄"
-
-#, python-format
-msgid "Waited %s seconds for %s to die; killing"
-msgstr "已等待 %s 秒以讓 %s 當掉"
 
 msgid "Warning: Cannot ratelimit without a memcached client"
 msgstr "警告：無法在沒有 memcached 用戶端的情況下限制速率"

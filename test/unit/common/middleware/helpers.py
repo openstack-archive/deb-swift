@@ -20,6 +20,7 @@ from copy import deepcopy
 from hashlib import md5
 from swift.common import swob
 from swift.common.header_key_dict import HeaderKeyDict
+from swift.common.swob import HTTPNotImplemented
 from swift.common.utils import split_path
 
 from test.unit import FakeLogger, FakeRing
@@ -43,12 +44,15 @@ class FakeSwift(object):
     """
     A good-enough fake Swift proxy server to use in testing middleware.
     """
+    ALLOWED_METHODS = [
+        'PUT', 'POST', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'REPLICATE']
 
     def __init__(self):
         self._calls = []
         self._unclosed_req_paths = defaultdict(int)
         self.req_method_paths = []
         self.swift_sources = []
+        self.txn_ids = []
         self.uploaded = {}
         # mapping of (method, path) --> (response class, headers, body)
         self._responses = {}
@@ -70,6 +74,9 @@ class FakeSwift(object):
 
     def __call__(self, env, start_response):
         method = env['REQUEST_METHOD']
+        if method not in self.ALLOWED_METHODS:
+            raise HTTPNotImplemented()
+
         path = env['PATH_INFO']
         _, acc, cont, obj = split_path(env['PATH_INFO'], 0, 4,
                                        rest_with_last=True)
@@ -83,6 +90,7 @@ class FakeSwift(object):
 
         req_headers = swob.Request(env).headers
         self.swift_sources.append(env.get('swift.source'))
+        self.txn_ids.append(env.get('swift.trans_id'))
 
         try:
             resp_class, raw_headers, body = self._find_response(method, path)
@@ -119,10 +127,10 @@ class FakeSwift(object):
             if "CONTENT_TYPE" in env:
                 self.uploaded[path][0]['Content-Type'] = env["CONTENT_TYPE"]
 
-        # range requests ought to work, hence conditional_response=True
+        # range requests ought to work, which require conditional_response=True
         req = swob.Request(env)
         resp = resp_class(req=req, headers=headers, body=body,
-                          conditional_response=True)
+                          conditional_response=req.method in ('GET', 'HEAD'))
         wsgi_iter = resp(env, start_response)
         self.mark_opened(path)
         return LeakTrackingIter(wsgi_iter, self, path)

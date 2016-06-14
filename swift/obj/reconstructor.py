@@ -68,7 +68,7 @@ def _get_partners(frag_index, part_nodes):
 
 class RebuildingECDiskFileStream(object):
     """
-    This class wraps the the reconstructed fragment archive data and
+    This class wraps the reconstructed fragment archive data and
     metadata in the DiskFile interface for ssync.
     """
 
@@ -127,7 +127,7 @@ class ObjectReconstructor(Daemon):
         self.bind_ip = conf.get('bind_ip', '0.0.0.0')
         self.servers_per_port = int(conf.get('servers_per_port', '0') or 0)
         self.port = None if self.servers_per_port else \
-            int(conf.get('bind_port', 6000))
+            int(conf.get('bind_port', 6200))
         self.concurrency = int(conf.get('concurrency', 1))
         self.stats_interval = int(conf.get('stats_interval', '300'))
         self.ring_check_interval = int(conf.get('ring_check_interval', 15))
@@ -843,6 +843,9 @@ class ObjectReconstructor(Daemon):
                 self.part_count += len(partitions)
                 for partition in partitions:
                     part_path = join(obj_path, partition)
+                    if partition in ('auditor_status_ALL.json',
+                                     'auditor_status_ZBF.json'):
+                        continue
                     if not (partition.isdigit() and
                             os.path.isdir(part_path)):
                         self.logger.warning(

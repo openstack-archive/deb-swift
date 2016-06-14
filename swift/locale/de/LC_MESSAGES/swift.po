@@ -6,17 +6,17 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2014
 # Ettore Atalan <atalanttore@googlemail.com>, 2014-2015
 # Jonas John <jonas.john@e-werkzeug.eu>, 2015
-# Frank Kloeker <eumel@arcor.de>, 2016. #zanata
+# Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: swift 2.6.1.dev235\n"
-"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2016-03-18 23:11+0000\n"
+"Project-Id-Version: swift 2.7.1.dev175\n"
+"Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
+"POT-Creation-Date: 2016-06-03 04:47+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"PO-Revision-Date: 2016-03-20 07:32+0000\n"
-"Last-Translator: Monika Wolf <vcomas3@de.ibm.com>\n"
+"PO-Revision-Date: 2016-06-02 07:02+0000\n"
+"Last-Translator: Andreas Jaeger <jaegerandi@gmail.com>\n"
 "Language: de\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "Generated-By: Babel 2.0\n"
@@ -72,6 +72,10 @@ msgstr ""
 "%(time).2fs (%(rate).2f/s, %(remaining)s verbleibend)"
 
 #, python-format
+msgid "%(server)s (%(pid)s) appears to have stopped"
+msgstr "%(server)s (%(pid)s) scheinbar gestoppt"
+
+#, python-format
 msgid "%(success)s successes, %(failure)s failures"
 msgstr "%(success)s Erfolge, %(failure)s Fehlschläge"
 
@@ -80,12 +84,8 @@ msgid "%(type)s returning 503 for %(statuses)s"
 msgstr "%(type)s gab 503 für %(statuses)s zurück"
 
 #, python-format
-msgid "%s #%d not running (%s)"
-msgstr "%s #%d läuft nicht (%s)"
-
-#, python-format
-msgid "%s (%s) appears to have stopped"
-msgstr "%s (%s) scheinbar gestoppt"
+msgid "%(type)s: %(value)s"
+msgstr "%(type)s: %(value)s"
 
 #, python-format
 msgid "%s already started..."
@@ -102,14 +102,6 @@ msgstr "%s ist nicht eingehängt"
 #, python-format
 msgid "%s responded as unmounted"
 msgstr "%s zurückgemeldet als ausgehängt"
-
-#, python-format
-msgid "%s running (%s - %s)"
-msgstr "%s läuft (%s - %s)"
-
-#, python-format
-msgid "%s: %s"
-msgstr "%s: %s"
 
 #, python-format
 msgid "%s: Connection reset by peer"
@@ -150,8 +142,8 @@ msgid "Account"
 msgstr "Konto"
 
 #, python-format
-msgid "Account %s has not been reaped since %s"
-msgstr "Konto %s wurde nicht aufgeräumt seit %s"
+msgid "Account %(account)s has not been reaped since %(time)s"
+msgstr "Konto %(account)s wurde nicht aufgeräumt seit %(time)s"
 
 #, python-format
 msgid "Account audit \"once\" mode completed: %.02fs"
@@ -169,8 +161,8 @@ msgstr ""
 "(%(rate).5f/s)"
 
 #, python-format
-msgid "Audit Failed for %s: %s"
-msgstr "Prüfung fehlgeschlagen für %s: %s"
+msgid "Audit Failed for %(path)s: %(err)s"
+msgstr "Prüfung fehlgeschlagen für %(path)s: %(err)s"
 
 #, python-format
 msgid "Bad rsync return code: %(ret)d <- %(args)s"
@@ -197,10 +189,6 @@ msgstr "Einzelthread-Scanvorgang für Containeraktualisierung wird gestartet"
 msgid "Begin container update sweep"
 msgstr "Scanvorgang für Containeraktualisierung wird gestartet"
 
-#, python-format
-msgid "Begin object audit \"%s\" mode (%s%s)"
-msgstr "Objektprüfung mit \"%s\"-Modus wird gestartet (%s%s)"
-
 msgid "Begin object update single threaded sweep"
 msgstr "Einzelthread-Scanvorgang für Objektaktualisierung wird gestartet"
 
@@ -226,6 +214,14 @@ msgstr "Kann nicht auf die Datei %s zugreifen."
 #, python-format
 msgid "Can not load profile data from %s."
 msgstr "Die Profildaten von %s können nicht geladen werden."
+
+#, python-format
+msgid "Cannot read %(auditor_status)s (%(err)s)"
+msgstr "%(auditor_status)s (%(err)s) kann nicht gelesen werden."
+
+#, python-format
+msgid "Cannot write %(auditor_status)s (%(err)s)"
+msgstr "Schreiben von %(auditor_status)s (%(err)s) nicht möglich."
 
 #, python-format
 msgid "Client did not read from proxy within %ss"
@@ -301,12 +297,15 @@ msgstr ""
 "Änderungen"
 
 #, python-format
-msgid "Could not bind to %s:%s after trying for %s seconds"
-msgstr "Keine Bindung an %s:%s möglich nach Versuch über %s Sekunden"
+msgid ""
+"Could not bind to %(addr)s:%(port)s after trying for %(timeout)s seconds"
+msgstr ""
+"Keine Bindung an %(addr)s:%(port)s möglich nach Versuch über %(timeout)s "
+"Sekunden"
 
 #, python-format
-msgid "Could not load %r: %s"
-msgstr "Konnte %r nicht laden: %s"
+msgid "Could not load %(conf)r: %(error)s"
+msgstr "%(conf)r konnte nicht geladen werden: %(error)s"
 
 #, python-format
 msgid "Data download error: %s"
@@ -317,9 +316,10 @@ msgid "Devices pass completed: %.02fs"
 msgstr "Gerätedurchgang abgeschlossen: %.02fs"
 
 #, python-format
-msgid "Directory %r does not map to a valid policy (%s)"
+msgid "Directory %(directory)r does not map to a valid policy (%(error)s)"
 msgstr ""
-"Das Verzeichnis %r kann keiner gültigen Richtlinie (%s) zugeordnet werden."
+"Das Verzeichnis %(directory)r kann keiner gültigen Richtlinie (%(error)s) "
+"zugeordnet werden."
 
 #, python-format
 msgid "ERROR %(db_file)s: %(validate_sync_to_err)s"
@@ -353,10 +353,10 @@ msgstr ""
 #, python-format
 msgid ""
 "ERROR Account update failed: different  numbers of hosts and devices in "
-"request: \"%s\" vs \"%s\""
+"request: \"%(hosts)s\" vs \"%(devices)s\""
 msgstr ""
 "FEHLER Kontoaktualisierung fehlgeschlagen: Unterschiedliche Anzahl von Hosts "
-"und Einheiten in der Anforderung: \"%s\" contra \"%s\""
+"und Einheiten in der Anforderung: \"%(hosts)s\" contra \"%(devices)s\""
 
 #, python-format
 msgid "ERROR Bad response %(status)s from %(host)s"
@@ -374,14 +374,6 @@ msgstr ""
 "FEHLER Containeraktualisierung fehlgeschlagen (wird für asynchrone "
 "Aktualisierung zu einem späteren Zeitpunkt gespeichert): %(status)d Antwort "
 "von %(ip)s:%(port)s/%(dev)s"
-
-#, python-format
-msgid ""
-"ERROR Container update failed: different numbers of hosts and devices in "
-"request: \"%s\" vs \"%s\""
-msgstr ""
-"FEHLER Containeraktualisierung fehlgeschlagen: Unterschiedliche Anzahl von "
-"Hosts und Einheiten in der Anforderung: \"%s\" contra \"%s\""
 
 #, python-format
 msgid "ERROR Could not get account info %s"
@@ -542,8 +534,8 @@ msgid "Error hashing suffix"
 msgstr "Fehler beim Hashing des Suffix"
 
 #, python-format
-msgid "Error in %r with mtime_check_interval: %s"
-msgstr "Fehler in %r mit mtime_check_interval: %s"
+msgid "Error in %(conf)r with mtime_check_interval: %(error)s"
+msgstr "Fehler in %(conf)r mit mtime_check_interval: %(error)s"
 
 #, python-format
 msgid "Error limiting server %s"
@@ -608,14 +600,6 @@ msgstr "Ausnahme in Replizierungsloop der höchsten Ebene"
 
 msgid "Exception in top-levelreconstruction loop"
 msgstr "Ausnahme in Rekonstruktionsloop der höchsten Ebene"
-
-#, python-format
-msgid "Exception while deleting container %s %s"
-msgstr "Ausnahme beim Löschen von Container %s %s"
-
-#, python-format
-msgid "Exception while deleting object %s %s %s"
-msgstr "Ausnahme beim Löschen von Objekt %s %s %s"
 
 #, python-format
 msgid "Exception with %(ip)s:%(port)s/%(device)s"
@@ -692,6 +676,10 @@ msgstr ""
 msgid "Killing long-running rsync: %s"
 msgstr "Lange laufendes rsync wird gekillt: %s"
 
+#, python-format
+msgid "Loading JSON from %(auditor_status)s failed (%(err)s)"
+msgstr "Laden von JSON aus %(auditor_status)s fehlgeschlagen: (%(err)s)"
+
 msgid "Lockup detected.. killing live coros."
 msgstr "Suche erkannt. Live-Coros werden gelöscht."
 
@@ -704,8 +692,8 @@ msgid "No %s running"
 msgstr "Kein %s läuft"
 
 #, python-format
-msgid "No cluster endpoint for %r %r"
-msgstr "Kein Cluster-Endpunkt für %r %r"
+msgid "No cluster endpoint for %(realm)r %(cluster)r"
+msgstr "Kein Cluster-Endpunkt für %(realm)r %(cluster)r"
 
 #, python-format
 msgid "No permission to signal PID %d"
@@ -720,8 +708,8 @@ msgid "No realm key for %r"
 msgstr "Kein Bereichsschlüssel für %r"
 
 #, python-format
-msgid "No space left on device for %s (%s)"
-msgstr "Kein freier Speicherplatz im Gerät für %s (%s) vorhanden."
+msgid "No space left on device for %(file)s (%(err)s)"
+msgstr "Kein freier Speicherplatz im Gerät für %(file)s (%(err)s) vorhanden."
 
 #, python-format
 msgid "Node error limited %(ip)s:%(port)s (%(device)s)"
@@ -840,32 +828,16 @@ msgid "Partition times: max %(max).4fs, min %(min).4fs, med %(med).4fs"
 msgstr ""
 "Partitionszeiten: max. %(max).4fs, min. %(min).4fs, durchschnittl. %(med).4fs"
 
-#, python-format
-msgid "Pass beginning; %s possible containers; %s possible objects"
-msgstr "Durchlauf wird gestartet; %s mögliche Container; %s mögliche Objekte"
-
-#, python-format
-msgid "Pass completed in %ds; %d objects expired"
-msgstr "Durchgang abgeschlossen in %ds; %d Objekte abgelaufen"
-
-#, python-format
-msgid "Pass so far %ds; %d objects expired"
-msgstr "Bisherige Durchgänge %ds; %d Objekte abgelaufen"
-
 msgid "Path required in X-Container-Sync-To"
 msgstr "Pfad in X-Container-Sync-To ist erforderlich"
 
 #, python-format
+msgid "Problem cleaning up %(datadir)s (%(err)s)"
+msgstr "Problem bei der Bereinigung von %(datadir)s (%(err)s)"
+
+#, python-format
 msgid "Problem cleaning up %s"
 msgstr "Problem bei der Bereinigung von %s"
-
-#, python-format
-msgid "Problem cleaning up %s (%s)"
-msgstr "Problem bei der Bereinigung von %s (%s)"
-
-#, python-format
-msgid "Problem writing durable state file %s (%s)"
-msgstr "Problem beim Schreiben der langlebigen Statusdatei %s (%s)"
 
 #, python-format
 msgid "Profiling Error: %s"
@@ -883,10 +855,6 @@ msgid ""
 msgstr ""
 "%(object_path)s bis %(quar_path)s wurden unter Quarantäne gestellt, da es "
 "sich nicht um ein Verzeichnis handelt"
-
-#, python-format
-msgid "Quarantined %s to %s due to %s database"
-msgstr "%s unter Quarantäne gestellt in %s aufgrund von %s-Datenbank"
 
 #, python-format
 msgid "Quarantining DB %s"
@@ -956,8 +924,8 @@ msgid "Running object replicator in script mode."
 msgstr "Objektreplikator läuft im Skriptmodus."
 
 #, python-format
-msgid "Signal %s  pid: %s  signal: %s"
-msgstr "Signal %s  PID: %s  Signal: %s"
+msgid "Signal %(server)s  pid: %(pid)s  signal: %(signal)s"
+msgstr "Signal %(server)s  PID: %(pid)s  Signal: %(signal)s"
 
 #, python-format
 msgid ""
@@ -1039,10 +1007,6 @@ msgid "Trying to GET %(full_path)s"
 msgstr "Versuch, %(full_path)s mit GET abzurufen"
 
 #, python-format
-msgid "Trying to get %s status of PUT to %s"
-msgstr "Es wird versucht, %s-Status von PUT für %s abzurufen."
-
-#, python-format
 msgid "Trying to get final status of PUT to %s"
 msgstr "Versuch, den finalen Status von PUT für %s abzurufen"
 
@@ -1067,13 +1031,15 @@ msgid "UNCAUGHT EXCEPTION"
 msgstr "NICHT ABGEFANGENE AUSNAHME"
 
 #, python-format
-msgid "Unable to find %s config section in %s"
-msgstr "%s-Konfigurationsabschnitt in %s kann nicht gefunden werden"
+msgid "Unable to find %(section)s config section in %(conf)s"
+msgstr ""
+"%(section)s-Konfigurationsabschnitt in %(conf)s kann nicht gefunden werden"
 
 #, python-format
-msgid "Unable to load internal client from config: %r (%s)"
+msgid "Unable to load internal client from config: %(conf)r (%(error)s)"
 msgstr ""
-"Interner Client konnte nicht aus der Konfiguration geladen werden:  %r (%s)"
+"Interner Client konnte nicht aus der Konfiguration geladen werden:  %(conf)r "
+"(%(error)s)"
 
 #, python-format
 msgid "Unable to locate %s in libc.  Leaving as a no-op."
@@ -1085,8 +1051,8 @@ msgid "Unable to locate config for %s"
 msgstr "Konfiguration für %s wurde nicht gefunden."
 
 #, python-format
-msgid "Unable to locate config number %s for %s"
-msgstr "Konfigurationsnummer %s für %s wurde nicht gefunden."
+msgid "Unable to locate config number %(number)s for %(server)s"
+msgstr "Konfigurationsnummer %(number)s für %(server)s wurde nicht gefunden."
 
 msgid ""
 "Unable to locate fallocate, posix_fallocate in libc.  Leaving as a no-op."
@@ -1095,8 +1061,8 @@ msgstr ""
 "Nullbefehl verlassen."
 
 #, python-format
-msgid "Unable to perform fsync() on directory %s: %s"
-msgstr "fsync() kann für Verzeichnis %s nicht ausgeführt werden: %s"
+msgid "Unable to perform fsync() on directory %(dir)s: %(err)s"
+msgstr "fsync() kann für Verzeichnis %(dir)s nicht ausgeführt werden: %(err)s"
 
 #, python-format
 msgid "Unable to read config from %s"
@@ -1149,12 +1115,15 @@ msgstr ""
 "Root ausgeführt?"
 
 #, python-format
-msgid "Waited %s seconds for %s to die; giving up"
-msgstr "Hat %s Sekunden für %s zum Erlöschen gewartet; Gibt auf"
+msgid "Waited %(kill_wait)s seconds for %(server)s to die; giving up"
+msgstr ""
+"Hat %(kill_wait)s Sekunden für %(server)s zum Erlöschen gewartet; Gibt auf"
 
 #, python-format
-msgid "Waited %s seconds for %s to die; killing"
-msgstr "Hat %s Sekunden für %s zum Erlöschen gewartet. Wird abgebrochen."
+msgid "Waited %(kill_wait)s seconds for %(server)s to die; killing"
+msgstr ""
+"Hat %(kill_wait)s Sekunden für %(server)s zum Erlöschen gewartet. Wird "
+"abgebrochen."
 
 msgid "Warning: Cannot ratelimit without a memcached client"
 msgstr ""

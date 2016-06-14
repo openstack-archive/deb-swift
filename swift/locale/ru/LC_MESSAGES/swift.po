@@ -3,20 +3,17 @@
 # This file is distributed under the same license as the swift project.
 #
 # Translators:
-# Lucas Palm <lapalm@us.ibm.com>, 2015. #zanata
-# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
-# Filatov Sergey <filatecs@gmail.com>, 2016. #zanata
-# Grigory Mokhin <mokhin@gmail.com>, 2016. #zanata
+# Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: swift 2.6.1.dev244\n"
-"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2016-03-22 03:44+0000\n"
+"Project-Id-Version: swift 2.7.1.dev169\n"
+"Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
+"POT-Creation-Date: 2016-06-02 04:58+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"PO-Revision-Date: 2016-03-21 07:06+0000\n"
-"Last-Translator: Grigory Mokhin <mokhin@gmail.com>\n"
+"PO-Revision-Date: 2016-03-27 11:17+0000\n"
+"Last-Translator: Ilya Alekseyev <ilyaalekseyev@acm.org>\n"
 "Language: ru\n"
 "Plural-Forms: nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n"
 "%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || (n%10>=5 && n%10<=9) || (n"
@@ -82,14 +79,6 @@ msgid "%(type)s returning 503 for %(statuses)s"
 msgstr "%(type)s возвратил 503 для %(statuses)s"
 
 #, python-format
-msgid "%s #%d not running (%s)"
-msgstr "%s #%d не запущен (%s)"
-
-#, python-format
-msgid "%s (%s) appears to have stopped"
-msgstr "Возможно, %s (%s) остановлен"
-
-#, python-format
 msgid "%s already started..."
 msgstr "%s уже запущен..."
 
@@ -104,14 +93,6 @@ msgstr "%s не смонтирован"
 #, python-format
 msgid "%s responded as unmounted"
 msgstr "%s ответил как размонтированный"
-
-#, python-format
-msgid "%s running (%s - %s)"
-msgstr "%s выполняется (%s - %s)"
-
-#, python-format
-msgid "%s: %s"
-msgstr "%s: %s"
 
 #, python-format
 msgid "%s: Connection reset by peer"
@@ -152,10 +133,6 @@ msgid "Account"
 msgstr "Учетная запись"
 
 #, python-format
-msgid "Account %s has not been reaped since %s"
-msgstr "Учетная запись %s не очищалась после %s"
-
-#, python-format
 msgid "Account audit \"once\" mode completed: %.02fs"
 msgstr "Проверка учетной записи в \"однократном\" режиме завершена: %.02fs"
 
@@ -168,10 +145,6 @@ msgid ""
 "Attempted to replicate %(count)d dbs in %(time).5f seconds (%(rate).5f/s)"
 msgstr ""
 "Попытка репликации %(count)d баз данных за %(time).5f секунд (%(rate).5f/s)"
-
-#, python-format
-msgid "Audit Failed for %s: %s"
-msgstr "Контроль %s не выполнен: %s"
 
 #, python-format
 msgid "Bad rsync return code: %(ret)d <- %(args)s"
@@ -197,10 +170,6 @@ msgstr "Начать однонитевую сплошную проверку о
 
 msgid "Begin container update sweep"
 msgstr "Начать сплошную проверку обновлений контейнера"
-
-#, python-format
-msgid "Begin object audit \"%s\" mode (%s%s)"
-msgstr "Начать проверку объекта в режиме \"%s\" (%s%s)"
 
 msgid "Begin object update single threaded sweep"
 msgstr "Начать однонитевую сплошную проверку обновлений объекта"
@@ -297,24 +266,12 @@ msgstr ""
 "%(no_change)s"
 
 #, python-format
-msgid "Could not bind to %s:%s after trying for %s seconds"
-msgstr "Не удалось подключиться к порту %s:%s по истечении %s секунд"
-
-#, python-format
-msgid "Could not load %r: %s"
-msgstr "Не удалось загрузить %r: %s"
-
-#, python-format
 msgid "Data download error: %s"
 msgstr "Ошибка загрузки данных: %s"
 
 #, python-format
 msgid "Devices pass completed: %.02fs"
 msgstr "Проход устройств выполнен: %.02fs"
-
-#, python-format
-msgid "Directory %r does not map to a valid policy (%s)"
-msgstr "Каталог %r не связан со стратегией policy (%s)"
 
 #, python-format
 msgid "ERROR %(db_file)s: %(validate_sync_to_err)s"
@@ -347,14 +304,6 @@ msgstr ""
 "%(device)s (операция будет повторена позднее): Ответ: %(status)s %(reason)s"
 
 #, python-format
-msgid ""
-"ERROR Account update failed: different  numbers of hosts and devices in "
-"request: \"%s\" vs \"%s\""
-msgstr ""
-"Ошибка: обновление учетной записи не выполнено, в запросе указано разное "
-"число хостов и устройств: \"%s\" и \"%s\""
-
-#, python-format
 msgid "ERROR Bad response %(status)s from %(host)s"
 msgstr "Ошибка: Неправильный запрос %(status)s из %(host)s"
 
@@ -370,14 +319,6 @@ msgstr ""
 "Ошибка. Обновление контейнера не выполнено (сохранение асинхронных "
 "обновлений будет выполнено позднее): %(status)d ответ от %(ip)s:%(port)s/"
 "%(dev)s"
-
-#, python-format
-msgid ""
-"ERROR Container update failed: different numbers of hosts and devices in "
-"request: \"%s\" vs \"%s\""
-msgstr ""
-"Ошибка: обновление контейнера не выполнено, в запросе указано разное число "
-"хостов и устройств: \"%s\" и \"%s\""
 
 #, python-format
 msgid "ERROR Could not get account info %s"
@@ -538,10 +479,6 @@ msgid "Error hashing suffix"
 msgstr "Ошибка хэширования суффикса"
 
 #, python-format
-msgid "Error in %r with mtime_check_interval: %s"
-msgstr "Ошибка в %r с mtime_check_interval: %s"
-
-#, python-format
 msgid "Error limiting server %s"
 msgstr "Ошибка ограничения сервера %s"
 
@@ -605,14 +542,6 @@ msgstr "Исключительная ситуация в цикле реплик
 
 msgid "Exception in top-levelreconstruction loop"
 msgstr "Исключение в цикле реконструкции верхнего уровня"
-
-#, python-format
-msgid "Exception while deleting container %s %s"
-msgstr "Исключительная ситуация во время удаления контейнера %s %s"
-
-#, python-format
-msgid "Exception while deleting object %s %s %s"
-msgstr "Исключительная ситуация во время удаления объекта %s %s %s"
 
 #, python-format
 msgid "Exception with %(ip)s:%(port)s/%(device)s"
@@ -702,10 +631,6 @@ msgid "No %s running"
 msgstr "%s не выполняется"
 
 #, python-format
-msgid "No cluster endpoint for %r %r"
-msgstr "Отсутствует конечная точка кластера для %r %r"
-
-#, python-format
 msgid "No permission to signal PID %d"
 msgstr "Нет прав доступа для отправки сигнала в PID %d"
 
@@ -716,10 +641,6 @@ msgstr "Не найдено стратегии с индексом %s"
 #, python-format
 msgid "No realm key for %r"
 msgstr "Отсутствует ключ области для %r"
-
-#, python-format
-msgid "No space left on device for %s (%s)"
-msgstr "Не устройстве %s (%s) закончилось место"
 
 #, python-format
 msgid "Node error limited %(ip)s:%(port)s (%(device)s)"
@@ -837,32 +758,12 @@ msgid "Partition times: max %(max).4fs, min %(min).4fs, med %(med).4fs"
 msgstr ""
 "Время раздела: максимум: %(max).4fs, минимум: %(min).4fs, среднее: %(med).4fs"
 
-#, python-format
-msgid "Pass beginning; %s possible containers; %s possible objects"
-msgstr "Проход запущен; возможных контейнеров: %s; возможных объектов: %s"
-
-#, python-format
-msgid "Pass completed in %ds; %d objects expired"
-msgstr "Проход выполнен за %ds; устарело объектов: %d"
-
-#, python-format
-msgid "Pass so far %ds; %d objects expired"
-msgstr "Проход выполняется до настоящего времени %ds; устарело объектов: %d"
-
 msgid "Path required in X-Container-Sync-To"
 msgstr "Требуется путь в X-Container-Sync-To"
 
 #, python-format
 msgid "Problem cleaning up %s"
 msgstr "Неполадка при очистке %s"
-
-#, python-format
-msgid "Problem cleaning up %s (%s)"
-msgstr "Возникла проблема при очистке %s (%s)"
-
-#, python-format
-msgid "Problem writing durable state file %s (%s)"
-msgstr "Возникла неполадка при записи файла сохраняемого состояния %s (%s)"
 
 #, python-format
 msgid "Profiling Error: %s"
@@ -880,10 +781,6 @@ msgid ""
 msgstr ""
 "%(object_path)s помещен в карантин в %(quar_path)s, так как не является "
 "каталогом"
-
-#, python-format
-msgid "Quarantined %s to %s due to %s database"
-msgstr "%s помещено в карантин %s из-за базы данных %s"
 
 #, python-format
 msgid "Quarantining DB %s"
@@ -953,10 +850,6 @@ msgstr "Запуск утилиты реконструкции объектов 
 
 msgid "Running object replicator in script mode."
 msgstr "Запуск утилиты репликации объектов в режиме сценариев."
-
-#, python-format
-msgid "Signal %s  pid: %s  signal: %s"
-msgstr "Сигнал: %s, pid: %s, сигнал: %s"
 
 #, python-format
 msgid ""
@@ -1038,10 +931,6 @@ msgid "Trying to GET %(full_path)s"
 msgstr "Попытка GET-запроса %(full_path)s"
 
 #, python-format
-msgid "Trying to get %s status of PUT to %s"
-msgstr "Попытка получения состояния %s операции PUT в %s"
-
-#, python-format
 msgid "Trying to get final status of PUT to %s"
 msgstr "Попытка получения конечного состояния PUT в %s"
 
@@ -1066,14 +955,6 @@ msgid "UNCAUGHT EXCEPTION"
 msgstr "Необрабатываемая исключительная ситуация"
 
 #, python-format
-msgid "Unable to find %s config section in %s"
-msgstr "Не удалось найти раздел конфигурации %s в %s"
-
-#, python-format
-msgid "Unable to load internal client from config: %r (%s)"
-msgstr "Не удалось загрузить клиент из конфигурации: %r (%s)"
-
-#, python-format
 msgid "Unable to locate %s in libc.  Leaving as a no-op."
 msgstr "Не удалось найти %s в libc.  Оставлено как no-op."
 
@@ -1081,18 +962,10 @@ msgstr "Не удалось найти %s в libc.  Оставлено как no
 msgid "Unable to locate config for %s"
 msgstr "Не удалось найти конфигурационный файл для %s"
 
-#, python-format
-msgid "Unable to locate config number %s for %s"
-msgstr "Не удается найти конфигурации с номером %s для %s"
-
 msgid ""
 "Unable to locate fallocate, posix_fallocate in libc.  Leaving as a no-op."
 msgstr ""
 "Не удалось найти fallocate, posix_fallocate в libc.  Оставлено как no-op."
-
-#, python-format
-msgid "Unable to perform fsync() on directory %s: %s"
-msgstr "Не удалось выполнить функцию fsync() для каталога %s: %s"
 
 #, python-format
 msgid "Unable to read config from %s"
@@ -1143,14 +1016,6 @@ msgid "WARNING: Unable to modify memory limit.  Running as non-root?"
 msgstr ""
 "Предупреждение: не удалось изменить предельное значение для памяти. Запущен "
 "без прав доступа root?"
-
-#, python-format
-msgid "Waited %s seconds for %s to die; giving up"
-msgstr "Система ожидала %s секунд для %s завершения; освобождение"
-
-#, python-format
-msgid "Waited %s seconds for %s to die; killing"
-msgstr "Система ожидала %s секунд для %s завершения; Принудительное завершение"
 
 msgid "Warning: Cannot ratelimit without a memcached client"
 msgstr ""

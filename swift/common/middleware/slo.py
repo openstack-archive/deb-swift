@@ -399,7 +399,7 @@ class SloGetContext(WSGIContext):
             req.environ, path='/'.join(['', version, acc, con, obj]),
             method='GET',
             headers={'x-auth-token': req.headers.get('x-auth-token')},
-            agent=('%(orig)s ' + 'SLO MultipartGET'), swift_source='SLO')
+            agent='%(orig)s SLO MultipartGET', swift_source='SLO')
         sub_resp = sub_req.get_response(self.slo.app)
 
         if not is_success(sub_resp.status_int):
@@ -582,14 +582,15 @@ class SloGetContext(WSGIContext):
             if req.params.get('format') == 'raw':
                 resp_iter = self.convert_segment_listing(
                     self._response_headers, resp_iter)
-            new_headers = []
-            for header, value in self._response_headers:
-                if header.lower() == 'content-type':
-                    new_headers.append(('Content-Type',
-                                        'application/json; charset=utf-8'))
-                else:
-                    new_headers.append((header, value))
-            self._response_headers = new_headers
+            else:
+                new_headers = []
+                for header, value in self._response_headers:
+                    if header.lower() == 'content-type':
+                        new_headers.append(('Content-Type',
+                                            'application/json; charset=utf-8'))
+                    else:
+                        new_headers.append((header, value))
+                self._response_headers = new_headers
             start_response(self._response_status,
                            self._response_headers,
                            self._response_exc_info)
@@ -603,7 +604,7 @@ class SloGetContext(WSGIContext):
             get_req = make_subrequest(
                 req.environ, method='GET',
                 headers={'x-auth-token': req.headers.get('x-auth-token')},
-                agent=('%(orig)s ' + 'SLO MultipartGET'), swift_source='SLO')
+                agent='%(orig)s SLO MultipartGET', swift_source='SLO')
             resp_iter = self._app_call(get_req.environ)
 
         # Any Content-Range from a manifest is almost certainly wrong for the
@@ -784,7 +785,9 @@ class StaticLargeObject(object):
             'rate_limit_after_segment', '10'))
         self.rate_limit_segments_per_sec = int(self.conf.get(
             'rate_limit_segments_per_sec', '1'))
-        self.bulk_deleter = Bulk(app, {}, logger=self.logger)
+        delete_concurrency = int(self.conf.get('delete_concurrency', '2'))
+        self.bulk_deleter = Bulk(
+            app, {}, delete_concurrency=delete_concurrency, logger=self.logger)
 
     def handle_multipart_get_or_head(self, req, start_response):
         """
@@ -797,20 +800,6 @@ class StaticLargeObject(object):
         :raises: HttpException on errors
         """
         return SloGetContext(self).handle_slo_get_or_head(req, start_response)
-
-    def copy_hook(self, inner_hook):
-
-        def slo_hook(source_req, source_resp, sink_req):
-            x_slo = source_resp.headers.get('X-Static-Large-Object')
-            if (config_true_value(x_slo)
-                    and source_req.params.get('multipart-manifest') != 'get'
-                    and 'swift.post_as_copy' not in source_req.environ):
-                source_resp = SloGetContext(self).get_or_head_response(
-                    source_req, source_resp.headers.items(),
-                    source_resp.app_iter)
-            return inner_hook(source_req, source_resp, sink_req)
-
-        return slo_hook
 
     def handle_multipart_put(self, req, start_response):
         """
@@ -857,20 +846,14 @@ class StaticLargeObject(object):
                 obj_name = obj_name.encode('utf-8')
             obj_path = '/'.join(['', vrs, account, obj_name.lstrip('/')])
 
-            new_env = req.environ.copy()
-            new_env['PATH_INFO'] = obj_path
-            new_env['REQUEST_METHOD'] = 'HEAD'
-            new_env['swift.source'] = 'SLO'
-            del(new_env['wsgi.input'])
-            del(new_env['QUERY_STRING'])
-            new_env['CONTENT_LENGTH'] = 0
-            new_env['HTTP_USER_AGENT'] = \
-                '%s MultipartPUT' % req.environ.get('HTTP_USER_AGENT')
-
             if obj_path != last_obj_path:
                 last_obj_path = obj_path
-                head_seg_resp = \
-                    Request.blank(obj_path, new_env).get_response(self)
+                sub_req = make_subrequest(
+                    req.environ, path=obj_path + '?',  # kill the query string
+                    method='HEAD',
+                    headers={'x-auth-token': req.headers.get('x-auth-token')},
+                    agent='%(orig)s SLO MultipartPUT', swift_source='SLO')
+                head_seg_resp = sub_req.get_response(self)
 
             if head_seg_resp.is_success:
                 segment_length = head_seg_resp.content_length
@@ -1063,11 +1046,6 @@ class StaticLargeObject(object):
             vrs, account, container, obj = req.split_path(4, 4, True)
         except ValueError:
             return self.app(env, start_response)
-
-        # install our COPY-callback hook
-        env['swift.copy_hook'] = self.copy_hook(
-            env.get('swift.copy_hook',
-                    lambda src_req, src_resp, sink_req: src_resp))
 
         try:
             if req.method == 'PUT' and \

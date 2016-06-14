@@ -486,7 +486,9 @@ class Range(object):
                 # when end contains non numeric value, this also causes
                 # ValueError
                 end = int(end)
-                if start is not None and end < start:
+                if end < 0:
+                    raise ValueError('Invalid Range header: %s' % headerval)
+                elif start is not None and end < start:
                     raise ValueError('Invalid Range header: %s' % headerval)
             else:
                 end = None
@@ -886,6 +888,11 @@ class Request(object):
         return self._params_cache
     str_params = params
 
+    @params.setter
+    def params(self, param_pairs):
+        self._params_cache = None
+        self.query_string = urllib.parse.urlencode(param_pairs)
+
     @property
     def timestamp(self):
         """
@@ -1079,6 +1086,7 @@ class Response(object):
     content_range = _header_property('content-range')
     etag = _resp_etag_property()
     status = _resp_status_property()
+    status_int = None
     body = _resp_body_property()
     host_url = _host_url_property()
     last_modified = _datetime_property('last-modified')

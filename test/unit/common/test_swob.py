@@ -231,12 +231,13 @@ class TestRange(unittest.TestCase):
 
     def test_range_invalid_syntax(self):
 
-        def _check_invalid_range(range_value):
+        def _assert_invalid_range(range_value):
             try:
                 swift.common.swob.Range(range_value)
-                return False
+                self.fail("Expected %r to be invalid, but wasn't" %
+                          (range_value,))
             except ValueError:
-                return True
+                pass
 
         """
         All the following cases should result ValueError exception
@@ -248,15 +249,16 @@ class TestRange(unittest.TestCase):
         6. any combination of the above
         """
 
-        self.assertTrue(_check_invalid_range('nonbytes=foobar,10-2'))
-        self.assertTrue(_check_invalid_range('bytes=5-3'))
-        self.assertTrue(_check_invalid_range('bytes=-'))
-        self.assertTrue(_check_invalid_range('bytes=45'))
-        self.assertTrue(_check_invalid_range('bytes=foo-bar,3-5'))
-        self.assertTrue(_check_invalid_range('bytes=4-10,45'))
-        self.assertTrue(_check_invalid_range('bytes=foobar,3-5'))
-        self.assertTrue(_check_invalid_range('bytes=nonumber-5'))
-        self.assertTrue(_check_invalid_range('bytes=nonumber'))
+        _assert_invalid_range('nonbytes=foobar,10-2')
+        _assert_invalid_range('bytes=5-3')
+        _assert_invalid_range('bytes=-')
+        _assert_invalid_range('bytes=45')
+        _assert_invalid_range('bytes=foo-bar,3-5')
+        _assert_invalid_range('bytes=4-10,45')
+        _assert_invalid_range('bytes=foobar,3-5')
+        _assert_invalid_range('bytes=nonumber-5')
+        _assert_invalid_range('bytes=nonumber')
+        _assert_invalid_range('bytes=--1')
 
 
 class TestMatch(unittest.TestCase):
@@ -429,9 +431,10 @@ class TestRequest(unittest.TestCase):
     def test_invalid_req_environ_property_args(self):
         # getter only property
         try:
-            swift.common.swob.Request.blank('/', params={'a': 'b'})
+            swift.common.swob.Request.blank(
+                '/', host_url='http://example.com:8080/v1/a/c/o')
         except TypeError as e:
-            self.assertEqual("got unexpected keyword argument 'params'",
+            self.assertEqual("got unexpected keyword argument 'host_url'",
                              str(e))
         else:
             self.assertTrue(False, "invalid req_environ_property "
@@ -522,6 +525,14 @@ class TestRequest(unittest.TestCase):
         req = swift.common.swob.Request.blank('/?a=b&c=d')
         self.assertEqual(req.params['a'], 'b')
         self.assertEqual(req.params['c'], 'd')
+
+        new_params = {'e': 'f', 'g': 'h'}
+        req.params = new_params
+        self.assertDictEqual(new_params, req.params)
+
+        new_params = (('i', 'j'), ('k', 'l'))
+        req.params = new_params
+        self.assertDictEqual(dict(new_params), req.params)
 
     def test_timestamp_missing(self):
         req = swift.common.swob.Request.blank('/')
