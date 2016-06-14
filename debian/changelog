@@ -1,11 +1,11 @@
-swift (2.8.0-1) UNRELEASED; urgency=medium
+swift (2.8.0-1) experimental; urgency=medium
 
   * New upstream release
   * Removed build depend on git, not needed anymore
   * Added missed example configs to docs
   * Use dh_installdocs -A for installing AUTHORS file
 
- -- Ondřej Nový <novy@ondrej.org>  Tue, 14 Jun 2016 17:01:13 +0200
+ -- Ondřej Nový <novy@ondrej.org>  Tue, 14 Jun 2016 20:23:21 +0200
 
 swift (2.7.0-5) unstable; urgency=medium
 
