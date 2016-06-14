@@ -1,6 +1,7 @@
 swift (2.7.0-5) UNRELEASED; urgency=medium
 
   * Bumped required version of python-setuptools to 20.6.8
+  * Use OSLO_PACKAGE_VERSION from openstack-pkg-tools
 
  -- Ondřej Nový <novy@ondrej.org>  Tue, 14 Jun 2016 16:38:38 +0200
 

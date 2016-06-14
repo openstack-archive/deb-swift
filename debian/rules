@@ -3,7 +3,6 @@
 #export DH_VERBOSE=1
 
 include /usr/share/openstack-pkg-tools/pkgos.make
-export OSLO_PACKAGE_VERSION=$(VERSION)
 
 %:
 	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc,systemd
