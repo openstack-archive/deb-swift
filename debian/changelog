@@ -1,3 +1,9 @@
+swift (2.7.0-6) UNRELEASED; urgency=medium
+
+  * Don't add user swift to adm group
+
+ -- Ondřej Nový <onovy@debian.org>  Mon, 20 Jun 2016 17:24:34 +0200
+
 swift (2.7.0-5) unstable; urgency=medium
 
   * Bumped required version of python-setuptools to 20.6.8
