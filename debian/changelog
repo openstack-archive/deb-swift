@@ -3,6 +3,7 @@ swift (2.8.0-2) UNRELEASED; urgency=medium
   * Changed my email to new one
   * Don't add user swift to adm group
   * Use adm group for log directory
+  * Remove all swift directories on purge
 
  -- Ondřej Nový <onovy@debian.org>  Mon, 20 Jun 2016 17:24:34 +0200
 
