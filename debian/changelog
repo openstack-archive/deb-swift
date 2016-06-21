@@ -6,6 +6,7 @@ swift (2.7.0-7) UNRELEASED; urgency=medium
   * Use dh_installdocs -A for installing AUTHORS file
   * Added support for nodocs in DEB_BUILD_OPTIONS
   * Use dh-exec for installing configs
+  * Use adm group for log directory
 
  -- Ondřej Nový <onovy@debian.org>  Sun, 03 Jul 2016 22:58:43 +0200
 
