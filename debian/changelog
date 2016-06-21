@@ -1,9 +1,9 @@
-swift (2.7.0-6) UNRELEASED; urgency=medium
+swift (2.7.0-6) unstable; urgency=medium
 
   * Don't add user swift to adm group
   * d/{control,copyright}: Use my @debian.org email address
 
- -- Ondřej Nový <onovy@debian.org>  Mon, 20 Jun 2016 17:24:34 +0200
+ -- Ondřej Nový <onovy@debian.org>  Tue, 21 Jun 2016 17:41:38 +0200
 
 swift (2.7.0-5) unstable; urgency=medium
 
