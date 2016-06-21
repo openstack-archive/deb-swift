@@ -1,6 +1,7 @@
 swift (2.7.0-6) UNRELEASED; urgency=medium
 
   * Don't add user swift to adm group
+  * d/{control,copyright}: Use my @debian.org email address
 
  -- Ondřej Nový <onovy@debian.org>  Mon, 20 Jun 2016 17:24:34 +0200
 
