@@ -5,8 +5,8 @@ set -e
 #PKGOS-INCLUDE#
 
 if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
+	deluser -q swift adm 2>/dev/null || true
 	pkgos_adduser swift
-	usermod -a -G adm swift
 
 	mkdir -p /var/backups/swift
 	chown swift:swift /var/backups/swift
