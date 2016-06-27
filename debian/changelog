@@ -1,7 +1,6 @@
 swift (2.8.0-2) UNRELEASED; urgency=medium
 
-  * Changed my email to new one
-  * Don't add user swift to adm group
+  * Rebased on 2.7.0-6
   * Use adm group for log directory
   * Remove all swift directories on purge
 
