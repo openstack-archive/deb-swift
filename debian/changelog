@@ -16,6 +16,13 @@ swift (2.8.0-1) experimental; urgency=medium
 
  -- Ondřej Nový <novy@ondrej.org>  Tue, 14 Jun 2016 20:23:21 +0200
 
+swift (2.7.0-6) unstable; urgency=medium
+
+  * Don't add user swift to adm group
+  * d/{control,copyright}: Use my @debian.org email address
+
+ -- Ondřej Nový <onovy@debian.org>  Tue, 21 Jun 2016 17:41:38 +0200
+
 swift (2.7.0-5) unstable; urgency=medium
 
   * Bumped required version of python-setuptools to 20.6.8
