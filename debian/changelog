@@ -1,3 +1,9 @@
+swift (2.7.0-6~bpo8+1) jessie-backports; urgency=medium
+
+  * Rebuild for jessie-backports.
+
+ -- Ondřej Nový <onovy@debian.org>  Mon, 27 Jun 2016 19:57:42 +0200
+
 swift (2.7.0-6) unstable; urgency=medium
 
   * Don't add user swift to adm group
