@@ -1,3 +1,9 @@
+swift (2.7.0-7) UNRELEASED; urgency=medium
+
+  * Check for ring files before starting service (Closes: #829375)
+
+ -- Ondřej Nový <onovy@debian.org>  Sun, 03 Jul 2016 22:58:43 +0200
+
 swift (2.7.0-6) unstable; urgency=medium
 
   * Don't add user swift to adm group

@@ -28,7 +28,10 @@ SERVICE_FILE=`echo ${INIT_TEMPLATE} | sed 's/.init.in/.service/'`
 
 echo "[Unit]
 Description=${DESC}
-ConditionPathExists=/etc/${PROJECT_NAME}/${CONFIG}.conf
+ConditionFileNotEmpty=/etc/${PROJECT_NAME}/${CONFIG}.conf
+AssertFileNotEmpty=/etc/swift/account.ring.gz
+AssertFileNotEmpty=/etc/swift/container.ring.gz
+AssertPathExistsGlob=/etc/swift/object*.ring.gz
 $SYSTEMD_DOC
 $AFTER
 
@@ -60,6 +63,10 @@ echo "[Unit]
 Description=${DESC}
 PartOf=${SERVICE_NAME}.service
 ReloadPropagatedFrom=${SERVICE_NAME}.service
+ConditionFileNotEmpty=/etc/${PROJECT_NAME}/${CONFIG}/%i.conf
+AssertFileNotEmpty=/etc/swift/account.ring.gz
+AssertFileNotEmpty=/etc/swift/container.ring.gz
+AssertPathExistsGlob=/etc/swift/object*.ring.gz
 $SYSTEMD_DOC
 $AFTER
 
