@@ -1,0 +1,3 @@
+usr/share/doc/swift-container/examples/container-reconciler.conf usr/share/doc/swift/examples/container-reconciler.conf
+usr/share/doc/swift-container/examples/container-server.conf usr/share/doc/swift/examples/container-server.conf
+usr/share/doc/swift-container/examples/internal-client.conf usr/share/doc/swift/examples/internal-client.conf

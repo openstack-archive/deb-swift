@@ -1,4 +1,8 @@
+#! /usr/bin/dh-exec --with=install
 debian/swift-object-generator /lib/systemd/system-generators
+etc/object-server.conf-sample => /etc/swift/object-server.conf
+etc/object-server.conf-sample => /usr/share/doc/swift-object/examples/object-server.conf
+etc/rsyncd.conf-sample => /usr/share/doc/swift-object/examples/rsyncd.conf
 usr/bin/swift-object-auditor
 usr/bin/swift-object-info
 usr/bin/swift-object-reconstructor
