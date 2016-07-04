@@ -17,11 +17,13 @@ override_dh_clean:
 	rm -f $(CURDIR)/swift-test.conf
 
 # build with sphinx documentation
+ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 override_dh_sphinxdoc:
 	dh_auto_build
 	PYTHONPATH=. sphinx-build doc/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/html
 	#python setup.py build_sphinx
 	dh_sphinxdoc -O--buildsystem=python_distutils
+endif
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
