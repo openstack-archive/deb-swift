@@ -1,8 +1,8 @@
-swift (2.8.0-2) UNRELEASED; urgency=medium
+swift (2.8.0-2) experimental; urgency=medium
 
   * Rebased on 2.7.0-7
 
- -- Ondřej Nový <onovy@debian.org>  Mon, 20 Jun 2016 17:24:34 +0200
+ -- Ondřej Nový <onovy@debian.org>  Wed, 06 Jul 2016 00:35:48 +0200
 
 swift (2.8.0-1) experimental; urgency=medium
 
