@@ -307,3 +307,14 @@ Last-Update: 2016-07-05
  # set log_facility = LOG_LOCAL0
  # set log_level = INFO
  # set log_headers = false
+--- a/swift/container/sync.py
++++ b/swift/container/sync.py
+@@ -50,7 +50,7 @@
+ # swift_dir = /etc/swift
+ # user = swift
+ # You can specify default log routing here if you want:
+-# log_name = swift
++log_name = swift-internal-client
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
