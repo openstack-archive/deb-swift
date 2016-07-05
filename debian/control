@@ -80,7 +80,9 @@ Description: distributed virtual object store - Python libraries
 
 Package: swift
 Architecture: all
-Depends: python-swift (=${binary:Version}),
+Depends: logrotate,
+         python-swift (=${binary:Version}),
+         rsyslog,
          ${misc:Depends},
          ${python:Depends},
 Description: distributed virtual object store - common files

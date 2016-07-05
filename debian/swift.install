@@ -1,4 +1,5 @@
 #! /usr/bin/dh-exec --with=install
+debian/swift.rsyslog => /etc/rsyslog.d/swift.conf
 etc/container-sync-realms.conf-sample => /etc/swift/container-sync-realms.conf
 etc/container-sync-realms.conf-sample => /usr/share/doc/swift/examples/container-sync-realms.conf
 etc/dispersion.conf-sample => /etc/swift/dispersion.conf

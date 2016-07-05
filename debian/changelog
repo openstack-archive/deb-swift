@@ -7,6 +7,7 @@ swift (2.7.0-7) UNRELEASED; urgency=medium
   * Added support for nodocs in DEB_BUILD_OPTIONS
   * Use dh-exec for installing configs
   * Use adm group for log directory
+  * Log to /var/log/swift and not to generic logfile
 
  -- Ondřej Nový <onovy@debian.org>  Sun, 03 Jul 2016 22:58:43 +0200
 
