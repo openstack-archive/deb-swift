@@ -1,0 +1,12 @@
+if $programname startswith 'swift-account' then /var/log/swift/account.log
+if $programname startswith 'swift-account' then stop
+if $programname startswith 'swift-container' then /var/log/swift/container.log
+if $programname startswith 'swift-container' then stop
+if $programname startswith 'swift-object' then /var/log/swift/object.log
+if $programname startswith 'swift-object' then stop
+if $programname startswith 'swift-proxy' then /var/log/swift/proxy.log
+if $programname startswith 'swift-proxy' then stop
+if $programname startswith 'swift-drive-audit' then /var/log/swift/drive-audit.log
+if $programname startswith 'swift-drive-audit' then stop
+if $programname startswith 'swift' then /var/log/swift/swift.log
+if $programname startswith 'swift' then stop

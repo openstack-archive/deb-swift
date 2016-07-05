@@ -1,1 +1,8 @@
+#! /usr/bin/dh-exec --with=install
+etc/memcache.conf-sample => /etc/swift/memcache.conf
+etc/memcache.conf-sample => /usr/share/doc/swift-proxy/examples/memcache.conf
+etc/mime.types-sample => /etc/swift/mime.types
+etc/mime.types-sample => /usr/share/doc/swift-proxy/examples/mime.types
+etc/proxy-server.conf-sample => /etc/swift/proxy-server.conf
+etc/proxy-server.conf-sample => /usr/share/doc/swift-proxy/examples/proxy-server.conf
 usr/bin/swift-proxy-server

@@ -1,1 +1,4 @@
+#! /usr/bin/dh-exec --with=install
+etc/drive-audit.conf-sample => /etc/swift/drive-audit.conf
+etc/drive-audit.conf-sample => /usr/share/doc/swift-drive-audit/examples/drive-audit.conf
 usr/bin/swift-drive-audit

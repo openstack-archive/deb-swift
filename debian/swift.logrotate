@@ -1,0 +1,13 @@
+/var/log/swift/*.log {
+{
+	rotate 7
+	daily
+	missingok
+	notifempty
+	delaycompress
+	compress
+	sharedscripts
+	postrotate
+		invoke-rc.d rsyslog rotate > /dev/null
+	endscript
+}

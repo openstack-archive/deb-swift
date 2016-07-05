@@ -40,6 +40,15 @@ RET=0
 [ -r /etc/default/$NAME ] && . /etc/default/$NAME
 
 do_start() {
+	# Check for existence of ring files
+	if
+			[ ! -r /etc/swift/account.ring.gz ] ||
+			[ ! -r /etc/swift/container.ring.gz ] ||
+			test -z "$(find /etc/swift -maxdepth 1 -name 'object*.ring.gz' -print -quit)" ; then
+		log_end_msg 1
+		exit $?
+	fi
+
 	STARTED=
 	for CONF_FILE in /etc/swift/${CONFIG}.conf /etc/swift/${CONFIG}/*.conf ; do
 		if [ ! -e "$CONF_FILE" ] ; then

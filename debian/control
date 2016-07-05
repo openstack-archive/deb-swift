@@ -5,6 +5,7 @@ Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders: Thomas Goirand <zigo@debian.org>,
            Ondřej Nový <onovy@debian.org>,
 Build-Depends: debhelper (>= 9),
+               dh-exec,
                dh-python,
                dh-systemd,
                openstack-pkg-tools (>= 48~),
@@ -78,7 +79,9 @@ Description: distributed virtual object store - Python libraries
 
 Package: swift
 Architecture: all
-Depends: python-swift (=${binary:Version}),
+Depends: logrotate,
+         python-swift (=${binary:Version}),
+         rsyslog,
          ${misc:Depends},
          ${python:Depends},
 Description: distributed virtual object store - common files
