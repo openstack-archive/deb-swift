@@ -1,4 +1,4 @@
-swift (2.7.0-7) UNRELEASED; urgency=medium
+swift (2.7.0-7) unstable; urgency=medium
 
   * Check for ring files before starting service (Closes: #829375)
   * Remove all swift directories on purge
@@ -9,7 +9,7 @@ swift (2.7.0-7) UNRELEASED; urgency=medium
   * Use adm group for log directory
   * Log to /var/log/swift and not to generic logfile
 
- -- Ondřej Nový <onovy@debian.org>  Sun, 03 Jul 2016 22:58:43 +0200
+ -- Ondřej Nový <onovy@debian.org>  Tue, 05 Jul 2016 23:24:04 +0200
 
 swift (2.7.0-6) unstable; urgency=medium
 
