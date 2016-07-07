@@ -1,3 +1,9 @@
+swift (2.7.0-8) UNRELEASED; urgency=medium
+
+  * Ignore errors when trying to restart rsyslog service and be more robust
+
+ -- Ondřej Nový <onovy@debian.org>  Thu, 07 Jul 2016 16:05:46 +0200
+
 swift (2.7.0-7) unstable; urgency=medium
 
   * Check for ring files before starting service (Closes: #829375)
