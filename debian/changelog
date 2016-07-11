@@ -1,3 +1,10 @@
+swift (2.7.0-9) UNRELEASED; urgency=medium
+
+  * Ignore errors when trying to restart rsyslog service in postrm too
+    (Closes: #830586)
+
+ -- Ondřej Nový <onovy@debian.org>  Mon, 11 Jul 2016 06:55:32 +0200
+
 swift (2.7.0-8) unstable; urgency=medium
 
   * Ignore errors when trying to restart rsyslog service and be more robust
