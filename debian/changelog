@@ -1,6 +1,7 @@
-swift (2.8.0-3) UNRELEASED; urgency=medium
+swift (2.9.0-1) UNRELEASED; urgency=medium
 
   * Rebased on 2.7.0-9
+  * New upstream release
 
  -- Ondřej Nový <onovy@debian.org>  Wed, 13 Jul 2016 07:29:03 +0200
 
