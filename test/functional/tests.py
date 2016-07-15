@@ -744,6 +744,30 @@ class TestContainer(Base):
             for file_item in files:
                 self.assertIn(file_item, self.env.files)
 
+    def _testContainerFormattedFileList(self, format_type):
+        expected = {}
+        for name in self.env.files:
+            expected[name] = self.env.container.file(name).info()
+
+        file_list = self.env.container.files(parms={'format': format_type})
+        self.assert_status(200)
+        for actual in file_list:
+            name = actual['name']
+            self.assertIn(name, expected)
+            self.assertEqual(expected[name]['etag'], actual['hash'])
+            self.assertEqual(
+                expected[name]['content_type'], actual['content_type'])
+            self.assertEqual(
+                expected[name]['content_length'], actual['bytes'])
+            expected.pop(name)
+        self.assertFalse(expected)  # sanity check
+
+    def testContainerJsonFileList(self):
+        self._testContainerFormattedFileList('json')
+
+    def testContainerXmlFileList(self):
+        self._testContainerFormattedFileList('xml')
+
     def testMarkerLimitFileList(self):
         for format_type in [None, 'json', 'xml']:
             for marker in ['0', 'A', 'I', 'R', 'Z', 'a', 'i', 'r', 'z',
@@ -1582,7 +1606,6 @@ class TestFile(Base):
 
             j = size_limit / (i * 2)
 
-            size = 0
             metadata = {}
             while len(metadata.keys()) < i:
                 key = Utils.create_ascii_name()
@@ -1592,7 +1615,6 @@ class TestFile(Base):
                     key = key[:j]
                     val = val[:j]
 
-                size += len(key) + len(val)
                 metadata[key] = val
 
             file_item = self.env.container.file(Utils.create_name())
@@ -1860,6 +1882,16 @@ class TestFile(Base):
                 return True
             else:
                 return False
+
+        # This loop will result in fallocate calls for 4x the limit
+        # (minus 111 bytes). With fallocate turned on in the object servers,
+        # this may fail if you don't have 4x the limit available on your
+        # data drives.
+
+        # Note that this test does not actually send any data to the system.
+        # All it does is ensure that a response (success or failure) comes
+        # back within 3 seconds. For the successful tests (size smaller
+        # than limit), the cluster will log a 499.
 
         for i in (limit - 100, limit - 10, limit - 1, limit, limit + 1,
                   limit + 10, limit + 100):

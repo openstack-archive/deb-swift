@@ -118,6 +118,8 @@ F_SETPIPE_SZ = getattr(fcntl, 'F_SETPIPE_SZ', 1031)
 # Used by the parse_socket_string() function to validate IPv6 addresses
 IPV6_RE = re.compile("^\[(?P<address>.*)\](:(?P<port>[0-9]+))?$")
 
+MD5_OF_EMPTY_STRING = 'd41d8cd98f00b204e9800998ecf8427e'
+
 
 class InvalidHashPathConfigError(ValueError):
 
@@ -964,7 +966,7 @@ def decode_timestamps(encoded, explicit=False):
     # TODO: some tests, e.g. in test_replicator, put float timestamps values
     # into container db's, hence this defensive check, but in real world
     # this may never happen.
-    if not isinstance(encoded, basestring):
+    if not isinstance(encoded, six.string_types):
         ts = Timestamp(encoded)
         return ts, ts, ts
 
@@ -1727,7 +1729,7 @@ def get_logger(conf, name=None, log_to_console=False, log_route=None,
         except socket.error as e:
             # Either /dev/log isn't a UNIX socket or it does not exist at all
             if e.errno not in [errno.ENOTSOCK, errno.ENOENT]:
-                raise e
+                raise
             handler = SysLogHandler(facility=facility)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
@@ -1872,15 +1874,14 @@ def capture_stdio(logger, **kwargs):
 
 
 def parse_options(parser=None, once=False, test_args=None):
-    """
-    Parse standard swift server/daemon options with optparse.OptionParser.
+    """Parse standard swift server/daemon options with optparse.OptionParser.
 
     :param parser: OptionParser to use. If not sent one will be created.
     :param once: Boolean indicating the "once" option is available
     :param test_args: Override sys.argv; used in testing
 
-    :returns : Tuple of (config, options); config is an absolute path to the
-               config file, options is the parser options as a dictionary.
+    :returns: Tuple of (config, options); config is an absolute path to the
+              config file, options is the parser options as a dictionary.
 
     :raises SystemExit: First arg (CONFIG) is required, file must exist
     """

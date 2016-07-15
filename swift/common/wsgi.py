@@ -31,6 +31,7 @@ import eventlet.debug
 from eventlet import greenio, GreenPool, sleep, wsgi, listen, Timeout
 from paste.deploy import loadwsgi
 from eventlet.green import socket, ssl, os as green_os
+import six
 from six import BytesIO
 from six import StringIO
 from six.moves.urllib.parse import unquote
@@ -168,8 +169,8 @@ def get_socket(conf):
 
     :param conf: Configuration dict to read settings from
 
-    :returns : a socket object as returned from socket.listen or
-               ssl.wrap_socket if conf specifies cert_file
+    :returns: a socket object as returned from socket.listen or
+              ssl.wrap_socket if conf specifies cert_file
     """
     try:
         bind_port = int(conf['bind_port'])
@@ -643,7 +644,10 @@ class PortPidState(object):
         Yield all current listen sockets.
         """
 
-        for orphan_data in self.sock_data_by_port.itervalues():
+        # Use six.itervalues() instead of calling directly the .values() method
+        # on Python 2 to avoid a temporary list, because sock_data_by_port
+        # comes from users and can be large.
+        for orphan_data in six.itervalues(self.sock_data_by_port):
             yield orphan_data['sock']
 
     def forget_port(self, port):

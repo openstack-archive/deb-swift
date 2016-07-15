@@ -29,6 +29,8 @@ from swift.cli.ringbuilder import EXIT_SUCCESS, EXIT_WARNING, EXIT_ERROR
 from swift.common import exceptions
 from swift.common.ring import RingBuilder
 
+from test.unit import Timeout
+
 
 class RunSwiftRingBuilderMixin(object):
 
@@ -1925,14 +1927,18 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         mock_stdout = six.StringIO()
         mock_stderr = six.StringIO()
 
-        argv = ["", "object.ring.gz"]
+        argv = ["", self.tmpfile, "rebalance", "3"],
+        self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv)
+
+        argv = ["", "%s.ring.gz" % self.tmpfile]
 
         with mock.patch("sys.stdout", mock_stdout):
             with mock.patch("sys.stderr", mock_stderr):
                 self.assertSystemExit(EXIT_ERROR, ringbuilder.main, argv)
-        expected = "Note: using object.builder instead of object.ring.gz " \
+        expected = "Note: using %s.builder instead of %s.ring.gz " \
             "as builder file\n" \
-            "Ring Builder file does not exist: object.builder\n"
+            "Ring Builder file does not exist: %s.builder\n" % (
+                self.tmpfile, self.tmpfile, self.tmpfile)
         self.assertEqual(expected, mock_stdout.getvalue())
 
     def test_main_no_arguments(self):
@@ -1950,6 +1956,29 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         self.create_sample_ring()
         argv = ["-safe", self.tmpfile]
         self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv)
+
+    def test_remove_all_devices(self):
+        # Would block without the 'yes' argument
+        self.create_sample_ring()
+        argv = ["", self.tmpfile, "remove", "--weight", "100", "--yes"]
+        with Timeout(5):
+            self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv)
+
+    def test_set_info_all_devices(self):
+        # Would block without the 'yes' argument
+        self.create_sample_ring()
+        argv = ["", self.tmpfile, "set_info", "--weight", "100",
+                "--change-meta", "something", "--yes"]
+        with Timeout(5):
+            self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv)
+
+    def test_set_weight_all_devices(self):
+        # Would block without the 'yes' argument
+        self.create_sample_ring()
+        argv = ["", self.tmpfile, "set_weight",
+                "--weight", "100", "200", "--yes"]
+        with Timeout(5):
+            self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv)
 
 
 class TestRebalanceCommand(unittest.TestCase, RunSwiftRingBuilderMixin):
