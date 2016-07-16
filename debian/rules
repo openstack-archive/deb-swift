@@ -21,7 +21,7 @@ ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 override_dh_sphinxdoc:
 	dh_auto_build
 	PYTHONPATH=. sphinx-build doc/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/html
-	#python setup.py build_sphinx
+	PYTHONPATH=. sphinx-build api-ref/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/api-ref
 	dh_sphinxdoc -O--buildsystem=python_distutils
 endif
 
