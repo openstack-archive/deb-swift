@@ -275,6 +275,7 @@ Architecture: all
 Section: doc
 Depends: libjs-jquery,
          libjs-underscore,
+         libjs-bootstrap,
          python-os-api-ref-common,
          ${misc:Depends},
          ${sphinxdoc:Depends},
