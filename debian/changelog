@@ -3,7 +3,10 @@ swift (2.9.0-1) UNRELEASED; urgency=medium
   * Rebased on 2.7.0-9
   * New upstream release
   * Changed (build) depends for new upstream release
-  * Build API ref documentation
+  * Build API ref and install guide documentation
+  * Removed manual symlinks from d/swift-doc.links - auto added by dh_sphinx
+  * Moved base documentation to "base" directory
+  * Added d/p/oslosphinx_for_install_guide.patch
 
  -- Ondřej Nový <onovy@debian.org>  Wed, 13 Jul 2016 07:29:03 +0200
 

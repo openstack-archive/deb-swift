@@ -5,5 +5,5 @@ Abstract: Sphinx documentation for Swift
 Section: Network/File Transfer
 
 Format: HTML
-Index: /usr/share/doc/swift-doc/html/index.html
-Files: /usr/share/doc/swift-doc/html/*
+Index: /usr/share/doc/swift-doc/base/index.html
+Files: /usr/share/doc/swift-doc/base/*

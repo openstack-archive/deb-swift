@@ -20,8 +20,9 @@ override_dh_clean:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 override_dh_sphinxdoc:
 	dh_auto_build
-	PYTHONPATH=. sphinx-build doc/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/html
+	PYTHONPATH=. sphinx-build doc/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/base
 	PYTHONPATH=. sphinx-build api-ref/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/api-ref
+	PYTHONPATH=. sphinx-build install-guide/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/install-guide
 	dh_sphinxdoc -O--buildsystem=python_distutils
 endif
 

@@ -1,2 +1,3 @@
 sphinx_reproducible_build.patch
 syslog_log_name.patch
+oslosphinx_for_install_guide.patch
