@@ -1,5 +1,4 @@
-usr/share/javascript/jquery/jquery.js usr/share/doc/swift-doc/install-guide/_static/jquery.js
-usr/share/javascript/jquery/jquery.js usr/share/doc/swift-doc/install-guide/_static/js/jquery-1.11.3.js
+usr/share/javascript/jquery/jquery.min.js usr/share/doc/swift-doc/install-guide/_static/jquery.js
 usr/share/javascript/underscore/underscore.min.js usr/share/doc/swift-doc/install-guide/_static/underscore.js
 usr/share/javascript/bootstrap/js/bootstrap.min.js usr/share/doc/swift-doc/install-guide/_static/js/bootstrap.min.js
 usr/share/javascript/bootstrap/css/bootstrap.min.css usr/share/doc/swift-doc/install-guide/_static/css/bootstrap.min.css
