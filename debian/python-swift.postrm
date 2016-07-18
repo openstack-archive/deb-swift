@@ -1,12 +1,14 @@
-#!/bin/sh                                                                                                                                 
+#!/bin/sh
 
 set -e
 
 if [ "${1}" = "purge" ] ; then
-	rm -rf /var/cache/swift
-	rm -rf /var/backups/swift
+	for i in lock log run lib cache backups ; do
+		rm -rf /var/$i/swift
+	done
+	rm -rf /etc/swift
 fi
 
-#DEBHELPER#                                                                                                                                
+#DEBHELPER#
 
 exit 0

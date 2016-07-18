@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -e
+
+# Try to restart rsyslog
+if which invoke-rc.d >/dev/null 2>&1; then
+	invoke-rc.d rsyslog restart || true
+else
+	/etc/init.d/rsyslog restart || true
+fi
+
+#DEBHELPER#

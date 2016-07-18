@@ -1,3 +1,10 @@
+#! /usr/bin/dh-exec --with=install
+etc/container-reconciler.conf-sample => /etc/swift/container-reconciler.conf
+etc/container-reconciler.conf-sample => /usr/share/doc/swift-container/examples/container-reconciler.conf
+etc/container-server.conf-sample => /etc/swift/container-server.conf
+etc/container-server.conf-sample => /usr/share/doc/swift-container/examples/container-server.conf
+etc/internal-client.conf-sample => /etc/swift/internal-client.conf
+etc/internal-client.conf-sample => /usr/share/doc/swift-container/examples/internal-client.conf
 debian/swift-container-generator /lib/systemd/system-generators
 usr/bin/swift-container-auditor
 usr/bin/swift-container-info

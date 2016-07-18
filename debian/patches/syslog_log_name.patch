@@ -1,0 +1,320 @@
+Description: Set log_name for Swift services in default configs
+Author: Ondřej Nový <novy@ondrej.org>
+Forwarded: not-needed
+Last-Update: 2016-07-05
+
+--- a/etc/account-server.conf-sample
++++ b/etc/account-server.conf-sample
+@@ -17,7 +17,7 @@
+ # max_clients = 1024
+ #
+ # You can specify default log routing here if you want:
+-# log_name = swift
++log_name = swift-account
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -57,7 +57,7 @@
+ [app:account-server]
+ use = egg:swift#account
+ # You can override the default log routing for this app here:
+-# set log_name = account-server
++set log_name = swift-account-server
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_requests = true
+@@ -85,7 +85,7 @@
+ 
+ [account-replicator]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = account-replicator
++log_name = swift-account-replicator
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -129,7 +129,7 @@
+ 
+ [account-auditor]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = account-auditor
++log_name = swift-account-auditor
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -142,7 +142,7 @@
+ 
+ [account-reaper]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = account-reaper
++log_name = swift-account-reaper
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+--- a/etc/container-reconciler.conf-sample
++++ b/etc/container-reconciler.conf-sample
+@@ -2,7 +2,7 @@
+ # swift_dir = /etc/swift
+ # user = swift
+ # You can specify default log routing here if you want:
+-# log_name = swift
++log_name = swift-container-reconciler
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+--- a/etc/container-server.conf-sample
++++ b/etc/container-server.conf-sample
+@@ -23,7 +23,7 @@
+ # allowed_sync_hosts = 127.0.0.1
+ #
+ # You can specify default log routing here if you want:
+-# log_name = swift
++log_name = swift-container
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -63,7 +63,7 @@
+ [app:container-server]
+ use = egg:swift#container
+ # You can override the default log routing for this app here:
+-# set log_name = container-server
++set log_name = swift-container-server
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_requests = true
+@@ -94,7 +94,7 @@
+ 
+ [container-replicator]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = container-replicator
++log_name = swift-container-replicator
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -138,7 +138,7 @@
+ 
+ [container-updater]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = container-updater
++log_name = swift-container-updater
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -158,7 +158,7 @@
+ 
+ [container-auditor]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = container-auditor
++log_name = swift-container-auditor
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -171,7 +171,7 @@
+ 
+ [container-sync]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = container-sync
++log_name = swift-container-sync
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+--- a/etc/drive-audit.conf-sample
++++ b/etc/drive-audit.conf-sample
+@@ -2,7 +2,7 @@
+ # device_dir = /srv/node
+ #
+ # You can specify default log routing here if you want:
+-# log_name = drive-audit
++log_name = swift-drive-audit
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+--- a/etc/internal-client.conf-sample
++++ b/etc/internal-client.conf-sample
+@@ -2,7 +2,7 @@
+ # swift_dir = /etc/swift
+ # user = swift
+ # You can specify default log routing here if you want:
+-# log_name = swift
++log_name = swift-internal-client
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+--- a/etc/object-expirer.conf-sample
++++ b/etc/object-expirer.conf-sample
+@@ -2,7 +2,7 @@
+ # swift_dir = /etc/swift
+ # user = swift
+ # You can specify default log routing here if you want:
+-# log_name = swift
++log_name = swift-object-expirer
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+--- a/etc/object-server.conf-sample
++++ b/etc/object-server.conf-sample
+@@ -26,7 +26,7 @@
+ # max_clients = 1024
+ #
+ # You can specify default log routing here if you want:
+-# log_name = swift
++log_name = swift-object
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -75,7 +75,7 @@
+ [app:object-server]
+ use = egg:swift#object
+ # You can override the default log routing for this app here:
+-# set log_name = object-server
++set log_name = swift-object-server
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_requests = true
+@@ -163,7 +163,7 @@
+ 
+ [object-replicator]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = object-replicator
++log_name = swift-object-replicator
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -244,7 +244,7 @@
+ # in the [object-replicator] section, however these settings apply to the EC
+ # reconstructor
+ #
+-# log_name = object-reconstructor
++log_name = swift-object-reconstructor
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -268,7 +268,7 @@
+ 
+ [object-updater]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = object-updater
++log_name = swift-object-updater
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+@@ -283,7 +283,7 @@
+ 
+ [object-auditor]
+ # You can override the default log routing for this app here (don't use set!):
+-# log_name = object-auditor
++log_name = swift-object-auditor
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log
+--- a/etc/proxy-server.conf-sample
++++ b/etc/proxy-server.conf-sample
+@@ -39,7 +39,7 @@
+ # expiring_objects_account_name = expiring_objects
+ #
+ # You can specify default log routing here if you want:
+-# log_name = swift
++log_name = swift-proxy
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_headers = false
+@@ -89,7 +89,7 @@
+ [app:proxy-server]
+ use = egg:swift#proxy
+ # You can override the default log routing for this app here:
+-# set log_name = proxy-server
++set log_name = swift-proxy-server
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_address = /dev/log
+@@ -227,7 +227,7 @@
+ [filter:tempauth]
+ use = egg:swift#tempauth
+ # You can override the default log routing for this filter here:
+-# set log_name = tempauth
++set log_name = swift-proxy-tempauth
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_headers = false
+@@ -392,7 +392,7 @@
+ [filter:cache]
+ use = egg:swift#memcache
+ # You can override the default log routing for this filter here:
+-# set log_name = cache
++set log_name = swift-proxy-cache
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_headers = false
+@@ -425,7 +425,7 @@
+ [filter:ratelimit]
+ use = egg:swift#ratelimit
+ # You can override the default log routing for this filter here:
+-# set log_name = ratelimit
++set log_name = swift-proxy-ratelimit
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_headers = false
+@@ -472,7 +472,7 @@
+ [filter:domain_remap]
+ use = egg:swift#domain_remap
+ # You can override the default log routing for this filter here:
+-# set log_name = domain_remap
++set log_name = swift-proxy-domain_remap
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_headers = false
+@@ -494,7 +494,7 @@
+ [filter:catch_errors]
+ use = egg:swift#catch_errors
+ # You can override the default log routing for this filter here:
+-# set log_name = catch_errors
++set log_name = swift-proxy-catch_errors
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_headers = false
+@@ -504,7 +504,7 @@
+ # Note: this middleware requires python-dnspython
+ use = egg:swift#cname_lookup
+ # You can override the default log routing for this filter here:
+-# set log_name = cname_lookup
++set log_name = swift-proxy-cname_lookup
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_headers = false
+@@ -520,7 +520,7 @@
+ [filter:staticweb]
+ use = egg:swift#staticweb
+ # You can override the default log routing for this filter here:
+-# set log_name = staticweb
++set log_name = swift-proxy-staticweb
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_headers = false
+@@ -572,7 +572,7 @@
+ [filter:proxy-logging]
+ use = egg:swift#proxy_logging
+ # If not set, logging directives from [DEFAULT] without "access_" will be used
+-# access_log_name = swift
++access_log_name = swift-proxy-proxy-logging
+ # access_log_facility = LOG_LOCAL0
+ # access_log_level = INFO
+ # access_log_address = /dev/log
+@@ -689,7 +689,7 @@
+ # shunt_inbound_x_timestamp = true
+ #
+ # You can override the default log routing for this filter here:
+-# set log_name = gatekeeper
++set log_name = swift-proxy-gatekeeper
+ # set log_facility = LOG_LOCAL0
+ # set log_level = INFO
+ # set log_headers = false
+--- a/swift/container/sync.py
++++ b/swift/container/sync.py
+@@ -50,7 +50,7 @@
+ # swift_dir = /etc/swift
+ # user = swift
+ # You can specify default log routing here if you want:
+-# log_name = swift
++log_name = swift-internal-client
+ # log_facility = LOG_LOCAL0
+ # log_level = INFO
+ # log_address = /dev/log

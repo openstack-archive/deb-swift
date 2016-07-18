@@ -1,1 +1,4 @@
+#! /usr/bin/dh-exec --with=install
+etc/object-expirer.conf-sample => /etc/swift/object-expirer.conf
+etc/object-expirer.conf-sample => /usr/share/doc/swift-object-expirer/examples/object-expirer.conf
 usr/bin/swift-object-expirer

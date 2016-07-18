@@ -1,4 +1,7 @@
+#! /usr/bin/dh-exec --with=install
 debian/swift-account-generator /lib/systemd/system-generators
+etc/account-server.conf-sample => /etc/swift/account-server.conf
+etc/account-server.conf-sample => /usr/share/doc/swift-account/examples/account-server.conf
 usr/bin/swift-account-audit
 usr/bin/swift-account-auditor
 usr/bin/swift-account-info

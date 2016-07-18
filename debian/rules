@@ -17,11 +17,13 @@ override_dh_clean:
 	rm -f $(CURDIR)/swift-test.conf
 
 # build with sphinx documentation
+ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 override_dh_sphinxdoc:
 	dh_auto_build
 	PYTHONPATH=. sphinx-build doc/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/html
 	#python setup.py build_sphinx
 	dh_sphinxdoc -O--buildsystem=python_distutils
+endif
 
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
@@ -48,21 +50,6 @@ override_dh_install:
 
 	dh_install --fail-missing
 	rm -rf debian/python-swift/usr/lib/python*/dist-packages/test
-
-	# Install default config files
-	install -D -m 0644 $(CURDIR)/etc/dispersion.conf-sample			$(CURDIR)/debian/swift/etc/swift/dispersion.conf
-	install -D -m 0644 $(CURDIR)/etc/swift.conf-sample			$(CURDIR)/debian/swift/etc/swift/swift.conf
-	install -D -m 0644 $(CURDIR)/etc/container-sync-realms.conf-sample	$(CURDIR)/debian/swift/etc/swift/container-sync-realms.conf
-	install -D -m 0644 $(CURDIR)/etc/account-server.conf-sample		$(CURDIR)/debian/swift-account/etc/swift/account-server.conf
-	install -D -m 0644 $(CURDIR)/etc/container-server.conf-sample		$(CURDIR)/debian/swift-container/etc/swift/container-server.conf
-	install -D -m 0644 $(CURDIR)/etc/internal-client.conf-sample		$(CURDIR)/debian/swift-container/etc/swift/internal-client.conf
-	install -D -m 0644 $(CURDIR)/etc/container-reconciler.conf-sample	$(CURDIR)/debian/swift-container/etc/swift/container-reconciler.conf
-	install -D -m 0644 $(CURDIR)/etc/drive-audit.conf-sample		$(CURDIR)/debian/swift-drive-audit/etc/swift/drive-audit.conf
-	install -D -m 0644 $(CURDIR)/etc/memcache.conf-sample			$(CURDIR)/debian/swift-proxy/etc/swift/memcache.conf
-	install -D -m 0644 $(CURDIR)/etc/mime.types-sample			$(CURDIR)/debian/swift-proxy/etc/swift/mime.types
-	install -D -m 0644 $(CURDIR)/etc/proxy-server.conf-sample		$(CURDIR)/debian/swift-proxy/etc/swift/proxy-server.conf
-	install -D -m 0644 $(CURDIR)/etc/object-expirer.conf-sample		$(CURDIR)/debian/swift-object-expirer/etc/swift/object-expirer.conf
-	install -D -m 0644 $(CURDIR)/etc/object-server.conf-sample		$(CURDIR)/debian/swift-object/etc/swift/object-server.conf
 
 gen-init-configurations:
 	# Create the init scripts and systemd unit files from the template
@@ -96,3 +83,8 @@ override_dh_installinit: gen-init-configurations
 		esac ; \
 		dh_systemd_start -p$$INITPKG --name=$$INITNAME ; \
 	done
+
+override_dh_installdocs:
+	dh_installdocs
+
+	dh_installdocs -A AUTHORS

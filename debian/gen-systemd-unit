@@ -28,7 +28,10 @@ SERVICE_FILE=`echo ${INIT_TEMPLATE} | sed 's/.init.in/.service/'`
 
 echo "[Unit]
 Description=${DESC}
-ConditionPathExists=/etc/${PROJECT_NAME}/${CONFIG}.conf
+ConditionFileNotEmpty=/etc/${PROJECT_NAME}/${CONFIG}.conf
+AssertFileNotEmpty=/etc/swift/account.ring.gz
+AssertFileNotEmpty=/etc/swift/container.ring.gz
+AssertPathExistsGlob=/etc/swift/object*.ring.gz
 $SYSTEMD_DOC
 $AFTER
 
@@ -38,7 +41,8 @@ Group=${SYSTEM_GROUP}
 WorkingDirectory=/var/lib/${PROJECT_NAME}
 PermissionsStartOnly=true
 ExecStartPre=/bin/mkdir -p /var/lock/${PROJECT_NAME} /var/log/${PROJECT_NAME} /var/lib/${PROJECT_NAME}
-ExecStartPre=/bin/chown ${SYSTEM_USER}:${SYSTEM_GROUP} /var/lock/${PROJECT_NAME} /var/log/${PROJECT_NAME} /var/lib/${PROJECT_NAME}
+ExecStartPre=/bin/chown ${SYSTEM_USER}:${SYSTEM_GROUP} /var/lock/${PROJECT_NAME} /var/lib/${PROJECT_NAME}
+ExecStartPre=/bin/chown ${SYSTEM_USER}:adm /var/log/${PROJECT_NAME}
 ExecStart=/usr/bin/${NAME} /etc/${PROJECT_NAME}/${CONFIG}.conf
 Restart=on-failure
 LimitNOFILE=65535
@@ -60,6 +64,10 @@ echo "[Unit]
 Description=${DESC}
 PartOf=${SERVICE_NAME}.service
 ReloadPropagatedFrom=${SERVICE_NAME}.service
+ConditionFileNotEmpty=/etc/${PROJECT_NAME}/${CONFIG}/%i.conf
+AssertFileNotEmpty=/etc/swift/account.ring.gz
+AssertFileNotEmpty=/etc/swift/container.ring.gz
+AssertPathExistsGlob=/etc/swift/object*.ring.gz
 $SYSTEMD_DOC
 $AFTER
 

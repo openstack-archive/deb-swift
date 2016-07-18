@@ -1,8 +1,28 @@
-swift (2.7.0-6~bpo8+1) jessie-backports; urgency=medium
+swift (2.7.0-9) unstable; urgency=medium
 
-  * Rebuild for jessie-backports.
+  * Ignore errors when trying to restart rsyslog service in postrm too
+    (Closes: #830586)
 
- -- Ondřej Nový <onovy@debian.org>  Mon, 27 Jun 2016 19:57:42 +0200
+ -- Ondřej Nový <onovy@debian.org>  Mon, 11 Jul 2016 09:14:29 +0200
+
+swift (2.7.0-8) unstable; urgency=medium
+
+  * Ignore errors when trying to restart rsyslog service and be more robust
+
+ -- Ondřej Nový <onovy@debian.org>  Thu, 07 Jul 2016 16:06:46 +0200
+
+swift (2.7.0-7) unstable; urgency=medium
+
+  * Check for ring files before starting service (Closes: #829375)
+  * Remove all swift directories on purge
+  * Added missed example configs to docs
+  * Use dh_installdocs -A for installing AUTHORS file
+  * Added support for nodocs in DEB_BUILD_OPTIONS
+  * Use dh-exec for installing configs
+  * Use adm group for log directory
+  * Log to /var/log/swift and not to generic logfile
+
+ -- Ondřej Nový <onovy@debian.org>  Tue, 05 Jul 2016 23:24:04 +0200
 
 swift (2.7.0-6) unstable; urgency=medium
 
@@ -88,7 +108,7 @@ swift (2.6.0-1) experimental; urgency=medium
   * Removed PyEClib requirements patching.
   * Removed simplejson dependency.
   * Bumbed eventlet and dnspython dependency to new versions.
-  * Added python-os-testr build dependency. 
+  * Added python-os-testr build dependency.
   * Added git build dependency.
   * wrap-and-sort -t -a
   * Removed wrong systemd unit files.
