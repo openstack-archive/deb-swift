@@ -6,6 +6,7 @@ etc/dispersion.conf-sample => /etc/swift/dispersion.conf
 etc/dispersion.conf-sample => /usr/share/doc/swift/examples/dispersion.conf
 etc/swift.conf-sample => /etc/swift/swift.conf
 etc/swift.conf-sample => /usr/share/doc/swift/examples/swift.conf
+usr/bin/swift-config
 usr/bin/swift-dispersion-populate
 usr/bin/swift-dispersion-report
 usr/bin/swift-form-signature
