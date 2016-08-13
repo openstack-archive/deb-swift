@@ -88,6 +88,8 @@ Depends: logrotate,
          rsyslog,
          ${misc:Depends},
          ${python:Depends},
+Replaces: swift-object (<< 2.9.0-2~),
+Breaks: swift-object (<< 2.9.0-2~),
 Description: distributed virtual object store - common files
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
@@ -244,8 +246,8 @@ Depends: lsb-base (>= 3.0-6),
          swift (=${binary:Version}),
          ${misc:Depends},
          ${python:Depends},
-Replaces: swift-object (<< 2.6.0-1~),
-Breaks: swift-object (<< 2.6.0-1~),
+Replaces: swift-object (<< 2.9.0-2~),
+Breaks: swift-object (<< 2.9.0-2~),
 Description: distributed virtual object store - object-expirer
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
