@@ -1,0 +1,11 @@
+Code-Review+2: Hisashi Osanai <osanai.hisashi@jp.fujitsu.com>
+Code-Review+1: Prashanth Pai <ppai@redhat.com>
+Code-Review+1: Mahati Chamarthy <mahati.chamarthy@gmail.com>
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Workflow+1: Alistair Coles <alistair.coles@hpe.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 01 Aug 2016 14:38:13 +0000
+Reviewed-on: https://review.openstack.org/342295
+Project: openstack/deb-swift
+Branch: refs/heads/master

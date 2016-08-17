@@ -1,0 +1,9 @@
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+2: Samuel Merritt <sam@swiftstack.com>
+Workflow+1: Samuel Merritt <sam@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 29 Jul 2016 21:25:16 +0000
+Reviewed-on: https://review.openstack.org/347546
+Project: openstack/deb-swift
+Branch: refs/heads/master

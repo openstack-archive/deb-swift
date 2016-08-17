@@ -1,0 +1,10 @@
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Code-Review+1: Shashirekha Gundur <shashirekha.j.gundur@intel.com>
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Workflow+1: Thiago da Silva <thiago@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 11 Aug 2016 23:23:10 +0000
+Reviewed-on: https://review.openstack.org/349296
+Project: openstack/deb-swift
+Branch: refs/heads/master

@@ -1,0 +1,13 @@
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+1: Mohit Motiani <mohit.motiani@intel.com>
+Code-Review+1: houweichao <houwch@gohighsec.com>
+Code-Review-1: lijing <lijing@gohighsec.com>
+Code-Review+2: Hisashi Osanai <osanai.hisashi@jp.fujitsu.com>
+Workflow+1: Hisashi Osanai <osanai.hisashi@jp.fujitsu.com>
+Code-Review+1: Yatin Kumbhare <yatinkumbhare@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 29 Jul 2016 13:26:05 +0000
+Reviewed-on: https://review.openstack.org/348149
+Project: openstack/deb-swift
+Branch: refs/heads/master

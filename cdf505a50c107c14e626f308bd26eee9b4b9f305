@@ -1,0 +1,9 @@
+Code-Review+2: Kota Tsuyuzaki <tsuyuzaki.kota@lab.ntt.co.jp>
+Code-Review+2: Samuel Merritt <sam@swiftstack.com>
+Workflow+1: Samuel Merritt <sam@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 09 Aug 2016 19:48:17 +0000
+Reviewed-on: https://review.openstack.org/344963
+Project: openstack/deb-swift
+Branch: refs/heads/master

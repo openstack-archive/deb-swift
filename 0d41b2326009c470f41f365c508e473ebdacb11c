@@ -1,0 +1,9 @@
+Code-Review+2: Kota Tsuyuzaki <tsuyuzaki.kota@lab.ntt.co.jp>
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Workflow+1: Alistair Coles <alistair.coles@hpe.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 05 Aug 2016 14:55:03 +0000
+Reviewed-on: https://review.openstack.org/326226
+Project: openstack/deb-swift
+Branch: refs/heads/master

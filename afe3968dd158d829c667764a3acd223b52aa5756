@@ -1,0 +1,11 @@
+Code-Review+1: Prashanth Pai <ppai@redhat.com>
+Code-Review+1: Janie Richling <jrichli@us.ibm.com>
+Code-Review+2: Matthew Oliver <matt@oliver.net.au>
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Workflow+1: Thiago da Silva <thiago@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 28 Jul 2016 22:11:04 +0000
+Reviewed-on: https://review.openstack.org/272724
+Project: openstack/deb-swift
+Branch: refs/heads/master

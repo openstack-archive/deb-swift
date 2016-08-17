@@ -1,0 +1,11 @@
+Code-Review+1: Mohit Motiani <mohit.motiani@intel.com>
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Code-Review+1: Paul Dardeau <paul.dardeau@intel.com>
+Code-Review+2: Samuel Merritt <sam@swiftstack.com>
+Workflow+1: Samuel Merritt <sam@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 09 Aug 2016 18:16:13 +0000
+Reviewed-on: https://review.openstack.org/351388
+Project: openstack/deb-swift
+Branch: refs/heads/master

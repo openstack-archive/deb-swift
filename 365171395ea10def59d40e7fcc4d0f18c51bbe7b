@@ -1,0 +1,9 @@
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Code-Review+2: Hisashi Osanai <osanai.hisashi@jp.fujitsu.com>
+Workflow+1: Hisashi Osanai <osanai.hisashi@jp.fujitsu.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 14 Jul 2016 23:25:21 +0000
+Reviewed-on: https://review.openstack.org/335639
+Project: openstack/deb-swift
+Branch: refs/heads/master

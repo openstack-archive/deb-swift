@@ -1,0 +1,10 @@
+Code-Review+1: Mohit Motiani <mohit.motiani@intel.com>
+Code-Review+2: Kota Tsuyuzaki <tsuyuzaki.kota@lab.ntt.co.jp>
+Code-Review+2: Samuel Merritt <sam@swiftstack.com>
+Workflow+1: Samuel Merritt <sam@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 09 Aug 2016 18:07:16 +0000
+Reviewed-on: https://review.openstack.org/349910
+Project: openstack/deb-swift
+Branch: refs/heads/master
