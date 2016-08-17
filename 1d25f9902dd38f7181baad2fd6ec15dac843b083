@@ -1,0 +1,9 @@
+Code-Review+2: John Dickinson <me@not.mn>
+Code-Review+1: Florian Hines <syn@ronin.io>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 30 Jul 2012 01:43:06 +0000
+Reviewed-on: https://review.openstack.org/10508
+Project: openstack/deb-swift
+Branch: refs/heads/milestone-proposed

@@ -1,0 +1,10 @@
+Code-Review+1: Samuel Merritt <sam@swiftstack.com>
+Code-Review+1: Darrell Bishop <darrell@swiftstack.com>
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 25 Sep 2012 23:13:09 +0000
+Reviewed-on: https://review.openstack.org/13668
+Project: openstack/deb-swift
+Branch: refs/heads/milestone-proposed

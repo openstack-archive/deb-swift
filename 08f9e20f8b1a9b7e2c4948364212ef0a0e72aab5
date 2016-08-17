@@ -1,0 +1,7 @@
+Code-Review+2: Thierry Carrez <thierry@openstack.org>
+Verified+1: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 23 Nov 2011 15:33:06 +0000
+Reviewed-on: https://review.openstack.org/1868
+Project: openstack/deb-swift
+Branch: refs/heads/milestone-proposed
