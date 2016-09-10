@@ -1,0 +1,10 @@
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Code-Review+1: Janie Richling <jrichli@us.ibm.com>
+Workflow+1: Alistair Coles <alistair.coles@hpe.com>
+Code-Review+1: Mahati Chamarthy <mahati.chamarthy@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 23 Nov 2015 10:53:35 +0000
+Reviewed-on: https://review.openstack.org/244904
+Project: openstack/deb-swift
+Branch: refs/heads/feature/crypto

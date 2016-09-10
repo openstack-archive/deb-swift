@@ -1,0 +1,14 @@
+Code-Review+1: Prashanth Pai <ppai@redhat.com>
+Code-Review+1: Brian Cline <bcline@softlayer.com>
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+1: Mauricio Lima <mauriciolimab@gmail.com>
+Code-Review+1: Thiago Gomes <fthiagogv@outlook.com>
+Code-Review+2: Christian Schwede <cschwede@redhat.com>
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Workflow+1: Alistair Coles <alistair.coles@hpe.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 25 Jun 2015 22:56:38 +0000
+Reviewed-on: https://review.openstack.org/163806
+Project: openstack/deb-swift
+Branch: refs/heads/feature/crypto

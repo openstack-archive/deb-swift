@@ -1,0 +1,9 @@
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Workflow+1: Tim Burke <tim@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 19 May 2016 17:50:33 +0000
+Reviewed-on: https://review.openstack.org/313640
+Project: openstack/deb-swift
+Branch: refs/heads/feature/crypto

@@ -1,0 +1,9 @@
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Code-Review+1: Janie Richling <jrichli@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 11 Nov 2015 21:09:29 +0000
+Reviewed-on: https://review.openstack.org/244249
+Project: openstack/deb-swift
+Branch: refs/heads/feature/crypto

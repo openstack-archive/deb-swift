@@ -1,0 +1,8 @@
+Code-Review+2: paul luse <paul.e.luse@intel.com>
+Workflow+1: paul luse <paul.e.luse@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 24 Jul 2015 23:48:09 +0000
+Reviewed-on: https://review.openstack.org/205579
+Project: openstack/deb-swift
+Branch: refs/heads/feature/crypto

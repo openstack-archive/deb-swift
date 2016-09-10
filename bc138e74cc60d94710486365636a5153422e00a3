@@ -1,0 +1,8 @@
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Workflow+1: Alistair Coles <alistair.coles@hpe.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 21 Apr 2016 16:55:15 +0000
+Reviewed-on: https://review.openstack.org/308874
+Project: openstack/deb-swift
+Branch: refs/heads/feature/crypto
