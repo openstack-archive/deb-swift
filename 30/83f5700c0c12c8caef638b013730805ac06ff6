@@ -1,0 +1,8 @@
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 11 Apr 2016 18:24:54 +0000
+Reviewed-on: https://review.openstack.org/302462
+Project: openstack/deb-swift
+Branch: refs/heads/stable/mitaka
