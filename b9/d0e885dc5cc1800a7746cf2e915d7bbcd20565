@@ -1,0 +1,9 @@
+Code-Review+2: Greg Lange <greglange@gmail.com>
+Code-Review+2: David Goetz <david.goetz@rackspace.com>
+Workflow+1: David Goetz <david.goetz@rackspace.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 27 May 2015 22:16:19 +0000
+Reviewed-on: https://review.openstack.org/183605
+Project: openstack/deb-swift
+Branch: refs/heads/feature/hummingbird

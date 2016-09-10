@@ -1,0 +1,9 @@
+Code-Review+1: Nadeem Syed <snadeem.hameed@gmail.com>
+Code-Review+2: Greg Lange <greglange@gmail.com>
+Workflow+1: Greg Lange <greglange@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 18 Mar 2016 17:32:04 +0000
+Reviewed-on: https://review.openstack.org/291928
+Project: openstack/deb-swift
+Branch: refs/heads/feature/hummingbird

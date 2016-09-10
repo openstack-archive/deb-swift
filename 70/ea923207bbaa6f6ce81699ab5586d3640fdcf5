@@ -1,0 +1,9 @@
+Code-Review+1: Rackspace GolangSwift CI <mike+goci@weirdlooking.com>
+Code-Review+2: Greg Lange <greglange@gmail.com>
+Workflow+1: Greg Lange <greglange@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 12 May 2016 22:08:26 +0000
+Reviewed-on: https://review.openstack.org/315138
+Project: openstack/deb-swift
+Branch: refs/heads/feature/hummingbird

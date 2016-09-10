@@ -1,0 +1,9 @@
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+2: Greg Lange <greglange@gmail.com>
+Workflow+1: Greg Lange <greglange@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 21 May 2015 21:19:52 +0000
+Reviewed-on: https://review.openstack.org/183340
+Project: openstack/deb-swift
+Branch: refs/heads/feature/hummingbird
