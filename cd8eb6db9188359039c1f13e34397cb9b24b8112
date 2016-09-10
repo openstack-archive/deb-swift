@@ -1,0 +1,10 @@
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+1: Mohit Motiani <mohit.motiani@intel.com>
+Code-Review+2: Christian Schwede <cschwede@redhat.com>
+Workflow+1: Christian Schwede <cschwede@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 31 Aug 2016 14:28:18 +0000
+Reviewed-on: https://review.openstack.org/360914
+Project: openstack/deb-swift
+Branch: refs/heads/master

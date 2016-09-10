@@ -1,0 +1,10 @@
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Code-Review-1: Samuel Merritt <sam@swiftstack.com>
+Code-Review+2: Matthew Oliver <matt@oliver.net.au>
+Workflow+1: Matthew Oliver <matt@oliver.net.au>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 02 Sep 2016 06:42:04 +0000
+Reviewed-on: https://review.openstack.org/364269
+Project: openstack/deb-swift
+Branch: refs/heads/master

@@ -1,0 +1,10 @@
+Code-Review+1: Mahati Chamarthy <mahati.chamarthy@gmail.com>
+Code-Review+2: Christian Schwede <cschwede@redhat.com>
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Workflow+1: Alistair Coles <alistair.coles@hpe.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 06 Sep 2016 18:12:40 +0000
+Reviewed-on: https://review.openstack.org/351515
+Project: openstack/deb-swift
+Branch: refs/heads/master
