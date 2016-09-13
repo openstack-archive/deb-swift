@@ -1,0 +1,9 @@
+Code-Review+2: John Dickinson <me@not.mn>
+Code-Review+2: Matthew Oliver <matt@oliver.net.au>
+Workflow+1: Matthew Oliver <matt@oliver.net.au>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 13 Sep 2016 04:02:47 +0000
+Reviewed-on: https://review.openstack.org/162243
+Project: openstack/deb-swift
+Branch: refs/heads/master
