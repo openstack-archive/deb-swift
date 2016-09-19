@@ -55,6 +55,11 @@ Depends: adduser,
          ${misc:Depends},
          ${python:Depends},
 Provides: ${python:Provides},
+Breaks: swift-account (<< 2.6.0-2),
+        swift-container (<< 2.6.0-2),
+        swift-object (<< 2.6.0-2),
+        swift-object-expirer (<< 2.6.0-2),
+        swift-proxy (<< 2.6.0-2),
 Description: distributed virtual object store - Python libraries
  OpenStack Object Storage (code-named Swift) creates redundant, scalable object
  storage using clusters of standardized servers to store petabytes of
