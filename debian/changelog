@@ -1,4 +1,4 @@
-swift (2.9.0-2) UNRELEASED; urgency=medium
+swift (2.9.0-2) experimental; urgency=medium
 
   * Rebased on 2.7.0-10
   * Removed doctrees from doc to make build reproducible
@@ -6,7 +6,7 @@ swift (2.9.0-2) UNRELEASED; urgency=medium
     packages
   * Moved swift-config cli to swift binary package
 
- -- Ondřej Nový <onovy@debian.org>  Sat, 13 Aug 2016 15:39:47 +0200
+ -- Ondřej Nový <onovy@debian.org>  Wed, 21 Sep 2016 20:57:37 +0200
 
 swift (2.9.0-1) experimental; urgency=medium
 
