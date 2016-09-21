@@ -1,5 +1,6 @@
 swift (2.9.0-2) UNRELEASED; urgency=medium
 
+  * Rebased on 2.7.0-10
   * Removed doctrees from doc to make build reproducible
   * Moved swift-recon and swift-object-expirer manpages to correct binary
     packages
