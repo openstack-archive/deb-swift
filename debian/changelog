@@ -34,6 +34,12 @@ swift (2.8.0-1) experimental; urgency=medium
 
  -- Ondřej Nový <novy@ondrej.org>  Tue, 14 Jun 2016 20:23:21 +0200
 
+swift (2.7.0-10) unstable; urgency=medium
+
+  * Stop services first when upgrading from < 2.6.0-2 version
+
+ -- Ondřej Nový <onovy@debian.org>  Wed, 21 Sep 2016 19:34:00 +0200
+
 swift (2.7.0-9) unstable; urgency=medium
 
   * Ignore errors when trying to restart rsyslog service in postrm too
