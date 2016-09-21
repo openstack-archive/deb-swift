@@ -1,8 +1,8 @@
-swift (2.7.0-10) UNRELEASED; urgency=medium
+swift (2.7.0-10) unstable; urgency=medium
 
   * Stop services first when upgrading from < 2.6.0-2 version
 
- -- Ondřej Nový <onovy@debian.org>  Mon, 19 Sep 2016 23:43:51 +0200
+ -- Ondřej Nový <onovy@debian.org>  Wed, 21 Sep 2016 19:34:00 +0200
 
 swift (2.7.0-9) unstable; urgency=medium
 
