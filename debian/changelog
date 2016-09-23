@@ -1,3 +1,13 @@
+swift (2.9.0-2) experimental; urgency=medium
+
+  * Rebased on 2.7.0-10
+  * Removed doctrees from doc to make build reproducible
+  * Moved swift-recon and swift-object-expirer manpages to correct binary
+    packages
+  * Moved swift-config cli to swift binary package
+
+ -- Ondřej Nový <onovy@debian.org>  Wed, 21 Sep 2016 20:57:37 +0200
+
 swift (2.9.0-1) experimental; urgency=medium
 
   * Rebased on 2.7.0-9
@@ -24,6 +34,12 @@ swift (2.8.0-1) experimental; urgency=medium
   * Use dh_installdocs -A for installing AUTHORS file
 
  -- Ondřej Nový <novy@ondrej.org>  Tue, 14 Jun 2016 20:23:21 +0200
+
+swift (2.7.0-10) unstable; urgency=medium
+
+  * Stop services first when upgrading from < 2.6.0-2 version
+
+ -- Ondřej Nový <onovy@debian.org>  Wed, 21 Sep 2016 19:34:00 +0200
 
 swift (2.7.0-9) unstable; urgency=medium
 

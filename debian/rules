@@ -23,7 +23,9 @@ override_dh_sphinxdoc:
 	PYTHONPATH=. sphinx-build doc/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/base
 	PYTHONPATH=. sphinx-build api-ref/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/api-ref
 	PYTHONPATH=. sphinx-build install-guide/source $(CURDIR)/debian/swift-doc/usr/share/doc/swift-doc/install-guide
-	rm debian/swift-doc/usr/share/doc/swift-doc/install-guide/search.html
+	rm -rf \
+		debian/swift-doc/usr/share/doc/swift-doc/install-guide/search.html \
+		debian/swift-doc/usr/share/doc/swift-doc/install-guide/.doctrees
 	dh_sphinxdoc -O--buildsystem=python_distutils
 endif
 
