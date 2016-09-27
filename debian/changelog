@@ -1,3 +1,9 @@
+swift (2.7.0-10~bpo8+1) jessie-backports; urgency=medium
+
+  * Rebuild for jessie-backports.
+
+ -- Ondřej Nový <onovy@debian.org>  Tue, 27 Sep 2016 13:25:21 +0200
+
 swift (2.7.0-10) unstable; urgency=medium
 
   * Stop services first when upgrading from < 2.6.0-2 version
