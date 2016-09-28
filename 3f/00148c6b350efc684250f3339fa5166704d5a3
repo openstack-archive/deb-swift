@@ -1,0 +1,14 @@
+Code-Review+2: Christian Schwede <cschwede@redhat.com>
+Code-Review+1: Nandini Tata <nandini.tata@intel.com>
+Code-Review+1: Mohit Motiani <mohit.motiani@intel.com>
+Code-Review+1: Tim Burke <tim@swiftstack.com>
+Code-Review+1: Ha Van Tu <tuhv@vn.fujitsu.com>
+Code-Review+1: KATO Tomoyuki <kato.tomoyuki@jp.fujitsu.com>
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Workflow+1: Thiago da Silva <thiago@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 28 Sep 2016 13:17:35 +0000
+Reviewed-on: https://review.openstack.org/363452
+Project: openstack/deb-swift
+Branch: refs/heads/master
