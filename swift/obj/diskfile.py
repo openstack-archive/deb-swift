@@ -49,6 +49,7 @@ from collections import defaultdict
 
 from eventlet import Timeout
 from eventlet.hubs import trampoline
+import six
 
 from swift import gettext_ as _
 from swift.common.constraints import check_mount, check_dir
@@ -58,7 +59,8 @@ from swift.common.utils import mkdirs, Timestamp, \
     fsync_dir, drop_buffer_cache, lock_path, write_pickle, \
     config_true_value, listdir, split_path, ismount, remove_file, \
     get_md5_socket, F_SETPIPE_SZ, decode_timestamps, encode_timestamps, \
-    tpool_reraise, MD5_OF_EMPTY_STRING
+    tpool_reraise, MD5_OF_EMPTY_STRING, link_fd_to_path, o_tmpfile_supported, \
+    O_TMPFILE, makedirs_count
 from swift.common.splice import splice, tee
 from swift.common.exceptions import DiskFileQuarantined, DiskFileNotExist, \
     DiskFileCollision, DiskFileNoSpace, DiskFileDeviceUnavailable, \
@@ -112,7 +114,7 @@ def read_metadata(fd):
 
     :returns: dictionary of metadata
     """
-    metadata = ''
+    metadata = b''
     key = 0
     try:
         while True:
@@ -170,12 +172,12 @@ def extract_policy(obj_path):
 
     The device-relative path is everything after the mount point; for example:
 
-    /srv/node/d42/objects-5/179/
+    /srv/node/d42/objects-5/30/179/
         485dc017205a81df3af616d917c90179/1401811134.873649.data
 
     would have device-relative path:
 
-    objects-5/179/485dc017205a81df3af616d917c90179/1401811134.873649.data
+    objects-5/30/179/485dc017205a81df3af616d917c90179/1401811134.873649.data
 
     :param obj_path: device-relative path of an object, or the full path
     :returns: a :class:`~swift.common.storage_policy.BaseStoragePolicy` or None
@@ -281,7 +283,7 @@ def consolidate_hashes(partition_dir):
         # Now that all the invalidations are reflected in hashes.pkl, it's
         # safe to clear out the invalidations file.
         try:
-            with open(invalidations_file, 'w') as inv_fh:
+            with open(invalidations_file, 'wb') as inv_fh:
                 pass
         except OSError as e:
             if e.errno != errno.ENOENT:
@@ -416,7 +418,11 @@ def get_auditor_status(datadir_path, logger, auditor_type):
         datadir_path, "auditor_status_%s.json" % auditor_type)
     status = {}
     try:
-        with open(auditor_status) as statusfile:
+        if six.PY3:
+            statusfile = open(auditor_status, encoding='utf8')
+        else:
+            statusfile = open(auditor_status, 'rb')
+        with statusfile:
             status = statusfile.read()
     except (OSError, IOError) as e:
         if e.errno != errno.ENOENT and logger:
@@ -435,6 +441,8 @@ def get_auditor_status(datadir_path, logger, auditor_type):
 
 def update_auditor_status(datadir_path, logger, partitions, auditor_type):
     status = json.dumps({'partitions': partitions})
+    if six.PY3:
+        status = status.encode('utf8')
     auditor_status = os.path.join(
         datadir_path, "auditor_status_%s.json" % auditor_type)
     try:
@@ -566,6 +574,7 @@ class BaseDiskFileManager(object):
                 with open('/proc/sys/fs/pipe-max-size') as f:
                     max_pipe_size = int(f.read())
                 self.pipe_size = min(max_pipe_size, self.disk_chunk_size)
+        self.use_linkat = o_tmpfile_supported()
 
     def make_on_disk_filename(self, timestamp, ext=None,
                               ctype_timestamp=None, *a, **kw):
@@ -818,15 +827,20 @@ class BaseDiskFileManager(object):
         self._process_ondisk_files(exts, results, **kwargs)
 
         # set final choice of files
-        if exts.get('.ts'):
+        if 'data_info' in results:
+            if exts.get('.meta'):
+                # only report a meta file if a data file has been chosen
+                results['meta_info'] = exts['.meta'][0]
+                ctype_info = exts['.meta'].pop()
+                if (ctype_info['ctype_timestamp']
+                        > results['data_info']['timestamp']):
+                    results['ctype_info'] = ctype_info
+        elif exts.get('.ts'):
+            # only report a ts file if a data file has not been chosen
+            # (ts files will commonly already have been removed from exts if
+            # a data file was chosen, but that may not be the case if
+            # non-durable EC fragment(s) were chosen, hence the elif here)
             results['ts_info'] = exts['.ts'][0]
-        if 'data_info' in results and exts.get('.meta'):
-            # only report a meta file if a data file has been chosen
-            results['meta_info'] = exts['.meta'][0]
-            ctype_info = exts['.meta'].pop()
-            if (ctype_info['ctype_timestamp']
-                    > results['data_info']['timestamp']):
-                results['ctype_info'] = ctype_info
 
         # set ts_file, data_file, meta_file and ctype_file with path to
         # chosen file or None
@@ -1143,7 +1157,8 @@ class BaseDiskFileManager(object):
         return self.diskfile_cls(self, dev_path,
                                  partition, account, container, obj,
                                  policy=policy, use_splice=self.use_splice,
-                                 pipe_size=self.pipe_size, **kwargs)
+                                 pipe_size=self.pipe_size,
+                                 use_linkat=self.use_linkat, **kwargs)
 
     def object_audit_location_generator(self, device_dirs=None,
                                         auditor_type="ALL"):
@@ -1434,9 +1449,15 @@ class BaseDiskFileWriter(object):
         # clean).
         drop_buffer_cache(self._fd, 0, self._upload_size)
         self.manager.invalidate_hash(dirname(self._datadir))
-        # After the rename completes, this object will be available for other
+        # After the rename/linkat completes, this object will be available for
         # requests to reference.
-        renamer(self._tmppath, target_path)
+        if self._tmppath:
+            # It was a named temp file created by mkstemp()
+            renamer(self._tmppath, target_path)
+        else:
+            # It was an unnamed temp file created by open() with O_TMPFILE
+            link_fd_to_path(self._fd, target_path,
+                            self._diskfile._dirs_created)
         # If rename is successful, flag put as succeeded. This is done to avoid
         # unnecessary os.unlink() of tempfile later. As renamer() has
         # succeeded, the tempfile would no longer exist at its original path.
@@ -1822,13 +1843,15 @@ class BaseDiskFile(object):
     :param policy: the StoragePolicy instance
     :param use_splice: if true, use zero-copy splice() to send data
     :param pipe_size: size of pipe buffer used in zero-copy operations
+    :param use_linkat: if True, use open() with linkat() to create obj file
     """
     reader_cls = None  # must be set by subclasses
     writer_cls = None  # must be set by subclasses
 
     def __init__(self, mgr, device_path, partition,
                  account=None, container=None, obj=None, _datadir=None,
-                 policy=None, use_splice=False, pipe_size=None, **kwargs):
+                 policy=None, use_splice=False, pipe_size=None,
+                 use_linkat=False, **kwargs):
         self._manager = mgr
         self._device_path = device_path
         self._logger = mgr.logger
@@ -1836,6 +1859,14 @@ class BaseDiskFile(object):
         self._bytes_per_sync = mgr.bytes_per_sync
         self._use_splice = use_splice
         self._pipe_size = pipe_size
+        self._use_linkat = use_linkat
+        # This might look a lttle hacky i.e tracking number of newly created
+        # dirs to fsync only those many later. If there is a better way,
+        # please suggest.
+        # Or one could consider getting rid of doing fsyncs on dirs altogether
+        # and mounting XFS with the 'dirsync' mount option which should result
+        # in all entry fops being carried out synchronously.
+        self._dirs_created = 0
         self.policy = policy
         if account and container and obj:
             self._name = '/' + '/'.join((account, container, obj))
@@ -2330,6 +2361,28 @@ class BaseDiskFile(object):
         self._fp = None
         return dr
 
+    def _get_tempfile(self):
+        fallback_to_mkstemp = False
+        tmppath = None
+        if self._use_linkat:
+            self._dirs_created = makedirs_count(self._datadir)
+            try:
+                fd = os.open(self._datadir, O_TMPFILE | os.O_WRONLY)
+            except OSError as err:
+                if err.errno in (errno.EOPNOTSUPP, errno.EISDIR, errno.EINVAL):
+                    msg = 'open(%s, O_TMPFILE | O_WRONLY) failed: %s \
+                           Falling back to using mkstemp()' \
+                           % (self._datadir, os.strerror(err.errno))
+                    self._logger.warning(msg)
+                    fallback_to_mkstemp = True
+                else:
+                    raise
+        if not self._use_linkat or fallback_to_mkstemp:
+            if not exists(self._tmpdir):
+                mkdirs(self._tmpdir)
+            fd, tmppath = mkstemp(dir=self._tmpdir)
+        return fd, tmppath
+
     @contextmanager
     def create(self, size=None):
         """
@@ -2346,10 +2399,8 @@ class BaseDiskFile(object):
                      disk
         :raises DiskFileNoSpace: if a size is specified and allocation fails
         """
-        if not exists(self._tmpdir):
-            mkdirs(self._tmpdir)
         try:
-            fd, tmppath = mkstemp(dir=self._tmpdir)
+            fd, tmppath = self._get_tempfile()
         except OSError as err:
             if err.errno in (errno.ENOSPC, errno.EDQUOT):
                 # No more inodes in filesystem
@@ -2379,7 +2430,9 @@ class BaseDiskFile(object):
                 # dfw.put_succeeded is set to True after renamer() succeeds in
                 # DiskFileWriter._finalize_put()
                 try:
-                    os.unlink(tmppath)
+                    if tmppath:
+                        # when mkstemp() was used
+                        os.unlink(tmppath)
                 except OSError:
                     self._logger.exception('Error removing tempfile: %s' %
                                            tmppath)
@@ -2516,7 +2569,7 @@ class ECDiskFileWriter(BaseDiskFileWriter):
         exc = None
         try:
             try:
-                with open(durable_file_path, 'w') as _fp:
+                with open(durable_file_path, 'wb') as _fp:
                     fsync(_fp.fileno())
                 fsync_dir(self._datadir)
             except (OSError, IOError) as err:
@@ -2587,6 +2640,41 @@ class ECDiskFile(BaseDiskFile):
         self._frag_index = None
         if frag_index is not None:
             self._frag_index = self.manager.validate_fragment_index(frag_index)
+        self._frag_prefs = self._validate_frag_prefs(kwargs.get('frag_prefs'))
+        self._durable_frag_set = None
+
+    def _validate_frag_prefs(self, frag_prefs):
+        """
+        Validate that frag_prefs is a list of dicts containing expected keys
+        'timestamp' and 'exclude'. Convert timestamp values to Timestamp
+        instances and validate that exclude values are valid fragment indexes.
+
+        :param frag_prefs: data to validate, should be a list of dicts.
+        :raise DiskFileError: if the frag_prefs data is invalid.
+        :return: a list of dicts with converted and validated values.
+        """
+        # We *do* want to preserve an empty frag_prefs list because it
+        # indicates that a durable file is not required.
+        if frag_prefs is None:
+            return None
+
+        try:
+            return [
+                {'timestamp': Timestamp(pref['timestamp']),
+                 'exclude': [self.manager.validate_fragment_index(fi)
+                             for fi in pref['exclude']]}
+                for pref in frag_prefs]
+        except ValueError as e:
+                raise DiskFileError(
+                    'Bad timestamp in frag_prefs: %r: %s'
+                    % (frag_prefs, e))
+        except DiskFileError as e:
+                raise DiskFileError(
+                    'Bad fragment index in frag_prefs: %r: %s'
+                    % (frag_prefs, e))
+        except (KeyError, TypeError) as e:
+            raise DiskFileError(
+                'Bad frag_prefs: %r: %s' % (frag_prefs, e))
 
     @property
     def durable_timestamp(self):
@@ -2623,13 +2711,14 @@ class ECDiskFile(BaseDiskFile):
     def _get_ondisk_files(self, files):
         """
         The only difference between this method and the replication policy
-        DiskFile method is passing in the frag_index kwarg to our manager's
-        get_ondisk_files method.
+        DiskFile method is passing in the frag_index and frag_prefs kwargs to
+        our manager's get_ondisk_files method.
 
         :param files: list of file names
         """
         self._ondisk_info = self.manager.get_ondisk_files(
-            files, self._datadir, frag_index=self._frag_index)
+            files, self._datadir, frag_index=self._frag_index,
+            frag_prefs=self._frag_prefs)
         return self._ondisk_info
 
     def purge(self, timestamp, frag_index):
@@ -2756,14 +2845,49 @@ class ECDiskFileManager(BaseDiskFileManager):
         rv['frag_index'] = None
         return rv
 
-    def _process_ondisk_files(self, exts, results, frag_index=None, **kwargs):
+    def _process_ondisk_files(self, exts, results, frag_index=None,
+                              frag_prefs=None, **kwargs):
         """
         Implement EC policy specific handling of .data and .durable files.
+
+        If a frag_prefs keyword arg is provided then its value may determine
+        which fragment index at which timestamp is used to construct the
+        diskfile. The value of frag_prefs should be a list. Each item in the
+        frag_prefs list should be a dict that describes per-timestamp
+        preferences using the following items:
+
+            * timestamp: An instance of :class:`~swift.common.utils.Timestamp`.
+            * exclude: A list of valid fragment indexes (i.e. whole numbers)
+              that should be EXCLUDED when choosing a fragment at the
+              timestamp. This list may be empty.
+
+        For example::
+
+            [
+              {'timestamp': <Timestamp instance>, 'exclude': [1,3]},
+              {'timestamp': <Timestamp instance>, 'exclude': []}
+            ]
+
+        The order of per-timestamp dicts in the frag_prefs list is significant
+        and indicates descending preference for fragments from each timestamp
+        i.e. a fragment that satisfies the first per-timestamp preference in
+        the frag_prefs will be preferred over a fragment that satisfies a
+        subsequent per-timestamp preferred, and so on.
+
+        If a timestamp is not cited in any per-timestamp preference dict then
+        it is assumed that any fragment index at that timestamp may be used to
+        construct the diskfile.
+
+        When a frag_prefs arg is provided, including an empty list, there is no
+        requirement for there to be a durable file at the same timestamp as a
+        data file that is chosen to construct the disk file
 
         :param exts: dict of lists of file info, keyed by extension
         :param results: a dict that may be updated with results
         :param frag_index: if set, search for a specific fragment index .data
                            file, otherwise accept the first valid .data file.
+        :param frag_prefs: if set, search for any fragment index .data file
+                           that satisfies the frag_prefs.
         """
         durable_info = None
         if exts.get('.durable'):
@@ -2793,23 +2917,66 @@ class ECDiskFileManager(BaseDiskFileManager):
             if durable_info and durable_info['timestamp'] == timestamp:
                 durable_frag_set = frag_set
 
+        # Choose which frag set to use
+        chosen_frag_set = None
+        if frag_prefs is not None:
+            candidate_frag_sets = dict(frag_sets)
+            # For each per-timestamp frag preference dict, do we have any frag
+            # indexes at that timestamp that are not in the exclusion list for
+            # that timestamp? If so choose the highest of those frag_indexes.
+            for ts, exclude_indexes in [
+                    (ts_pref['timestamp'], ts_pref['exclude'])
+                    for ts_pref in frag_prefs
+                    if ts_pref['timestamp'] in candidate_frag_sets]:
+                available_indexes = [info['frag_index']
+                                     for info in candidate_frag_sets[ts]]
+                acceptable_indexes = list(set(available_indexes) -
+                                          set(exclude_indexes))
+                if acceptable_indexes:
+                    chosen_frag_set = candidate_frag_sets[ts]
+                    # override any frag_index passed in as method param with
+                    # the last (highest) acceptable_index
+                    frag_index = acceptable_indexes[-1]
+                    break
+                else:
+                    # this frag_set has no acceptable frag index so
+                    # remove it from the candidate frag_sets
+                    candidate_frag_sets.pop(ts)
+            else:
+                # No acceptable frag index was found at any timestamp mentioned
+                # in the frag_prefs. Choose the newest remaining candidate
+                # frag_set - the proxy can decide if it wants the returned
+                # fragment with that time.
+                if candidate_frag_sets:
+                    ts_newest = sorted(candidate_frag_sets.keys())[-1]
+                    chosen_frag_set = candidate_frag_sets[ts_newest]
+        else:
+            chosen_frag_set = durable_frag_set
+
         # Select a single chosen frag from the chosen frag_set, by either
         # matching against a specified frag_index or taking the highest index.
         chosen_frag = None
-        if durable_frag_set:
+        if chosen_frag_set:
             if frag_index is not None:
                 # search the frag set to find the exact frag_index
-                for info in durable_frag_set:
+                for info in chosen_frag_set:
                     if info['frag_index'] == frag_index:
                         chosen_frag = info
                         break
             else:
-                chosen_frag = durable_frag_set[-1]
+                chosen_frag = chosen_frag_set[-1]
 
         # If we successfully found a frag then set results
         if chosen_frag:
             results['data_info'] = chosen_frag
             results['durable_frag_set'] = durable_frag_set
+            results['chosen_frag_set'] = chosen_frag_set
+            if chosen_frag_set != durable_frag_set:
+                # hide meta files older than data file but newer than durable
+                # file so they don't get marked as obsolete (we already threw
+                # out .meta's that are older than a .durable)
+                exts['.meta'], _older = self._split_gt_timestamp(
+                    exts['.meta'], chosen_frag['timestamp'])
         results['frag_sets'] = frag_sets
 
         # Mark any isolated .durable as obsolete
@@ -2819,7 +2986,7 @@ class ECDiskFileManager(BaseDiskFileManager):
 
         # Fragments *may* be ready for reclaim, unless they are durable
         for frag_set in frag_sets.values():
-            if frag_set == durable_frag_set:
+            if frag_set in (durable_frag_set, chosen_frag_set):
                 continue
             results.setdefault('possible_reclaim', []).extend(frag_set)
 
@@ -2828,19 +2995,24 @@ class ECDiskFileManager(BaseDiskFileManager):
             results.setdefault('possible_reclaim', []).extend(
                 exts.get('.meta'))
 
-    def _verify_ondisk_files(self, results, frag_index=None, **kwargs):
+    def _verify_ondisk_files(self, results, frag_index=None,
+                             frag_prefs=None, **kwargs):
         """
         Verify that the final combination of on disk files complies with the
         erasure-coded diskfile contract.
 
         :param results: files that have been found and accepted
         :param frag_index: specifies a specific fragment index .data file
+        :param frag_prefs: if set, indicates that fragment preferences have
+            been specified and therefore that a selected fragment is not
+            required to be durable.
         :returns: True if the file combination is compliant, False otherwise
         """
         if super(ECDiskFileManager, self)._verify_ondisk_files(
                 results, **kwargs):
             have_data_file = results['data_file'] is not None
-            have_durable = results.get('durable_frag_set') is not None
+            have_durable = (results.get('durable_frag_set') is not None or
+                            (have_data_file and frag_prefs is not None))
             return have_data_file == have_durable
         return False
 

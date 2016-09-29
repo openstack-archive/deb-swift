@@ -15,7 +15,7 @@ Build-Depends: debhelper (>= 9),
                python-sphinx,
 Build-Depends-Indep: python-coverage,
                      python-cryptography (>= 1.0),
-                     python-dnspython (>= 1.12.0),
+                     python-dnspython (>= 1.14.0),
                      python-eventlet (>= 0.17.4),
                      python-greenlet (>= 0.3.1),
                      python-keystoneclient (>= 1:1.3.0),
@@ -37,7 +37,7 @@ Build-Depends-Indep: python-coverage,
                      python-swiftclient,
                      python-xattr (>= 0.4),
 Standards-Version: 3.9.8
-Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-swift
+Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-swift?h=debian%2Fnewton
 Vcs-Git: https://git.openstack.org/openstack/deb-swift -b debian/newton
 Homepage: https://github.com/openstack/swift
 
@@ -46,7 +46,7 @@ Architecture: all
 Section: python
 Depends: adduser,
          python-cryptography (>= 1.0),
-         python-dnspython (>= 1.12.0),
+         python-dnspython (>= 1.14.0),
          python-eventlet (>= 0.17.4),
          python-greenlet (>= 0.3.1),
          python-netifaces (>> 0.10.1),

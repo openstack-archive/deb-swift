@@ -1,4 +1,5 @@
 doc/manpages/account-server.conf.5
+doc/manpages/swift-account-audit.1
 doc/manpages/swift-account-auditor.1
 doc/manpages/swift-account-info.1
 doc/manpages/swift-account-reaper.1

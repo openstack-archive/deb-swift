@@ -14,3 +14,4 @@ NAME="${PROJECT_NAME}-object-reconstructor"
 DESC="OpenStack Swift object reconstructor"
 CONFIG=object-server
 MULTI=1
+SYSTEMD_DOC="man:${NAME}(1)"

@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import errno
+import itertools
 import logging
 import mock
 import os
@@ -91,6 +93,43 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
             shutil.rmtree(self.tmpdir, True)
         except OSError:
             pass
+
+    def assertOutputStub(self, output, ext='stub'):
+        """
+        assert that the given output string is equal to a in-tree stub file,
+        if a test needs to check multiple outputs it can use custom ext's
+        """
+        filepath = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), self.id().split('.')[-1]))
+        print(filepath)
+        filepath = '%s.%s' % (filepath, ext)
+        try:
+            with open(filepath, 'r') as f:
+                stub = f.read()
+        except (IOError, OSError) as e:
+            if e.errno == errno.ENOENT:
+                self.fail('%r does not exist' % filepath)
+            else:
+                self.fail('%r could not be read (%s)' % (filepath, e))
+        output = output.replace(self.tempfile, '__RINGFILE__')
+        for i, (value, expected) in enumerate(
+                itertools.izip_longest(
+                    output.splitlines(), stub.splitlines())):
+            # N.B. differences in trailing whitespace are ignored!
+            value = (value or '').rstrip()
+            expected = (expected or '').rstrip()
+            try:
+                self.assertEqual(value, expected)
+            except AssertionError:
+                msg = 'Line #%s value is not like expected:\n%r\n%r' % (
+                    i, value, expected)
+                msg += '\n\nFull output was:\n'
+                for i, line in enumerate(output.splitlines()):
+                    msg += '%3d: %s\n' % (i, line)
+                msg += '\n\nCompared to stub:\n'
+                for i, line in enumerate(stub.splitlines()):
+                    msg += '%3d: %s\n' % (i, line)
+                self.fail(msg)
 
     def create_sample_ring(self, part_power=6):
         """ Create a sample ring with four devices
@@ -443,7 +482,7 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         # Check that ring was created with sane value for region
         ring = RingBuilder.load(self.tmpfile)
         dev = ring.devs[-1]
-        self.assertTrue(dev['region'] > 0)
+        self.assertGreater(dev['region'], 0)
 
     def test_remove_device(self):
         for search_value in self.search_values:
@@ -1266,8 +1305,8 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         out, err = self.run_srb(*argv)
         ring = RingBuilder.load(self.tmpfile)
         self.assertEqual(ring.overload, 0.1)
-        self.assertTrue('10.00%' in out)
-        self.assertTrue('0.100000' in out)
+        self.assertIn('10.00%', out)
+        self.assertIn('0.100000', out)
 
     def test_set_overload_percent_strange_input(self):
         self.create_sample_ring()
@@ -1275,8 +1314,8 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         out, err = self.run_srb(*argv)
         ring = RingBuilder.load(self.tmpfile)
         self.assertEqual(ring.overload, 0.26)
-        self.assertTrue('26.00%' in out)
-        self.assertTrue('0.260000' in out)
+        self.assertIn('26.00%', out)
+        self.assertIn('0.260000', out)
 
     def test_server_overload_crazy_high(self):
         self.create_sample_ring()
@@ -1284,17 +1323,17 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         out, err = self.run_srb(*argv)
         ring = RingBuilder.load(self.tmpfile)
         self.assertEqual(ring.overload, 10.0)
-        self.assertTrue('Warning overload is greater than 100%' in out)
-        self.assertTrue('1000.00%' in out)
-        self.assertTrue('10.000000' in out)
+        self.assertIn('Warning overload is greater than 100%', out)
+        self.assertIn('1000.00%', out)
+        self.assertIn('10.000000', out)
         # but it's cool if you do it on purpose
         argv[-1] = '1000%'
         out, err = self.run_srb(*argv)
         ring = RingBuilder.load(self.tmpfile)
         self.assertEqual(ring.overload, 10.0)
-        self.assertTrue('Warning overload is greater than 100%' not in out)
-        self.assertTrue('1000.00%' in out)
-        self.assertTrue('10.000000' in out)
+        self.assertNotIn('Warning overload is greater than 100%', out)
+        self.assertIn('1000.00%', out)
+        self.assertIn('10.000000', out)
 
     def test_set_overload_number_of_arguments(self):
         self.create_sample_ring()
@@ -1614,6 +1653,50 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         argv = ["", self.tmpfile]
         self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv)
 
+    def test_default_output(self):
+        self.create_sample_ring()
+        out, err = self.run_srb('')
+        self.assertOutputStub(out)
+
+    def test_ipv6_output(self):
+        ring = RingBuilder(8, 3, 1)
+        ring.add_dev({'weight': 100.0,
+                      'region': 0,
+                      'zone': 0,
+                      'ip': '2001:db8:85a3::8a2e:370:7334',
+                      'port': 6200,
+                      'device': 'sda1',
+                      'meta': 'some meta data',
+                      })
+        ring.add_dev({'weight': 100.0,
+                      'region': 1,
+                      'zone': 1,
+                      'ip': '127.0.0.1',
+                      'port': 66201,
+                      'device': 'sda2',
+                      })
+        ring.add_dev({'weight': 100.0,
+                      'region': 2,
+                      'zone': 2,
+                      'ip': '2001:db8:85a3::8a2e:370:7336',
+                      'port': 6202,
+                      'device': 'sdc3',
+                      'replication_ip': '127.0.10.127',
+                      'replication_port': 7070,
+                      })
+        ring.add_dev({'weight': 100.0,
+                      'region': 3,
+                      'zone': 3,
+                      'ip': '2001:db8:85a3::8a2e:370:7337',
+                      'port': 6203,
+                      'device': 'sdd4',
+                      'replication_ip': '7001:db8:85a3::8a2e:370:7337',
+                      'replication_port': 11664,
+                      })
+        ring.save(self.tmpfile)
+        out, err = self.run_srb('')
+        self.assertOutputStub(out)
+
     def test_default_show_removed(self):
         mock_stdout = six.StringIO()
         mock_stderr = six.StringIO()
@@ -1642,20 +1725,20 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
             "The overload factor is 0.00%% (0.000000)\n" \
             "Ring file %s.ring.gz not found, probably " \
             "it hasn't been written yet\n" \
-            "Devices:    id  region  zone      ip address  port  " \
-            "replication ip  replication port      name weight " \
+            "Devices:   id region zone ip address:port " \
+            "replication ip:port  name weight " \
             "partitions balance flags meta\n" \
-            "             0       0     0       127.0.0.1  6200       " \
-            "127.0.0.1              6200      sda1 100.00" \
+            "            0      0    0  127.0.0.1:6200 " \
+            "     127.0.0.1:6200  sda1 100.00" \
             "          0 -100.00       some meta data\n" \
-            "             1       1     1       127.0.0.2  6201       " \
-            "127.0.0.2              6201      sda2   0.00" \
+            "            1      1    1  127.0.0.2:6201 " \
+            "     127.0.0.2:6201  sda2   0.00" \
             "          0    0.00   DEL \n" \
-            "             2       2     2       127.0.0.3  6202       " \
-            "127.0.0.3              6202      sdc3 100.00" \
+            "            2      2    2  127.0.0.3:6202 " \
+            "     127.0.0.3:6202  sdc3 100.00" \
             "          0 -100.00       \n" \
-            "             3       3     3       127.0.0.4  6203       " \
-            "127.0.0.4              6203      sdd4   0.00" \
+            "            3      3    3  127.0.0.4:6203 " \
+            "     127.0.0.4:6203  sdd4   0.00" \
             "          0    0.00       \n" % (self.tmpfile, self.tmpfile)
         self.assertEqual(expected, mock_stdout.getvalue())
 
@@ -1718,6 +1801,23 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         ring_invalid_re = re.compile("Ring file .*\.ring\.gz is invalid")
         self.assertTrue(ring_invalid_re.findall(mock_stdout.getvalue()))
 
+    def test_pretend_min_part_hours_passed(self):
+        self.run_srb("create", 8, 3, 1)
+        argv_pretend = ["", self.tmpfile, "pretend_min_part_hours_passed"]
+        # pretend_min_part_hours_passed should success, even not rebalanced
+        self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv_pretend)
+        self.run_srb("add",
+                     "r1z1-10.1.1.1:2345/sda", 100.0,
+                     "r1z1-10.1.1.1:2345/sdb", 100.0,
+                     "r1z1-10.1.1.1:2345/sdc", 100.0)
+        argv_rebalance = ["", self.tmpfile, "rebalance"]
+        self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv_rebalance)
+        self.run_srb("add", "r1z1-10.1.1.1:2345/sdd", 100.0)
+        # rebalance fail without pretend_min_part_hours_passed
+        self.assertSystemExit(EXIT_WARNING, ringbuilder.main, argv_rebalance)
+        self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv_pretend)
+        self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv_rebalance)
+
     def test_rebalance(self):
         self.create_sample_ring()
         argv = ["", self.tmpfile, "rebalance", "3"]
@@ -1755,7 +1855,7 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         self.assertSystemExit(EXIT_SUCCESS, ringbuilder.main, argv)
         ring = RingBuilder.load(self.tmpfile)
         self.assertTrue(ring.validate())
-        self.assertEqual(ring.devs[3], None)
+        self.assertIsNone(ring.devs[3])
 
     def test_rebalance_resets_time_remaining(self):
         self.create_sample_ring()
@@ -1783,7 +1883,7 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
             self.assertEqual(ring.min_part_seconds_left, 0)
             self.assertSystemExit(EXIT_WARNING, ringbuilder.main, argv)
             ring = RingBuilder.load(self.tmpfile)
-            self.assertTrue(ring.min_part_seconds_left, 3600)
+            self.assertEqual(ring.min_part_seconds_left, 3600)
 
     def test_rebalance_failure_does_not_reset_last_moves_epoch(self):
         ring = RingBuilder(8, 3, 1)
@@ -1860,7 +1960,7 @@ class TestCommands(unittest.TestCase, RunSwiftRingBuilderMixin):
         os.remove(self.tmpfile)  # loses file...
 
         argv = ["", backup_file, "write_builder", "24"]
-        self.assertEqual(ringbuilder.main(argv), None)
+        self.assertIsNone(ringbuilder.main(argv))
 
     def test_warn_at_risk(self):
         # when the number of total part replicas (3 * 2 ** 4 = 48 in
@@ -2047,7 +2147,7 @@ class TestRebalanceCommand(unittest.TestCase, RunSwiftRingBuilderMixin):
                      "r1z1-10.1.1.1:2345/sdc", 100.0,
                      "r1z1-10.1.1.1:2345/sdd", 100.0)
         out, err = self.run_srb("rebalance")
-        self.assertTrue("rebalance/repush" not in out)
+        self.assertNotIn("rebalance/repush", out)
 
         # 2 machines of equal size: balanceable, but not in one pass due to
         # min_part_hours > 0
@@ -2058,12 +2158,12 @@ class TestRebalanceCommand(unittest.TestCase, RunSwiftRingBuilderMixin):
                      "r1z1-10.1.1.2:2345/sdd", 100.0)
         self.run_srb("pretend_min_part_hours_passed")
         out, err = self.run_srb("rebalance")
-        self.assertTrue("rebalance/repush" in out)
+        self.assertIn("rebalance/repush", out)
 
         # after two passes, it's all balanced out
         self.run_srb("pretend_min_part_hours_passed")
         out, err = self.run_srb("rebalance")
-        self.assertTrue("rebalance/repush" not in out)
+        self.assertNotIn("rebalance/repush", out)
 
     def test_rebalance_warning_with_overload(self):
         self.run_srb("create", 8, 3, 24)
@@ -2075,14 +2175,14 @@ class TestRebalanceCommand(unittest.TestCase, RunSwiftRingBuilderMixin):
                      "r1z1-10.1.1.1:2345/sdb", 100.0,
                      "r1z1-10.1.1.1:2345/sdc", 120.0)
         out, err = self.run_srb("rebalance")
-        self.assertTrue("rebalance/repush" not in out)
+        self.assertNotIn("rebalance/repush", out)
 
         # Now we add in a really big device, but not enough partitions move
         # to fill it in one pass, so we see the rebalance warning.
         self.run_srb("add", "r1z1-10.1.1.1:2345/sdd", 99999.0)
         self.run_srb("pretend_min_part_hours_passed")
         out, err = self.run_srb("rebalance")
-        self.assertTrue("rebalance/repush" in out)
+        self.assertIn("rebalance/repush", out)
 
     def test_cached_dispersion_value(self):
         self.run_srb("create", 8, 3, 24)
@@ -2093,18 +2193,18 @@ class TestRebalanceCommand(unittest.TestCase, RunSwiftRingBuilderMixin):
                      "r1z1-10.1.1.1:2345/sdd", 100.0)
         self.run_srb('rebalance')
         out, err = self.run_srb()  # list devices
-        self.assertTrue('dispersion' in out)
+        self.assertIn('dispersion', out)
         # remove cached dispersion value
         builder = RingBuilder.load(self.tempfile)
         builder.dispersion = None
         builder.save(self.tempfile)
         # now dispersion output is suppressed
         out, err = self.run_srb()  # list devices
-        self.assertFalse('dispersion' in out)
+        self.assertNotIn('dispersion', out)
         # but will show up after rebalance
         self.run_srb('rebalance', '-f')
         out, err = self.run_srb()  # list devices
-        self.assertTrue('dispersion' in out)
+        self.assertIn('dispersion', out)
 
 
 if __name__ == '__main__':

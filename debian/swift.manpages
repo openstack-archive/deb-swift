@@ -1,7 +1,13 @@
 doc/manpages/dispersion.conf.5
+doc/manpages/swift-config.1
 doc/manpages/swift-dispersion-populate.1
 doc/manpages/swift-dispersion-report.1
+doc/manpages/swift-form-signature.1
 doc/manpages/swift-get-nodes.1
+doc/manpages/swift-oldies.1
 doc/manpages/swift-orphans.1
 doc/manpages/swift-recon.1
+doc/manpages/swift-ring-builder-analyzer.1
 doc/manpages/swift-ring-builder.1
+doc/manpages/swift-temp-url.1
+doc/manpages/swift.conf.5

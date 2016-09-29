@@ -467,6 +467,8 @@ class Range(object):
     :param headerval: value of the header as a str
     """
     def __init__(self, headerval):
+        if not headerval:
+            raise ValueError('Invalid Range header: %r' % headerval)
         headerval = headerval.replace(' ', '')
         if not headerval.lower().startswith('bytes='):
             raise ValueError('Invalid Range header: %s' % headerval)
@@ -584,7 +586,7 @@ class Range(object):
         #
         # We're defining "egregious" here as:
         #
-        # * more than 100 requested ranges OR
+        # * more than 50 requested ranges OR
         # * more than 2 overlapping ranges OR
         # * more than 8 non-ascending-order ranges
         if len(all_ranges) > MAX_RANGES:

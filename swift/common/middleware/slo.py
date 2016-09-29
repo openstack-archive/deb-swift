@@ -134,7 +134,7 @@ objects from the manifest much like DLO. If any of the segments from the
 manifest are not found or their Etag/Content Length have changed since upload,
 the connection will drop. In this case a 409 Conflict will be logged in the
 proxy logs and the user will receive incomplete results. Note that this will be
-enforced regardless of whether the user perfomed per-segment validation during
+enforced regardless of whether the user performed per-segment validation during
 upload.
 
 The headers from this GET or HEAD request will return the metadata attached
@@ -1041,6 +1041,9 @@ class StaticLargeObject(object):
         """
         WSGI entry point
         """
+        if env.get('swift.slo_override'):
+            return self.app(env, start_response)
+
         req = Request(env)
         try:
             vrs, account, container, obj = req.split_path(4, 4, True)

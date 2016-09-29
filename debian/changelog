@@ -1,9 +1,12 @@
-swift (2.9.0-3) UNRELEASED; urgency=medium
+swift (2.10.0-1) experimental; urgency=medium
 
+  * New upstream release
   * d/s/options: extend-diff-ignore of .gitreview
   * d/control: Using OpenStack's Gerrit as VCS URLs.
+  * Bump required version of dnspython to 1.14.0
+  * Added missing manpages from upstream
 
- -- Ondřej Nový <onovy@debian.org>  Sat, 24 Sep 2016 00:14:53 +0200
+ -- Ondřej Nový <onovy@debian.org>  Thu, 29 Sep 2016 09:43:09 +0200
 
 swift (2.9.0-2) experimental; urgency=medium
 

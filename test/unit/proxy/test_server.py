@@ -24,11 +24,12 @@ import sys
 import traceback
 import unittest
 from contextlib import contextmanager
-from shutil import rmtree
+from shutil import rmtree, copyfile, move
 import gc
 import time
 from textwrap import dedent
 from hashlib import md5
+import collections
 from pyeclib.ec_iface import ECDriverError
 from tempfile import mkdtemp, NamedTemporaryFile
 import weakref
@@ -55,7 +56,7 @@ from swift.common.utils import hash_path, storage_directory, \
 from test.unit import (
     connect_tcp, readuntil2crlfs, FakeLogger, fake_http_connect, FakeRing,
     FakeMemcache, debug_logger, patch_policies, write_fake_ring,
-    mocked_http_conn, DEFAULT_TEST_EC_TYPE)
+    mocked_http_conn, DEFAULT_TEST_EC_TYPE, make_timestamp_iter)
 from swift.proxy import server as proxy_server
 from swift.proxy.controllers.obj import ReplicatedObjectController
 from swift.obj import server as object_server
@@ -350,7 +351,7 @@ class TestController(unittest.TestCase):
             partition, nodes, count = \
                 self.controller.account_info(self.account, self.request)
             self.check_account_info_return(partition, nodes, True)
-            self.assertEqual(count, None)
+            self.assertIsNone(count)
 
             # Test the internal representation in memcache
             # 'container_count' changed from 0 to None
@@ -368,7 +369,7 @@ class TestController(unittest.TestCase):
             partition, nodes, count = \
                 self.controller.account_info(self.account, self.request)
             self.check_account_info_return(partition, nodes, True)
-            self.assertEqual(count, None)
+            self.assertIsNone(count)
 
     # tests if some http status codes are not cached
     def test_account_info_no_cache(self):
@@ -378,7 +379,7 @@ class TestController(unittest.TestCase):
                 self.controller.account_info(self.account, self.request)
             self.assertEqual(len(self.memcache.keys()), 0)
             self.check_account_info_return(partition, nodes, True)
-            self.assertEqual(count, None)
+            self.assertIsNone(count)
 
         with save_globals():
             # We cache if we have two 404 responses - fail if only one
@@ -394,7 +395,7 @@ class TestController(unittest.TestCase):
             partition, nodes, count = \
                 self.controller.account_info(self.account, self.request)
             self.check_account_info_return(partition, nodes, is_none=True)
-            self.assertEqual(count, None)
+            self.assertIsNone(count)
 
     def check_container_info_return(self, ret, is_none=False):
         if is_none:
@@ -433,7 +434,7 @@ class TestController(unittest.TestCase):
 
             cache_key = get_cache_key(self.account, self.container)
             cache_value = self.memcache.get(cache_key)
-            self.assertTrue(isinstance(cache_value, dict))
+            self.assertIsInstance(cache_value, dict)
             self.assertEqual(200, cache_value.get('status'))
 
             set_http_connect()
@@ -455,7 +456,7 @@ class TestController(unittest.TestCase):
 
             cache_key = get_cache_key(self.account, self.container)
             cache_value = self.memcache.get(cache_key)
-            self.assertTrue(isinstance(cache_value, dict))
+            self.assertIsInstance(cache_value, dict)
             self.assertEqual(404, cache_value.get('status'))
 
             set_http_connect()
@@ -470,7 +471,7 @@ class TestController(unittest.TestCase):
 
             cache_key = get_cache_key(self.account, self.container)
             cache_value = self.memcache.get(cache_key)
-            self.assertTrue(isinstance(cache_value, dict))
+            self.assertIsInstance(cache_value, dict)
             self.assertEqual(404, cache_value.get('status'))
 
             set_http_connect()
@@ -507,17 +508,17 @@ class TestController(unittest.TestCase):
 
         # Test info is returned as strings
         self.assertEqual(ai.get('foo'), '\xe2\x98\x83')
-        self.assertTrue(isinstance(ai.get('foo'), str))
+        self.assertIsInstance(ai.get('foo'), str)
 
         # Test info['meta'] is returned as strings
         m = ai.get('meta', {})
         self.assertEqual(m.get('bar'), '\xe2\x98\x83')
-        self.assertTrue(isinstance(m.get('bar'), str))
+        self.assertIsInstance(m.get('bar'), str)
 
         # Test info['sysmeta'] is returned as strings
         m = ai.get('sysmeta', {})
         self.assertEqual(m.get('baz'), '\xe2\x98\x83')
-        self.assertTrue(isinstance(m.get('baz'), str))
+        self.assertIsInstance(m.get('baz'), str)
 
     def test_get_container_info_returns_values_as_strings(self):
         app = mock.MagicMock()
@@ -533,22 +534,22 @@ class TestController(unittest.TestCase):
 
         # Test info is returned as strings
         self.assertEqual(ci.get('foo'), '\xe2\x98\x83')
-        self.assertTrue(isinstance(ci.get('foo'), str))
+        self.assertIsInstance(ci.get('foo'), str)
 
         # Test info['meta'] is returned as strings
         m = ci.get('meta', {})
         self.assertEqual(m.get('bar'), '\xe2\x98\x83')
-        self.assertTrue(isinstance(m.get('bar'), str))
+        self.assertIsInstance(m.get('bar'), str)
 
         # Test info['sysmeta'] is returned as strings
         m = ci.get('sysmeta', {})
         self.assertEqual(m.get('baz'), '\xe2\x98\x83')
-        self.assertTrue(isinstance(m.get('baz'), str))
+        self.assertIsInstance(m.get('baz'), str)
 
         # Test info['cors'] is returned as strings
         m = ci.get('cors', {})
         self.assertEqual(m.get('expose_headers'), '\xe2\x98\x83')
-        self.assertTrue(isinstance(m.get('expose_headers'), str))
+        self.assertIsInstance(m.get('expose_headers'), str)
 
 
 @patch_policies([StoragePolicy(0, 'zero', True, object_ring=FakeRing())])
@@ -814,7 +815,7 @@ class TestProxyServer(unittest.TestCase):
                                                    FakeMemcache(),
                                                    container_ring=FakeRing(),
                                                    account_ring=FakeRing())
-                self.assertEqual(baseapp.concurrent_gets, True)
+                self.assertTrue(baseapp.concurrent_gets)
                 self.assertEqual(baseapp.concurrency_timeout, 0)
                 baseapp.update_request(req)
                 resp = baseapp.handle_request(req)
@@ -852,11 +853,11 @@ class TestProxyServer(unittest.TestCase):
                                        container_ring=FakeRing())
 
         self.assertTrue(app.expose_info)
-        self.assertTrue(isinstance(app.disallowed_sections, list))
+        self.assertIsInstance(app.disallowed_sections, list)
         self.assertEqual(1, len(app.disallowed_sections))
         self.assertEqual(['swift.valid_api_versions'],
                          app.disallowed_sections)
-        self.assertTrue(app.admin_key is None)
+        self.assertIsNone(app.admin_key)
 
     def test_get_info_controller(self):
         req = Request.blank('/info')
@@ -866,11 +867,11 @@ class TestProxyServer(unittest.TestCase):
 
         controller, path_parts = app.get_controller(req)
 
-        self.assertTrue('version' in path_parts)
-        self.assertTrue(path_parts['version'] is None)
-        self.assertTrue('disallowed_sections' in path_parts)
-        self.assertTrue('expose_info' in path_parts)
-        self.assertTrue('admin_key' in path_parts)
+        self.assertIn('version', path_parts)
+        self.assertIsNone(path_parts['version'])
+        self.assertIn('disallowed_sections', path_parts)
+        self.assertIn('expose_info', path_parts)
+        self.assertIn('admin_key', path_parts)
 
         self.assertEqual(controller.__name__, 'InfoController')
 
@@ -947,8 +948,8 @@ class TestProxyServer(unittest.TestCase):
         except Exception as e1:
             app.exception_occurred(node, 'test1', 'test1 msg')
         line = logger.get_lines_for_level('error')[-1]
-        self.assertTrue('test1 server' in line)
-        self.assertTrue('test1 msg' in line)
+        self.assertIn('test1 server', line)
+        self.assertIn('test1 msg', line)
         log_args, log_kwargs = logger.log_dict['error'][-1]
         self.assertTrue(log_kwargs['exc_info'])
         self.assertEqual(log_kwargs['exc_info'][1], e1)
@@ -961,8 +962,8 @@ class TestProxyServer(unittest.TestCase):
             app.exception_occurred(node, 'test2', 'test2 msg',
                                    level=logging.WARNING)
         line = logger.get_lines_for_level('warning')[-1]
-        self.assertTrue('test2 server' in line)
-        self.assertTrue('test2 msg' in line)
+        self.assertIn('test2 server', line)
+        self.assertIn('test2 msg', line)
         log_args, log_kwargs = logger.log_dict['warning'][-1]
         self.assertTrue(log_kwargs['exc_info'])
         self.assertEqual(log_kwargs['exc_info'][1], e2)
@@ -980,8 +981,8 @@ class TestProxyServer(unittest.TestCase):
             app.exception_occurred(node, 'test3', 'test3 msg',
                                    level=logging.WARNING, exc_info=e3_info)
         line = logger.get_lines_for_level('warning')[-1]
-        self.assertTrue('test3 server' in line)
-        self.assertTrue('test3 msg' in line)
+        self.assertIn('test3 server', line)
+        self.assertIn('test3 msg', line)
         log_args, log_kwargs = logger.log_dict['warning'][-1]
         self.assertTrue(log_kwargs['exc_info'])
         self.assertEqual(log_kwargs['exc_info'][1], e3)
@@ -1011,7 +1012,7 @@ class TestProxyServer(unittest.TestCase):
                 '/v1.0/a/c/o']:
             req = Request.blank(path)
             controller, path_parts = app.get_controller(req)
-            self.assertTrue(controller is not None)
+            self.assertIsNotNone(controller)
 
         # Ensure settings valid API version constraint works
         for version in ["42", 42]:
@@ -1025,7 +1026,7 @@ class TestProxyServer(unittest.TestCase):
 
                     req = Request.blank('/%s/a' % version)
                     controller, _ = app.get_controller(req)
-                    self.assertTrue(controller is not None)
+                    self.assertIsNotNone(controller)
 
                     # In this case v1 is invalid
                     req = Request.blank('/v1/a')
@@ -1379,7 +1380,7 @@ class TestObjectController(unittest.TestCase):
         try:
             df.open()
         except DiskFileNotExist as e:
-            self.assertTrue(float(e.timestamp) > 0)
+            self.assertGreater(float(e.timestamp), 0)
         else:
             self.fail('did not raise DiskFileNotExist')
 
@@ -1456,7 +1457,7 @@ class TestObjectController(unittest.TestCase):
         self.assertEqual(ct, 'multipart/byteranges')
 
         boundary = dict(params).get('boundary')
-        self.assertTrue(boundary is not None)
+        self.assertIsNotNone(boundary)
 
         got_mime_docs = []
         for mime_doc_fh in iter_multipart_mime_documents(StringIO(res.body),
@@ -1652,12 +1653,12 @@ class TestObjectController(unittest.TestCase):
                 pass
 
         self.assertEqual(res.status_int, 206)
-        self.assertTrue(kaboomed[0] > 0)  # sanity check
+        self.assertGreater(kaboomed[0], 0)  # sanity check
 
         ct, params = parse_content_type(res.headers['Content-Type'])
         self.assertEqual(ct, 'multipart/byteranges')  # sanity check
         boundary = dict(params).get('boundary')
-        self.assertTrue(boundary is not None)  # sanity check
+        self.assertIsNotNone(boundary)  # sanity check
         got_byteranges = []
         for mime_doc_fh in iter_multipart_mime_documents(StringIO(body),
                                                          boundary):
@@ -1723,12 +1724,12 @@ class TestObjectController(unittest.TestCase):
             body = ''.join(res.app_iter)
 
         self.assertEqual(res.status_int, 206)
-        self.assertTrue(kaboomed[0] >= 1)  # sanity check
+        self.assertGreaterEqual(kaboomed[0], 1)  # sanity check
 
         ct, params = parse_content_type(res.headers['Content-Type'])
         self.assertEqual(ct, 'multipart/byteranges')  # sanity check
         boundary = dict(params).get('boundary')
-        self.assertTrue(boundary is not None)  # sanity check
+        self.assertIsNotNone(boundary)  # sanity check
         got_byteranges = []
         for mime_doc_fh in iter_multipart_mime_documents(StringIO(body),
                                                          boundary):
@@ -1761,12 +1762,12 @@ class TestObjectController(unittest.TestCase):
             body = ''.join(res.app_iter)
 
         self.assertEqual(res.status_int, 206)
-        self.assertTrue(kaboomed[0] >= 1)  # sanity check
+        self.assertGreaterEqual(kaboomed[0], 1)  # sanity check
 
         ct, params = parse_content_type(res.headers['Content-Type'])
         self.assertEqual(ct, 'multipart/byteranges')  # sanity check
         boundary = dict(params).get('boundary')
-        self.assertTrue(boundary is not None)  # sanity check
+        self.assertIsNotNone(boundary)  # sanity check
         got_byteranges = []
         for mime_doc_fh in iter_multipart_mime_documents(StringIO(body),
                                                          boundary):
@@ -1860,7 +1861,7 @@ class TestObjectController(unittest.TestCase):
         # verify at least 2 puts made it all the way to the end of 2nd
         # phase, ie at least 2 .durable statuses were written
         num_durable_puts = sum(d is True for d in got_durable)
-        self.assertTrue(num_durable_puts >= 2)
+        self.assertGreaterEqual(num_durable_puts, 2)
 
     @unpatch_policies
     def test_PUT_ec_multiple_segments(self):
@@ -1948,7 +1949,7 @@ class TestObjectController(unittest.TestCase):
         # verify at least 2 puts made it all the way to the end of 2nd
         # phase, ie at least 2 .durable statuses were written
         num_durable_puts = sum(d is True for d in got_durable)
-        self.assertTrue(num_durable_puts >= 2)
+        self.assertGreaterEqual(num_durable_puts, 2)
 
     @unpatch_policies
     def test_PUT_ec_object_etag_mismatch(self):
@@ -2037,9 +2038,14 @@ class TestObjectController(unittest.TestCase):
                 # diskfile open won't succeed because no durable was written,
                 # so look under the hood for data files.
                 files = os.listdir(df._datadir)
-                num_data_files = len([f for f in files if f.endswith('.data')])
-                self.assertEqual(1, num_data_files)
-                found += 1
+                if len(files) > 0:
+                    # Although the third fragment archive hasn't landed on
+                    # disk, the directory df._datadir is pre-maturely created
+                    # and is empty when we use O_TMPFILE + linkat()
+                    num_data_files = \
+                        len([f for f in files if f.endswith('.data')])
+                    self.assertEqual(1, num_data_files)
+                    found += 1
             except OSError:
                 pass
         self.assertEqual(found, 2)
@@ -2096,7 +2102,8 @@ class TestObjectController(unittest.TestCase):
             df = df_mgr.get_diskfile(node['device'], partition,
                                      'a', 'ec-con', 'quorum',
                                      policy=POLICIES[3])
-            self.assertFalse(os.path.exists(df._datadir))
+            if os.path.exists(df._datadir):
+                self.assertFalse(os.listdir(df._datadir))  # should be empty
 
     @unpatch_policies
     def test_PUT_ec_fragment_quorum_bad_request(self):
@@ -2154,7 +2161,8 @@ class TestObjectController(unittest.TestCase):
             df = df_mgr.get_diskfile(node['device'], partition,
                                      'a', 'ec-con', 'quorum',
                                      policy=POLICIES[3])
-            self.assertFalse(os.path.exists(df._datadir))
+            if os.path.exists(df._datadir):
+                self.assertFalse(os.listdir(df._datadir))  # should be empty
 
     @unpatch_policies
     def test_PUT_ec_if_none_match(self):
@@ -2353,8 +2361,8 @@ class TestObjectController(unittest.TestCase):
         # our EC segment size is 4 KiB, so this is multiple (3) segments;
         # we'll verify that with a sanity check
         obj = 'a moose once bit my sister' * 400
-        self.assertTrue(
-            len(obj) > POLICIES.get_by_name("ec").ec_segment_size * 2,
+        self.assertGreater(
+            len(obj), POLICIES.get_by_name("ec").ec_segment_size * 2,
             "object is too small for proper testing")
 
         prolis = _test_sockets[0]
@@ -2430,10 +2438,14 @@ class TestObjectController(unittest.TestCase):
             raise Exception("doom ba doom")
 
         def explodey_doc_parts_iter(inner_iter_iter):
-            for item in inner_iter_iter:
-                item = item.copy()  # paranoia about mutable data
-                item['part_iter'] = explodey_iter(item['part_iter'])
-                yield item
+            try:
+                for item in inner_iter_iter:
+                    item = item.copy()  # paranoia about mutable data
+                    item['part_iter'] = explodey_iter(item['part_iter'])
+                    yield item
+            except GeneratorExit:
+                inner_iter_iter.close()
+                raise
 
         real_ec_app_iter = swift.proxy.controllers.obj.ECAppIter
 
@@ -3018,6 +3030,96 @@ class TestObjectController(unittest.TestCase):
             test_content_type('test.css', iter(['', '', 'text/css',
                                                 'text/css', 'text/css']))
 
+    @unpatch_policies
+    def test_reload_ring_ec(self):
+        policy = POLICIES[3]
+        self.put_container("ec", "ec-con")
+
+        orig_rtime = policy.object_ring._rtime
+        # save original file as back up
+        copyfile(policy.object_ring.serialized_path,
+                 policy.object_ring.serialized_path + '.bak')
+
+        try:
+            # overwrite with 2 replica, 2 devices ring
+            obj_devs = []
+            obj_devs.append(
+                {'port': _test_sockets[-3].getsockname()[1],
+                 'device': 'sdg1'})
+            obj_devs.append(
+                {'port': _test_sockets[-2].getsockname()[1],
+                 'device': 'sdh1'})
+            write_fake_ring(policy.object_ring.serialized_path,
+                            *obj_devs)
+
+            def get_ring_reloaded_response(method):
+                # force to reload at the request
+                policy.object_ring._rtime = 0
+
+                trans_data = ['%s /v1/a/ec-con/o2 HTTP/1.1\r\n' % method,
+                              'Host: localhost\r\n',
+                              'Connection: close\r\n',
+                              'X-Storage-Token: t\r\n']
+
+                if method == 'PUT':
+                    # small, so we don't get multiple EC stripes
+                    obj = 'abCD' * 10
+
+                    extra_trans_data = [
+                        'Etag: "%s"\r\n' % md5(obj).hexdigest(),
+                        'Content-Length: %d\r\n' % len(obj),
+                        'Content-Type: application/octet-stream\r\n',
+                        '\r\n%s' % obj
+                    ]
+                    trans_data.extend(extra_trans_data)
+                else:
+                    trans_data.append('\r\n')
+
+                prolis = _test_sockets[0]
+                sock = connect_tcp(('localhost', prolis.getsockname()[1]))
+                fd = sock.makefile()
+                fd.write(''.join(trans_data))
+                fd.flush()
+                headers = readuntil2crlfs(fd)
+
+                # use older ring with rollbacking
+                return headers
+
+            for method in ('PUT', 'HEAD', 'GET', 'POST', 'DELETE'):
+                headers = get_ring_reloaded_response(method)
+                exp = 'HTTP/1.1 20'
+                self.assertEqual(headers[:len(exp)], exp)
+
+                # proxy didn't load newest ring, use older one
+                self.assertEqual(3, policy.object_ring.replica_count)
+
+                if method == 'POST':
+                    # Take care fast post here!
+                    orig_post_as_copy = getattr(
+                        _test_servers[0], 'object_post_as_copy', None)
+                    try:
+                        _test_servers[0].object_post_as_copy = False
+                        with mock.patch.object(
+                                _test_servers[0],
+                                'object_post_as_copy', False):
+                            headers = get_ring_reloaded_response(method)
+                    finally:
+                        if orig_post_as_copy is None:
+                            del _test_servers[0].object_post_as_copy
+                        else:
+                            _test_servers[0].object_post_as_copy = \
+                                orig_post_as_copy
+
+                    exp = 'HTTP/1.1 20'
+                    self.assertEqual(headers[:len(exp)], exp)
+                    # sanity
+                    self.assertEqual(3, policy.object_ring.replica_count)
+
+        finally:
+            policy.object_ring._rtime = orig_rtime
+            os.rename(policy.object_ring.serialized_path + '.bak',
+                      policy.object_ring.serialized_path)
+
     def test_custom_mime_types_files(self):
         swift_dir = mkdtemp()
         try:
@@ -3300,9 +3402,9 @@ class TestObjectController(unittest.TestCase):
                 self.assertEqual(res.status[:len(str(expected))],
                                  str(expected))
                 if expected < 400:
-                    self.assertTrue('x-works' in res.headers)
+                    self.assertIn('x-works', res.headers)
                     self.assertEqual(res.headers['x-works'], 'yes')
-                    self.assertTrue('accept-ranges' in res.headers)
+                    self.assertIn('accept-ranges', res.headers)
                     self.assertEqual(res.headers['accept-ranges'], 'bytes')
 
             test_status_map((200, 200, 200, 404, 404), 200)
@@ -3416,6 +3518,25 @@ class TestObjectController(unittest.TestCase):
                          'X-Object-Meta-Foo': 'x' * (limit + 1)})
             self.app.update_request(req)
             res = req.get_response(self.app)
+            self.assertEqual(res.status_int, 400)
+
+    def test_POST_meta_authorize(self):
+        def authorize(req):
+            req.headers['X-Object-Meta-Foo'] = 'x' * (limit + 1)
+            return
+        with save_globals():
+            limit = constraints.MAX_META_VALUE_LENGTH
+            self.app.object_post_as_copy = False
+            controller = ReplicatedObjectController(
+                self.app, 'account', 'container', 'object')
+            set_http_connect(200, 200, 202, 202, 202)
+            #                acct cont obj  obj  obj
+            req = Request.blank('/v1/a/c/o', {'REQUEST_METHOD': 'POST'},
+                                headers={'Content-Type': 'foo/bar',
+                                         'X-Object-Meta-Foo': 'x'})
+            req.environ['swift.authorize'] = authorize
+            self.app.update_request(req)
+            res = controller.POST(req)
             self.assertEqual(res.status_int, 400)
 
     def test_POST_meta_key_len(self):
@@ -3621,7 +3742,7 @@ class TestObjectController(unittest.TestCase):
                 resp.body
             except ChunkReadTimeout:
                 got_exc = True
-            self.assertTrue(not got_exc)
+            self.assertFalse(got_exc)
             self.app.recoverable_node_timeout = 0.1
             set_http_connect(200, 200, 200, slow=1.0)
             resp = req.get_response(self.app)
@@ -3668,7 +3789,7 @@ class TestObjectController(unittest.TestCase):
                 self.assertEqual(resp.body, 'lalala')
             except ChunkReadTimeout:
                 got_exc = True
-            self.assertTrue(not got_exc)
+            self.assertFalse(got_exc)
 
             set_http_connect(200, 200, 200, body='lalala',
                              slow=[1.0, 1.0], etags=['a', 'a', 'a'])
@@ -3678,7 +3799,7 @@ class TestObjectController(unittest.TestCase):
                 self.assertEqual(resp.body, 'lalala')
             except ChunkReadTimeout:
                 got_exc = True
-            self.assertTrue(not got_exc)
+            self.assertFalse(got_exc)
 
             set_http_connect(200, 200, 200, body='lalala',
                              slow=[1.0, 1.0], etags=['a', 'b', 'a'])
@@ -3688,7 +3809,7 @@ class TestObjectController(unittest.TestCase):
                 self.assertEqual(resp.body, 'lalala')
             except ChunkReadTimeout:
                 got_exc = True
-            self.assertTrue(not got_exc)
+            self.assertFalse(got_exc)
 
             req = Request.blank('/v1/a/c/o', environ={'REQUEST_METHOD': 'GET'})
             set_http_connect(200, 200, 200, body='lalala',
@@ -3863,11 +3984,11 @@ class TestObjectController(unittest.TestCase):
             object_ring = self.app.get_object_ring(None)
             first_nodes = list(self.app.iter_nodes(object_ring, 0))
             second_nodes = list(self.app.iter_nodes(object_ring, 0))
-            self.assertTrue(first_nodes[0] in second_nodes)
+            self.assertIn(first_nodes[0], second_nodes)
 
             self.app.error_limit(first_nodes[0], 'test')
             second_nodes = list(self.app.iter_nodes(object_ring, 0))
-            self.assertTrue(first_nodes[0] not in second_nodes)
+            self.assertNotIn(first_nodes[0], second_nodes)
 
     def test_iter_nodes_gives_extra_if_error_limited_inline(self):
         object_ring = self.app.get_object_ring(None)
@@ -3918,7 +4039,7 @@ class TestObjectController(unittest.TestCase):
         req = Request.blank('/v1/a/c/o', environ={'REQUEST_METHOD': 'GET'})
         resp = controller.best_response(req, [200] * 3, ['OK'] * 3, [''] * 3,
                                         'Object')
-        self.assertEqual(resp.etag, None)
+        self.assertIsNone(resp.etag)
         resp = controller.best_response(req, [200] * 3, ['OK'] * 3, [''] * 3,
                                         'Object',
                                         etag='68b329da9893e34099c7d8ad5cb9c940'
@@ -4414,7 +4535,7 @@ class TestObjectController(unittest.TestCase):
         headers = readuntil2crlfs(fd)
         exp = 'HTTP/1.1 204'
         self.assertEqual(headers[:len(exp)], exp)
-        self.assertTrue('\r\nContent-Length: 0\r\n' in headers)
+        self.assertIn('\r\nContent-Length: 0\r\n', headers)
 
     @unpatch_policies
     def test_chunked_put_utf8_all_the_way_down(self):
@@ -4449,7 +4570,7 @@ class TestObjectController(unittest.TestCase):
         exp = 'HTTP/1.1 200'
         self.assertEqual(headers[:len(exp)], exp)
         containers = fd.read().split('\n')
-        self.assertTrue(ustr in containers)
+        self.assertIn(ustr, containers)
         # List account with ustr container (test json)
         sock = connect_tcp(('localhost', prolis.getsockname()[1]))
         fd = sock.makefile()
@@ -4461,7 +4582,7 @@ class TestObjectController(unittest.TestCase):
         exp = 'HTTP/1.1 200'
         self.assertEqual(headers[:len(exp)], exp)
         listing = json.loads(fd.read())
-        self.assertTrue(ustr.decode('utf8') in [l['name'] for l in listing])
+        self.assertIn(ustr.decode('utf8'), [l['name'] for l in listing])
         # List account with ustr container (test xml)
         sock = connect_tcp(('localhost', prolis.getsockname()[1]))
         fd = sock.makefile()
@@ -4472,7 +4593,7 @@ class TestObjectController(unittest.TestCase):
         headers = readuntil2crlfs(fd)
         exp = 'HTTP/1.1 200'
         self.assertEqual(headers[:len(exp)], exp)
-        self.assertTrue('<name>%s</name>' % ustr in fd.read())
+        self.assertIn('<name>%s</name>' % ustr, fd.read())
         # Create ustr object with ustr metadata in ustr container
         sock = connect_tcp(('localhost', prolis.getsockname()[1]))
         fd = sock.makefile()
@@ -4496,7 +4617,7 @@ class TestObjectController(unittest.TestCase):
         exp = 'HTTP/1.1 200'
         self.assertEqual(headers[:len(exp)], exp)
         objects = fd.read().split('\n')
-        self.assertTrue(ustr in objects)
+        self.assertIn(ustr, objects)
         # List ustr container with ustr object (test json)
         sock = connect_tcp(('localhost', prolis.getsockname()[1]))
         fd = sock.makefile()
@@ -4521,7 +4642,7 @@ class TestObjectController(unittest.TestCase):
         headers = readuntil2crlfs(fd)
         exp = 'HTTP/1.1 200'
         self.assertEqual(headers[:len(exp)], exp)
-        self.assertTrue('<name>%s</name>' % ustr in fd.read())
+        self.assertIn('<name>%s</name>' % ustr, fd.read())
         # Retrieve ustr object with ustr metadata
         sock = connect_tcp(('localhost', prolis.getsockname()[1]))
         fd = sock.makefile()
@@ -4533,8 +4654,8 @@ class TestObjectController(unittest.TestCase):
         headers = readuntil2crlfs(fd)
         exp = 'HTTP/1.1 200'
         self.assertEqual(headers[:len(exp)], exp)
-        self.assertTrue('\r\nX-Object-Meta-%s: %s\r\n' %
-                        (quote(ustr_short).lower(), quote(ustr)) in headers)
+        self.assertIn('\r\nX-Object-Meta-%s: %s\r\n' %
+                      (quote(ustr_short).lower(), quote(ustr)), headers)
 
     @unpatch_policies
     def test_chunked_put_chunked_put(self):
@@ -4652,7 +4773,7 @@ class TestObjectController(unittest.TestCase):
                 self.app, 'account', 'container', 'object')
             set_http_connect(200, 200, 200)
             resp = controller.GET(req)
-            self.assertTrue('accept-ranges' in resp.headers)
+            self.assertIn('accept-ranges', resp.headers)
             self.assertEqual(resp.headers['accept-ranges'], 'bytes')
 
     def test_response_head_accept_ranges_header(self):
@@ -4664,7 +4785,7 @@ class TestObjectController(unittest.TestCase):
                 self.app, 'account', 'container', 'object')
             set_http_connect(200, 200, 200)
             resp = controller.HEAD(req)
-            self.assertTrue('accept-ranges' in resp.headers)
+            self.assertIn('accept-ranges', resp.headers)
             self.assertEqual(resp.headers['accept-ranges'], 'bytes')
 
     def test_GET_calls_authorize(self):
@@ -4984,8 +5105,8 @@ class TestObjectController(unittest.TestCase):
                 'https://foo.bar',
                 resp.headers['access-control-allow-origin'])
             for verb in 'OPTIONS GET POST PUT DELETE HEAD'.split():
-                self.assertTrue(
-                    verb in resp.headers['access-control-allow-methods'])
+                self.assertIn(verb,
+                              resp.headers['access-control-allow-methods'])
             self.assertEqual(
                 len(resp.headers['access-control-allow-methods'].split(', ')),
                 6)
@@ -5002,8 +5123,7 @@ class TestObjectController(unittest.TestCase):
             resp = controller.OPTIONS(req)
             self.assertEqual(200, resp.status_int)
             for verb in 'OPTIONS GET POST PUT DELETE HEAD'.split():
-                self.assertTrue(
-                    verb in resp.headers['Allow'])
+                self.assertIn(verb, resp.headers['Allow'])
             self.assertEqual(len(resp.headers['Allow'].split(', ')), 6)
             req = Request.blank(
                 '/v1/a/c/o.jpg',
@@ -5038,8 +5158,8 @@ class TestObjectController(unittest.TestCase):
             self.assertEqual(200, resp.status_int)
             self.assertEqual('*', resp.headers['access-control-allow-origin'])
             for verb in 'OPTIONS GET POST PUT DELETE HEAD'.split():
-                self.assertTrue(
-                    verb in resp.headers['access-control-allow-methods'])
+                self.assertIn(verb,
+                              resp.headers['access-control-allow-methods'])
             self.assertEqual(
                 len(resp.headers['access-control-allow-methods'].split(', ')),
                 6)
@@ -5412,7 +5532,7 @@ class TestECMismatchedFA(unittest.TestCase):
             environ={"REQUEST_METHOD": "PUT"},
             headers={"X-Storage-Policy": "ec", "X-Auth-Token": "t"})
         resp = ensure_container.get_response(prosrv)
-        self.assertTrue(resp.status_int in (201, 202))
+        self.assertIn(resp.status_int, (201, 202))
 
         obj1 = "first version..."
         put_req1 = Request.blank(
@@ -5478,6 +5598,255 @@ class TestECMismatchedFA(unittest.TestCase):
         with mock.patch.object(obj2srv, 'GET', bad_disk):
             resp = get_req.get_response(prosrv)
         self.assertEqual(resp.status_int, 503)
+
+
+class TestECGets(unittest.TestCase):
+    def tearDown(self):
+        prosrv = _test_servers[0]
+        # don't leak error limits and poison other tests
+        prosrv._error_limiting = {}
+
+    def _setup_nodes_and_do_GET(self, objs, node_state):
+        """
+        A helper method that creates object fragments, stashes them in temp
+        dirs, and then moves selected fragments back into the hash_dirs on each
+        node according to a specified desired node state description.
+
+        :param objs: a dict that maps object references to dicts that describe
+                     the object timestamp and content. Object frags will be
+                     created for each item in this dict.
+        :param node_state: a dict that maps a node index to the desired state
+                           for that node. Each desired state is a list of
+                           dicts, with each dict describing object reference,
+                           frag_index and file extensions to be moved to the
+                           node's hash_dir.
+        """
+        (prosrv, acc1srv, acc2srv, con1srv, con2srv, obj1srv,
+         obj2srv, obj3srv) = _test_servers
+        ec_policy = POLICIES[3]
+        container_name = uuid.uuid4().hex
+        obj_name = uuid.uuid4().hex
+        obj_path = os.path.join(os.sep, 'v1', 'a', container_name, obj_name)
+
+        # PUT container, make sure it worked
+        container_path = os.path.join(os.sep, 'v1', 'a', container_name)
+        ec_container = Request.blank(
+            container_path, environ={"REQUEST_METHOD": "PUT"},
+            headers={"X-Storage-Policy": "ec", "X-Auth-Token": "t"})
+        resp = ec_container.get_response(prosrv)
+        self.assertIn(resp.status_int, (201, 202))
+
+        partition, nodes = \
+            ec_policy.object_ring.get_nodes('a', container_name, obj_name)
+
+        # map nodes to hash dirs
+        node_hash_dirs = {}
+        node_tmp_dirs = collections.defaultdict(dict)
+        for node in nodes:
+            node_hash_dirs[node['index']] = os.path.join(
+                _testdir, node['device'], storage_directory(
+                    diskfile.get_data_dir(ec_policy),
+                    partition, hash_path('a', container_name, obj_name)))
+
+        def _put_object(ref, timestamp, body):
+            # PUT an object and then move its disk files to a temp dir
+            headers = {"X-Timestamp": timestamp.internal}
+            put_req1 = Request.blank(obj_path, method='PUT', headers=headers)
+            put_req1.body = body
+            resp = put_req1.get_response(prosrv)
+            self.assertEqual(resp.status_int, 201)
+
+            # GET the obj, should work fine
+            get_req = Request.blank(obj_path, method="GET")
+            resp = get_req.get_response(prosrv)
+            self.assertEqual(resp.status_int, 200)
+            self.assertEqual(resp.body, body)
+
+            # move all hash dir files to per-node, per-obj tempdir
+            for node_index, hash_dir in node_hash_dirs.items():
+                node_tmp_dirs[node_index][ref] = mkdtemp()
+                for f in os.listdir(hash_dir):
+                    move(os.path.join(hash_dir, f),
+                         os.path.join(node_tmp_dirs[node_index][ref], f))
+
+        for obj_ref, obj_info in objs.items():
+            _put_object(obj_ref, **obj_info)
+
+        # sanity check - all hash_dirs are empty and GET returns a 404
+        for hash_dir in node_hash_dirs.values():
+            self.assertFalse(os.listdir(hash_dir))
+        get_req = Request.blank(obj_path, method="GET")
+        resp = get_req.get_response(prosrv)
+        self.assertEqual(resp.status_int, 404)
+
+        # node state is in form:
+        # {node_index: [{ref: object reference,
+        #                frag_index: index,
+        #                exts: ['.data' etc]}, ...],
+        #  node_index: ...}
+        for node_index, state in node_state.items():
+            dest = node_hash_dirs[node_index]
+            for frag_info in state:
+                src = node_tmp_dirs[frag_info['frag_index']][frag_info['ref']]
+                src_files = [f for f in os.listdir(src)
+                             if f.endswith(frag_info['exts'])]
+                self.assertEqual(len(frag_info['exts']), len(src_files),
+                                 'Bad test setup for node %s, obj %s'
+                                 % (node_index, frag_info['ref']))
+                for f in src_files:
+                    move(os.path.join(src, f), os.path.join(dest, f))
+
+        # do an object GET
+        get_req = Request.blank(obj_path, method='GET')
+        return get_req.get_response(prosrv)
+
+    def test_GET_with_missing_durables(self):
+        # verify object GET behavior when durable files are missing
+        ts_iter = make_timestamp_iter()
+        objs = {'obj1': dict(timestamp=next(ts_iter), body='body')}
+
+        # durable missing from 2/3 nodes
+        node_state = {
+            0: [dict(ref='obj1', frag_index=0, exts=('.data', '.durable'))],
+            1: [dict(ref='obj1', frag_index=1, exts=('.data',))],
+            2: [dict(ref='obj1', frag_index=2, exts=('.data',))]
+        }
+
+        resp = self._setup_nodes_and_do_GET(objs, node_state)
+        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.body, objs['obj1']['body'])
+
+        # all files missing on 1 node, durable missing from 1/2 other nodes
+        # durable missing from 2/3 nodes
+        node_state = {
+            0: [dict(ref='obj1', frag_index=0, exts=('.data', '.durable'))],
+            1: [],
+            2: [dict(ref='obj1', frag_index=2, exts=('.data',))]
+        }
+
+        resp = self._setup_nodes_and_do_GET(objs, node_state)
+        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.body, objs['obj1']['body'])
+
+        # durable missing from all 3 nodes
+        node_state = {
+            0: [dict(ref='obj1', frag_index=0, exts=('.data',))],
+            1: [dict(ref='obj1', frag_index=1, exts=('.data',))],
+            2: [dict(ref='obj1', frag_index=2, exts=('.data',))]
+        }
+
+        resp = self._setup_nodes_and_do_GET(objs, node_state)
+        self.assertEqual(resp.status_int, 503)
+
+    def test_GET_with_multiple_frags_per_node(self):
+        # verify object GET behavior when multiple fragments are on same node
+        ts_iter = make_timestamp_iter()
+        objs = {'obj1': dict(timestamp=next(ts_iter), body='body')}
+
+        # scenario: only two frags, both on same node
+        node_state = {
+            0: [],
+            1: [dict(ref='obj1', frag_index=0, exts=('.data', '.durable')),
+                dict(ref='obj1', frag_index=1, exts=('.data',))],
+            2: []
+        }
+
+        resp = self._setup_nodes_and_do_GET(objs, node_state)
+        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.body, objs['obj1']['body'])
+
+        # scenario: all 3 frags on same node
+        node_state = {
+            0: [],
+            1: [dict(ref='obj1', frag_index=0, exts=('.data', '.durable')),
+                dict(ref='obj1', frag_index=1, exts=('.data',)),
+                dict(ref='obj1', frag_index=2, exts=('.data',))],
+            2: []
+        }
+
+        resp = self._setup_nodes_and_do_GET(objs, node_state)
+        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.body, objs['obj1']['body'])
+
+    def test_GET_with_multiple_timestamps_on_nodes(self):
+        ts_iter = make_timestamp_iter()
+
+        ts_1, ts_2, ts_3 = [next(ts_iter) for _ in range(3)]
+        objs = {'obj1': dict(timestamp=ts_1, body='body1'),
+                'obj2': dict(timestamp=ts_2, body='body2'),
+                'obj3': dict(timestamp=ts_3, body='body3')}
+
+        # newer non-durable frags do not prevent proxy getting the durable obj1
+        node_state = {
+            0: [dict(ref='obj3', frag_index=0, exts=('.data',)),
+                dict(ref='obj2', frag_index=0, exts=('.data',)),
+                dict(ref='obj1', frag_index=0, exts=('.data', '.durable'))],
+            1: [dict(ref='obj3', frag_index=1, exts=('.data',)),
+                dict(ref='obj2', frag_index=1, exts=('.data',)),
+                dict(ref='obj1', frag_index=1, exts=('.data', '.durable'))],
+            2: [dict(ref='obj3', frag_index=2, exts=('.data',)),
+                dict(ref='obj2', frag_index=2, exts=('.data',)),
+                dict(ref='obj1', frag_index=2, exts=('.data', '.durable'))],
+        }
+
+        resp = self._setup_nodes_and_do_GET(objs, node_state)
+        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.body, objs['obj1']['body'])
+
+        # .durables at two timestamps: in this scenario proxy is guaranteed
+        # to see the durable at ts_2 with one of the first 2 responses, so will
+        # then prefer that when requesting from third obj server
+        node_state = {
+            0: [dict(ref='obj3', frag_index=0, exts=('.data',)),
+                dict(ref='obj2', frag_index=0, exts=('.data',)),
+                dict(ref='obj1', frag_index=0, exts=('.data', '.durable'))],
+            1: [dict(ref='obj3', frag_index=1, exts=('.data',)),
+                dict(ref='obj2', frag_index=1, exts=('.data', '.durable'))],
+            2: [dict(ref='obj3', frag_index=2, exts=('.data',)),
+                dict(ref='obj2', frag_index=2, exts=('.data', '.durable'))],
+        }
+
+        resp = self._setup_nodes_and_do_GET(objs, node_state)
+        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.body, objs['obj2']['body'])
+
+    def test_GET_with_same_frag_index_on_multiple_nodes(self):
+        ts_iter = make_timestamp_iter()
+
+        # this is a trick to be able to get identical frags placed onto
+        # multiple nodes: since we cannot *copy* frags, we generate three sets
+        # of identical frags at same timestamp so we have enough to *move*
+        ts_1 = next(ts_iter)
+        objs = {'obj1a': dict(timestamp=ts_1, body='body'),
+                'obj1b': dict(timestamp=ts_1, body='body'),
+                'obj1c': dict(timestamp=ts_1, body='body')}
+
+        # arrange for duplicate frag indexes across nodes: because the object
+        # server prefers the highest available frag index, proxy will first get
+        # back two responses with frag index 1, and will then return to node 0
+        # for frag_index 0.
+        node_state = {
+            0: [dict(ref='obj1a', frag_index=0, exts=('.data',)),
+                dict(ref='obj1a', frag_index=1, exts=('.data',))],
+            1: [dict(ref='obj1b', frag_index=1, exts=('.data', '.durable'))],
+            2: [dict(ref='obj1c', frag_index=1, exts=('.data', '.durable'))]
+        }
+
+        resp = self._setup_nodes_and_do_GET(objs, node_state)
+        self.assertEqual(resp.status_int, 200)
+        self.assertEqual(resp.body, objs['obj1a']['body'])
+
+        # if all we have across nodes are frags with same index then expect a
+        # 404 (the third, 'extra', obj server GET will return 404 because it
+        # will be sent frag prefs that exclude frag_index 1)
+        node_state = {
+            0: [dict(ref='obj1a', frag_index=1, exts=('.data',))],
+            1: [dict(ref='obj1b', frag_index=1, exts=('.data', '.durable'))],
+            2: [dict(ref='obj1c', frag_index=1, exts=('.data',))]
+        }
+
+        resp = self._setup_nodes_and_do_GET(objs, node_state)
+        self.assertEqual(resp.status_int, 404)
 
 
 class TestObjectDisconnectCleanup(unittest.TestCase):
@@ -5920,7 +6289,7 @@ class TestObjectECRangedGET(unittest.TestCase):
 
         self.assertEqual(content_type, 'multipart/byteranges')
         boundary = content_type_params.get('boundary')
-        self.assertTrue(boundary is not None)
+        self.assertIsNotNone(boundary)
 
         got_byteranges = self._parse_multipart(headers['Content-Type'],
                                                gotten_obj)
@@ -5999,7 +6368,7 @@ class TestObjectECRangedGET(unittest.TestCase):
 
         self.assertEqual(content_type, 'multipart/byteranges')
         boundary = content_type_params.get('boundary')
-        self.assertTrue(boundary is not None)
+        self.assertIsNotNone(boundary)
 
         got_byteranges = self._parse_multipart(headers['Content-Type'],
                                                gotten_obj)
@@ -6055,7 +6424,7 @@ class TestObjectECRangedGET(unittest.TestCase):
 
         self.assertEqual(content_type, 'multipart/byteranges')
         boundary = content_type_params.get('boundary')
-        self.assertTrue(boundary is not None)
+        self.assertIsNotNone(boundary)
 
         got_byteranges = self._parse_multipart(headers['Content-Type'],
                                                gotten_obj)
@@ -6103,7 +6472,7 @@ class TestContainerController(unittest.TestCase):
         # default test
         req = Request.blank('/a/c', headers={'Content-Length': '0',
                                              'Content-Type': 'text/plain'})
-        self.assertEqual(controller._convert_policy_to_index(req), None)
+        self.assertIsNone(controller._convert_policy_to_index(req))
         # negative test
         req = Request.blank('/a/c',
                             headers={'Content-Length': '0',
@@ -6140,7 +6509,7 @@ class TestContainerController(unittest.TestCase):
             resp = req.get_response(self.app)
             self.assertRaises(StopIteration, fake_conn.code_iter.next)
         self.assertEqual(resp.status_int, 404)
-        self.assertEqual(resp.headers['X-Storage-Policy'], None)
+        self.assertIsNone(resp.headers['X-Storage-Policy'])
 
     def test_error_convert_index_to_name(self):
         req = Request.blank('/v1/a/c')
@@ -6150,13 +6519,13 @@ class TestContainerController(unittest.TestCase):
             resp = req.get_response(self.app)
             self.assertRaises(StopIteration, fake_conn.code_iter.next)
         self.assertEqual(resp.status_int, 200)
-        self.assertEqual(resp.headers['X-Storage-Policy'], None)
+        self.assertIsNone(resp.headers['X-Storage-Policy'])
         error_lines = self.app.logger.get_lines_for_level('error')
         self.assertEqual(2, len(error_lines))
         for msg in error_lines:
             expected = "Could not translate " \
                 "X-Backend-Storage-Policy-Index ('-1')"
-            self.assertTrue(expected in msg)
+            self.assertIn(expected, msg)
 
     def test_transfer_headers(self):
         src_headers = {'x-remove-versions-location': 'x',
@@ -6210,6 +6579,9 @@ class TestContainerController(unittest.TestCase):
                 if expected < 400:
                     self.assertIn('x-works', res.headers)
                     self.assertEqual(res.headers['x-works'], 'yes')
+                if expected < 300:
+                    self.assertIn('last-modified', res.headers)
+                    self.assertEqual(res.headers['last-modified'], '1')
                 if c_expected:
                     self.assertIn('container/a/c', infocache)
                     self.assertEqual(
@@ -6233,8 +6605,11 @@ class TestContainerController(unittest.TestCase):
                                  str(expected))
                 infocache = res.environ.get('swift.infocache', {})
                 if expected < 400:
-                    self.assertTrue('x-works' in res.headers)
+                    self.assertIn('x-works', res.headers)
                     self.assertEqual(res.headers['x-works'], 'yes')
+                if expected < 300:
+                    self.assertIn('last-modified', res.headers)
+                    self.assertEqual(res.headers['last-modified'], '1')
                 if c_expected:
                     self.assertIn('container/a/c', infocache)
                     self.assertEqual(
@@ -6295,9 +6670,9 @@ class TestContainerController(unittest.TestCase):
                     self.assertEqual(res.status_int, 400)
                     self.assertEqual(0, len(backend_requests))
                     expected = 'is deprecated'
-                    self.assertTrue(expected in res.body,
-                                    '%r did not include %r' % (
-                                        res.body, expected))
+                    self.assertIn(expected, res.body,
+                                  '%r did not include %r' % (
+                                      res.body, expected))
                     return
                 self.assertEqual(res.status_int, 201)
                 self.assertEqual(
@@ -6305,16 +6680,16 @@ class TestContainerController(unittest.TestCase):
                     len(backend_requests))
                 for headers in backend_requests:
                     if not requested_policy:
-                        self.assertFalse('X-Backend-Storage-Policy-Index' in
+                        self.assertNotIn('X-Backend-Storage-Policy-Index',
                                          headers)
-                        self.assertTrue(
-                            'X-Backend-Storage-Policy-Default' in headers)
+                        self.assertIn('X-Backend-Storage-Policy-Default',
+                                      headers)
                         self.assertEqual(
                             int(expected_policy),
                             int(headers['X-Backend-Storage-Policy-Default']))
                     else:
-                        self.assertTrue('X-Backend-Storage-Policy-Index' in
-                                        headers)
+                        self.assertIn('X-Backend-Storage-Policy-Index',
+                                      headers)
                         self.assertEqual(int(headers
                                          ['X-Backend-Storage-Policy-Index']),
                                          int(policy))
@@ -6420,9 +6795,9 @@ class TestContainerController(unittest.TestCase):
             self.assertEqual(10, len(calls))
             for call in calls[3:6]:
                 self.assertEqual('/account', call['path'])
-                self.assertTrue(key in call['headers'],
-                                '%s call, key %s missing in headers %s' %
-                                (call['method'], key, call['headers']))
+                self.assertIn(key, call['headers'],
+                              '%s call, key %s missing in headers %s' % (
+                                  call['method'], key, call['headers']))
                 self.assertEqual(value, call['headers'][key])
 
     def test_POST(self):
@@ -6644,7 +7019,7 @@ class TestContainerController(unittest.TestCase):
             req = Request.blank('/v1/a/c?format=json')
             self.app.update_request(req)
             res = controller.GET(req)
-            self.assertTrue('accept-ranges' in res.headers)
+            self.assertIn('accept-ranges', res.headers)
             self.assertEqual(res.headers['accept-ranges'], 'bytes')
 
     def test_response_head_accept_ranges_header(self):
@@ -6655,7 +7030,7 @@ class TestContainerController(unittest.TestCase):
             req = Request.blank('/v1/a/c?format=json')
             self.app.update_request(req)
             res = controller.HEAD(req)
-            self.assertTrue('accept-ranges' in res.headers)
+            self.assertIn('accept-ranges', res.headers)
             self.assertEqual(res.headers['accept-ranges'], 'bytes')
 
     def test_PUT_metadata(self):
@@ -6862,7 +7237,7 @@ class TestContainerController(unittest.TestCase):
             ic = res.environ['swift.infocache']
             self.assertEqual(ic['container/a/c']['status'], 204)
             self.assertEqual(res.content_length, 0)
-            self.assertTrue('transfer-encoding' not in res.headers)
+            self.assertNotIn('transfer-encoding', res.headers)
 
     def test_GET_calls_authorize(self):
         called = [False]
@@ -6994,7 +7369,7 @@ class TestContainerController(unittest.TestCase):
                     headers={'Origin': 'http://foo.com',
                              'Access-Control-Request-Method': 'GET'})
                 controller.OPTIONS(req)
-                self.assertTrue(count[0] < 11)
+                self.assertLess(count[0], 11)
 
     def test_OPTIONS(self):
         with save_globals():
@@ -7042,8 +7417,8 @@ class TestContainerController(unittest.TestCase):
                 'https://foo.bar',
                 resp.headers['access-control-allow-origin'])
             for verb in 'OPTIONS GET POST PUT DELETE HEAD'.split():
-                self.assertTrue(
-                    verb in resp.headers['access-control-allow-methods'])
+                self.assertIn(verb,
+                              resp.headers['access-control-allow-methods'])
             self.assertEqual(
                 len(resp.headers['access-control-allow-methods'].split(', ')),
                 6)
@@ -7060,8 +7435,7 @@ class TestContainerController(unittest.TestCase):
             resp = controller.OPTIONS(req)
             self.assertEqual(200, resp.status_int)
             for verb in 'OPTIONS GET POST PUT DELETE HEAD'.split():
-                self.assertTrue(
-                    verb in resp.headers['Allow'])
+                self.assertIn(verb, resp.headers['Allow'])
             self.assertEqual(len(resp.headers['Allow'].split(', ')), 6)
             req = Request.blank(
                 '/v1/a/c',
@@ -7097,8 +7471,8 @@ class TestContainerController(unittest.TestCase):
             self.assertEqual(200, resp.status_int)
             self.assertEqual('*', resp.headers['access-control-allow-origin'])
             for verb in 'OPTIONS GET POST PUT DELETE HEAD'.split():
-                self.assertTrue(
-                    verb in resp.headers['access-control-allow-methods'])
+                self.assertIn(verb,
+                              resp.headers['access-control-allow-methods'])
             self.assertEqual(
                 len(resp.headers['access-control-allow-methods'].split(', ')),
                 6)
@@ -7150,7 +7524,7 @@ class TestContainerController(unittest.TestCase):
             self.assertEqual('red', resp.headers['x-container-meta-color'])
             # X-Super-Secret is in the response, but not "exposed"
             self.assertEqual('hush', resp.headers['x-super-secret'])
-            self.assertTrue('access-control-expose-headers' in resp.headers)
+            self.assertIn('access-control-expose-headers', resp.headers)
             exposed = set(
                 h.strip() for h in
                 resp.headers['access-control-expose-headers'].split(','))
@@ -7369,8 +7743,7 @@ class TestAccountController(unittest.TestCase):
             resp = controller.OPTIONS(req)
             self.assertEqual(200, resp.status_int)
             for verb in 'OPTIONS GET POST HEAD'.split():
-                self.assertTrue(
-                    verb in resp.headers['Allow'])
+                self.assertIn(verb, resp.headers['Allow'])
             self.assertEqual(len(resp.headers['Allow'].split(', ')), 4)
 
             # Test a CORS OPTIONS request (i.e. including Origin and
@@ -7385,8 +7758,7 @@ class TestAccountController(unittest.TestCase):
             resp = controller.OPTIONS(req)
             self.assertEqual(200, resp.status_int)
             for verb in 'OPTIONS GET POST HEAD'.split():
-                self.assertTrue(
-                    verb in resp.headers['Allow'])
+                self.assertIn(verb, resp.headers['Allow'])
             self.assertEqual(len(resp.headers['Allow'].split(', ')), 4)
 
             self.app.allow_account_management = True
@@ -7396,8 +7768,7 @@ class TestAccountController(unittest.TestCase):
             resp = controller.OPTIONS(req)
             self.assertEqual(200, resp.status_int)
             for verb in 'OPTIONS GET POST PUT DELETE HEAD'.split():
-                self.assertTrue(
-                    verb in resp.headers['Allow'])
+                self.assertIn(verb, resp.headers['Allow'])
             self.assertEqual(len(resp.headers['Allow'].split(', ')), 6)
 
     def test_GET(self):
@@ -7525,9 +7896,9 @@ class TestAccountController(unittest.TestCase):
                 give_connect=callback)
             self.assertEqual(9, len(calls))
             for call in calls:
-                self.assertTrue(key in call['headers'],
-                                '%s call, key %s missing in headers %s' %
-                                (call['method'], key, call['headers']))
+                self.assertIn(key, call['headers'],
+                              '%s call, key %s missing in headers %s' %
+                              (call['method'], key, call['headers']))
                 self.assertEqual(value, call['headers'][key])
 
     def test_connection_refused(self):
@@ -7559,7 +7930,7 @@ class TestAccountController(unittest.TestCase):
             req = Request.blank('/v1/a?format=json')
             self.app.update_request(req)
             res = controller.GET(req)
-            self.assertTrue('accept-ranges' in res.headers)
+            self.assertIn('accept-ranges', res.headers)
             self.assertEqual(res.headers['accept-ranges'], 'bytes')
 
     def test_response_head_accept_ranges_header(self):
@@ -7570,7 +7941,7 @@ class TestAccountController(unittest.TestCase):
             self.app.update_request(req)
             res = controller.HEAD(req)
             res.body
-            self.assertTrue('accept-ranges' in res.headers)
+            self.assertIn('accept-ranges', res.headers)
             self.assertEqual(res.headers['accept-ranges'], 'bytes')
 
     def test_PUT(self):
@@ -7907,7 +8278,7 @@ class TestAccountControllerFakeGetResponse(unittest.TestCase):
 
             # Not a swift_owner -- ACLs should NOT be in response
             header = 'X-Account-Access-Control'
-            self.assertTrue(header not in resp.headers, '%r was in %r' % (
+            self.assertNotIn(header, resp.headers, '%r was in %r' % (
                 header, resp.headers))
 
             # Same setup -- mock acct server will provide ACLs
@@ -7917,7 +8288,7 @@ class TestAccountControllerFakeGetResponse(unittest.TestCase):
             resp = app.handle_request(req)
 
             # For a swift_owner, the ACLs *should* be in response
-            self.assertTrue(header in resp.headers, '%r not in %r' % (
+            self.assertIn(header, resp.headers, '%r not in %r' % (
                 header, resp.headers))
 
     def test_account_acls_through_delegation(self):
@@ -8143,7 +8514,7 @@ class TestSwiftInfo(unittest.TestCase):
                                  container_ring=FakeRing())
 
         si = utils.get_swift_info()['swift']
-        self.assertTrue('version' in si)
+        self.assertIn('version', si)
         self.assertEqual(si['max_file_size'], constraints.MAX_FILE_SIZE)
         self.assertEqual(si['max_meta_name_length'],
                          constraints.MAX_META_NAME_LENGTH)
@@ -8163,9 +8534,9 @@ class TestSwiftInfo(unittest.TestCase):
                          constraints.MAX_CONTAINER_NAME_LENGTH)
         self.assertEqual(si['max_object_name_length'],
                          constraints.MAX_OBJECT_NAME_LENGTH)
-        self.assertTrue('strict_cors_mode' in si)
-        self.assertEqual(si['allow_account_management'], False)
-        self.assertEqual(si['account_autocreate'], False)
+        self.assertIn('strict_cors_mode', si)
+        self.assertFalse(si['allow_account_management'])
+        self.assertFalse(si['account_autocreate'])
         # This setting is by default excluded by disallowed_sections
         self.assertEqual(si['valid_api_versions'],
                          constraints.VALID_API_VERSIONS)
@@ -8173,7 +8544,7 @@ class TestSwiftInfo(unittest.TestCase):
         # other items are added to swift info
         self.assertEqual(len(si), 18)
 
-        self.assertTrue('policies' in si)
+        self.assertIn('policies', si)
         sorted_pols = sorted(si['policies'], key=operator.itemgetter('name'))
         self.assertEqual(len(sorted_pols), 3)
         for policy in sorted_pols:
