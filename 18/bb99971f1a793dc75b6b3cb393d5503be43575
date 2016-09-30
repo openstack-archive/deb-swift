@@ -1,0 +1,10 @@
+Code-Review+1: guang-yee <guang.yee@hpe.com>
+Code-Review+2: Kota Tsuyuzaki <tsuyuzaki.kota@lab.ntt.co.jp>
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 30 Sep 2016 04:21:18 +0000
+Reviewed-on: https://review.openstack.org/372573
+Project: openstack/deb-swift
+Branch: refs/heads/master
