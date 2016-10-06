@@ -1,0 +1,10 @@
+Code-Review+2: Donagh McCabe <donagh.mccabe@hpe.com>
+Code-Review+1: Charles Hsu <charles0126@gmail.com>
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Workflow+1: Tim Burke <tim@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Oct 2016 14:53:19 +0000
+Reviewed-on: https://review.openstack.org/372809
+Project: openstack/deb-swift
+Branch: refs/heads/master
