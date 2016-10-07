@@ -1,3 +1,9 @@
+swift (2.10.0-2) unstable; urgency=medium
+
+  * Uploading to unstable
+
+ -- Ondřej Nový <onovy@debian.org>  Fri, 07 Oct 2016 10:33:11 +0200
+
 swift (2.10.0-1) experimental; urgency=medium
 
   * New upstream release
