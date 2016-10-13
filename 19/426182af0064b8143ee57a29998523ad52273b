@@ -1,0 +1,11 @@
+Code-Review+1: Ha Van Tu <tuhv@vn.fujitsu.com>
+Code-Review+1: pawnesh kumar <pawnesh.kumar@nectechnologies.in>
+Code-Review+2: Matthew Oliver <matt@oliver.net.au>
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Workflow+1: Alistair Coles <alistair.coles@hpe.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 12 Oct 2016 13:39:23 +0000
+Reviewed-on: https://review.openstack.org/366538
+Project: openstack/deb-swift
+Branch: refs/heads/master
