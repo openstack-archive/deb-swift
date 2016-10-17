@@ -1,3 +1,10 @@
+swift (2.10.0-3) UNRELEASED; urgency=medium
+
+  * Run swift-drive-audit cron by root
+    (needed for /var/log/kern.log reading and umount command)
+
+ -- Ondřej Nový <onovy@debian.org>  Mon, 17 Oct 2016 12:54:42 +0200
+
 swift (2.10.0-2) unstable; urgency=medium
 
   * Uploading to unstable
