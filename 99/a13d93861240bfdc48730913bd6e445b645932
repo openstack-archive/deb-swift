@@ -1,0 +1,8 @@
+Code-Review+2: Samuel Merritt <sam@swiftstack.com>
+Workflow+1: Samuel Merritt <sam@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 20 Oct 2016 20:03:48 +0000
+Reviewed-on: https://review.openstack.org/388843
+Project: openstack/deb-swift
+Branch: refs/heads/master
