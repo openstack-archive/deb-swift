@@ -1,0 +1,9 @@
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Workflow+1: Tim Burke <tim@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 01 Nov 2016 21:48:27 +0000
+Reviewed-on: https://review.openstack.org/387655
+Project: openstack/deb-swift
+Branch: refs/heads/master
