@@ -1,0 +1,10 @@
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Code-Review+2: Samuel Merritt <sam@swiftstack.com>
+Workflow+1: Samuel Merritt <sam@swiftstack.com>
+Code-Review+1: chenyingnan <chenyingnan@inspur.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 03 Nov 2016 02:07:48 +0000
+Reviewed-on: https://review.openstack.org/373784
+Project: openstack/deb-swift
+Branch: refs/heads/master

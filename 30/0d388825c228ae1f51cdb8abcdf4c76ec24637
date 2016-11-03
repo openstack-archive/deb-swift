@@ -1,0 +1,11 @@
+Code-Review+1: Kazuhiro MIYAHARA <miyahara.kazuhiro@lab.ntt.co.jp>
+Code-Review+1: Mohit Motiani <mohit.motiani@intel.com>
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Code-Review+2: Matthew Oliver <matt@oliver.net.au>
+Workflow+1: Matthew Oliver <matt@oliver.net.au>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 03 Nov 2016 02:00:32 +0000
+Reviewed-on: https://review.openstack.org/342765
+Project: openstack/deb-swift
+Branch: refs/heads/master
