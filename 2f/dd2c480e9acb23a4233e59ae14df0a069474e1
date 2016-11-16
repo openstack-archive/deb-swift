@@ -1,0 +1,10 @@
+Code-Review+2: Pete Zaitcev <zaitcev@kotori.zaitcev.us>
+Code-Review+1: Nadeem Syed <snadeem.hameed@gmail.com>
+Code-Review+2: Alistair Coles <alistair.coles@hpe.com>
+Workflow+1: Alistair Coles <alistair.coles@hpe.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 15 Nov 2016 19:42:58 +0000
+Reviewed-on: https://review.openstack.org/390903
+Project: openstack/deb-swift
+Branch: refs/heads/feature/hummingbird
