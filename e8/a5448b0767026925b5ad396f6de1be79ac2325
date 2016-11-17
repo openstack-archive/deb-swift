@@ -1,0 +1,9 @@
+Code-Review+2: Janie Richling <jrichli@us.ibm.com>
+Code-Review+2: Christian Schwede <cschwede@redhat.com>
+Workflow+1: Christian Schwede <cschwede@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 17 Nov 2016 10:05:31 +0000
+Reviewed-on: https://review.openstack.org/397980
+Project: openstack/deb-swift
+Branch: refs/heads/master
