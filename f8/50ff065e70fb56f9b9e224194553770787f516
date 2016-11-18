@@ -1,0 +1,9 @@
+Code-Review+2: Christian Schwede <cschwede@redhat.com>
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Workflow+1: Thiago da Silva <thiago@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 18 Nov 2016 01:58:17 +0000
+Reviewed-on: https://review.openstack.org/391682
+Project: openstack/deb-swift
+Branch: refs/heads/master
