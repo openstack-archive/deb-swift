@@ -1,0 +1,127 @@
+From 5941f26ceac9c62c54f3b5bb52f0bb53feddd355 Mon Sep 17 00:00:00 2001
+From: Christian Schwede <cschwede@redhat.com>
+Date: Fri, 7 Oct 2016 12:17:08 +0000
+Subject: [PATCH] Throttle update_auditor_status calls
+Origin: https://github.com/openstack/swift/commit/5941f26ceac9c62c54f3b5bb52f0bb53feddd355
+
+If there are quite a few nearly empty partitions per disk you might see
+some write load even if your cluster is unused. The auditor will update
+the status file after every partition, and this might happen multiple
+times within a second if there is not much data stored yet.
+
+This patch throttles updates, and will only write out an updated status
+if the file was last updated more than a minute ago.
+
+Cherry-picked from master/77f5b201248c0684d87289540d3f94873f5c5e38.
+
+Closes-Bug: 1631352
+Change-Id: Ib61ec9cd945e6b2d28756f6ca47801674a7e6060
+---
+ swift/obj/diskfile.py          | 11 ++++++++++
+ test/unit/obj/test_diskfile.py | 50 +++++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 56 insertions(+), 5 deletions(-)
+
+diff --git a/swift/obj/diskfile.py b/swift/obj/diskfile.py
+index 776ede0..81ae00a 100644
+--- a/swift/obj/diskfile.py
++++ b/swift/obj/diskfile.py
+@@ -88,6 +88,7 @@
+ get_data_dir = partial(get_policy_string, DATADIR_BASE)
+ get_async_dir = partial(get_policy_string, ASYNCDIR_BASE)
+ get_tmp_dir = partial(get_policy_string, TMP_BASE)
++MIN_TIME_UPDATE_AUDITOR_STATUS = 60
+ 
+ 
+ def _get_filename(fd):
+@@ -446,6 +447,16 @@ def update_auditor_status(datadir_path, logger, partitions, auditor_type):
+     auditor_status = os.path.join(
+         datadir_path, "auditor_status_%s.json" % auditor_type)
+     try:
++        mtime = os.stat(auditor_status).st_mtime
++    except OSError:
++        mtime = 0
++    recently_updated = (mtime + MIN_TIME_UPDATE_AUDITOR_STATUS) > time.time()
++    if recently_updated and len(partitions) > 0:
++        if logger:
++            logger.debug(
++                'Skipping the update of recently changed %s' % auditor_status)
++        return
++    try:
+         with open(auditor_status, "wb") as statusfile:
+             statusfile.write(status)
+     except (OSError, IOError) as e:
+diff --git a/test/unit/obj/test_diskfile.py b/test/unit/obj/test_diskfile.py
+index d70fd12..c241f91 100644
+--- a/test/unit/obj/test_diskfile.py
++++ b/test/unit/obj/test_diskfile.py
+@@ -38,7 +38,7 @@
+ from gzip import GzipFile
+ 
+ from eventlet import hubs, timeout, tpool
+-from swift.obj.diskfile import MD5_OF_EMPTY_STRING
++from swift.obj.diskfile import MD5_OF_EMPTY_STRING, update_auditor_status
+ from test.unit import (FakeLogger, mock as unit_mock, temptree,
+                        patch_policies, debug_logger, EMPTY_ETAG,
+                        make_timestamp_iter, DEFAULT_TEST_EC_TYPE,
+@@ -470,10 +470,13 @@ def test_auditor_status(self):
+             os.makedirs(os.path.join(tmpdir, "sdf", "objects", "1", "a", "b"))
+             os.makedirs(os.path.join(tmpdir, "sdf", "objects", "2", "a", "b"))
+ 
+-            # Auditor starts, there are two partitions to check
+-            gen = diskfile.object_audit_location_generator(tmpdir, False)
+-            gen.next()
+-            gen.next()
++            # Pretend that some time passed between each partition
++            with mock.patch('os.stat') as mock_stat:
++                mock_stat.return_value.st_mtime = time() - 60
++                # Auditor starts, there are two partitions to check
++                gen = diskfile.object_audit_location_generator(tmpdir, False)
++                gen.next()
++                gen.next()
+ 
+             # Auditor stopped for some reason without raising StopIterator in
+             # the generator and restarts There is now only one remaining
+@@ -499,6 +502,43 @@ def test_auditor_status(self):
+             gen.next()
+             gen.next()
+ 
++    def test_update_auditor_status_throttle(self):
++        # If there are a lot of nearly empty partitions, the
++        # update_auditor_status will write the status file many times a second,
++        # creating some unexpected high write load. This test ensures that the
++        # status file is only written once a minute.
++        with temptree([]) as tmpdir:
++            os.makedirs(os.path.join(tmpdir, "sdf", "objects", "1", "a", "b"))
++            with mock.patch('__builtin__.open') as mock_open:
++                # File does not exist yet - write expected
++                update_auditor_status(tmpdir, None, ['42'], "ALL")
++                self.assertEqual(1, mock_open.call_count)
++
++                mock_open.reset_mock()
++
++                # File exists, updated just now - no write expected
++                with mock.patch('os.stat') as mock_stat:
++                    mock_stat.return_value.st_mtime = time()
++                    update_auditor_status(tmpdir, None, ['42'], "ALL")
++                    self.assertEqual(0, mock_open.call_count)
++
++                mock_open.reset_mock()
++
++                # File exists, updated just now, but empty partition list. This
++                # is a finalizing call, write expected
++                with mock.patch('os.stat') as mock_stat:
++                    mock_stat.return_value.st_mtime = time()
++                    update_auditor_status(tmpdir, None, [], "ALL")
++                    self.assertEqual(1, mock_open.call_count)
++
++                mock_open.reset_mock()
++
++                # File updated more than 60 seconds ago - write expected
++                with mock.patch('os.stat') as mock_stat:
++                    mock_stat.return_value.st_mtime = time() - 61
++                    update_auditor_status(tmpdir, None, ['42'], "ALL")
++                    self.assertEqual(1, mock_open.call_count)
++
+ 
+ class TestDiskFileRouter(unittest.TestCase):
+ 

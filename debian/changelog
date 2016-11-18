@@ -1,6 +1,15 @@
 swift (2.10.0-4) UNRELEASED; urgency=medium
 
   * Bumped debhelper version to 10
+  * Added upstream stable patches:
+    - Add_a_configurable_URL_base_to_staticweb.patch
+    - Fix_KeyError_when_auditor_finds_an_expired_object.patch
+    - Imported_Translations_from_Zanata.patch
+    - Make_ECDiskFileReader_check_fragment_metadata.patch
+    - Prevent_ssync_writing_bad_fragment_data_to_diskfile.patch
+    - Throttle_update_auditor_status_calls.patch
+  * Cherry-picked upstream patch:
+    - Set_owner_of_drive-audit_recon_cache_to_swift_user.patch
 
  -- Ondřej Nový <onovy@debian.org>  Thu, 17 Nov 2016 16:43:33 +0100
 
