@@ -1,0 +1,10 @@
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Code-Review+1: Nadeem Syed <snadeem.hameed@gmail.com>
+Code-Review+2: Matthew Oliver <matt@oliver.net.au>
+Workflow+1: Matthew Oliver <matt@oliver.net.au>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 24 Nov 2016 00:42:45 +0000
+Reviewed-on: https://review.openstack.org/400286
+Project: openstack/deb-swift
+Branch: refs/heads/feature/hummingbird
