@@ -1,0 +1,10 @@
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+1: Chris Auston <cfauston@us.ibm.com>
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 03 Dec 2016 00:06:51 +0000
+Reviewed-on: https://review.openstack.org/405031
+Project: openstack/deb-swift
+Branch: refs/heads/master
