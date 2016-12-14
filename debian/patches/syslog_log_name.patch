@@ -119,7 +119,7 @@ Last-Update: 2016-07-05
  # log_address = /dev/log
 --- a/etc/drive-audit.conf-sample
 +++ b/etc/drive-audit.conf-sample
-@@ -2,7 +2,7 @@
+@@ -3,7 +3,7 @@
  # device_dir = /srv/node
  #
  # You can specify default log routing here if you want:
@@ -289,7 +289,7 @@ Last-Update: 2016-07-05
  # set log_facility = LOG_LOCAL0
  # set log_level = INFO
  # set log_headers = false
-@@ -591,7 +591,7 @@
+@@ -603,7 +603,7 @@
  [filter:proxy-logging]
  use = egg:swift#proxy_logging
  # If not set, logging directives from [DEFAULT] without "access_" will be used
@@ -298,7 +298,7 @@ Last-Update: 2016-07-05
  # access_log_facility = LOG_LOCAL0
  # access_log_level = INFO
  # access_log_address = /dev/log
-@@ -718,7 +718,7 @@
+@@ -730,7 +730,7 @@
  # shunt_inbound_x_timestamp = true
  #
  # You can override the default log routing for this filter here:
