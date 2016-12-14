@@ -50,6 +50,8 @@ from collections import defaultdict
 from eventlet import Timeout
 from eventlet.hubs import trampoline
 import six
+from pyeclib.ec_iface import ECDriverError, ECInvalidFragmentMetadata, \
+    ECBadFragmentChecksum, ECInvalidParameter
 
 from swift import gettext_ as _
 from swift.common.constraints import check_mount, check_dir
@@ -88,6 +90,7 @@ TMP_BASE = 'tmp'
 get_data_dir = partial(get_policy_string, DATADIR_BASE)
 get_async_dir = partial(get_policy_string, ASYNCDIR_BASE)
 get_tmp_dir = partial(get_policy_string, TMP_BASE)
+MIN_TIME_UPDATE_AUDITOR_STATUS = 60
 
 
 def _get_filename(fd):
@@ -270,7 +273,8 @@ def consolidate_hashes(partition_dir):
             with open(invalidations_file, 'rb') as inv_fh:
                 for line in inv_fh:
                     suffix = line.strip()
-                    if hashes is not None and hashes.get(suffix) is not None:
+                    if hashes is not None and \
+                            hashes.get(suffix, '') is not None:
                         hashes[suffix] = None
                         modified = True
         except (IOError, OSError) as e:
@@ -445,6 +449,16 @@ def update_auditor_status(datadir_path, logger, partitions, auditor_type):
         status = status.encode('utf8')
     auditor_status = os.path.join(
         datadir_path, "auditor_status_%s.json" % auditor_type)
+    try:
+        mtime = os.stat(auditor_status).st_mtime
+    except OSError:
+        mtime = 0
+    recently_updated = (mtime + MIN_TIME_UPDATE_AUDITOR_STATUS) > time.time()
+    if recently_updated and len(partitions) > 0:
+        if logger:
+            logger.debug(
+                'Skipping the update of recently changed %s' % auditor_status)
+        return
     try:
         with open(auditor_status, "wb") as statusfile:
             statusfile.write(status)
@@ -1037,6 +1051,7 @@ class BaseDiskFileManager(object):
                 if len(suff) == 3:
                     hashes.setdefault(suff, None)
             modified = True
+            self.logger.debug('Run listdir on %s', partition_path)
         hashes.update((suffix, None) for suffix in recalculate)
         for suffix, hash_ in hashes.items():
             if not hash_:
@@ -1582,6 +1597,15 @@ class BaseDiskFileReader(object):
     def manager(self):
         return self._diskfile.manager
 
+    def _init_checks(self):
+        if self._fp.tell() == 0:
+            self._started_at_0 = True
+            self._iter_etag = hashlib.md5()
+
+    def _update_checks(self, chunk):
+        if self._iter_etag:
+            self._iter_etag.update(chunk)
+
     def __iter__(self):
         """Returns an iterator over the data file."""
         try:
@@ -1589,14 +1613,11 @@ class BaseDiskFileReader(object):
             self._bytes_read = 0
             self._started_at_0 = False
             self._read_to_eof = False
-            if self._fp.tell() == 0:
-                self._started_at_0 = True
-                self._iter_etag = hashlib.md5()
+            self._init_checks()
             while True:
                 chunk = self._fp.read(self._disk_chunk_size)
                 if chunk:
-                    if self._iter_etag:
-                        self._iter_etag.update(chunk)
+                    self._update_checks(chunk)
                     self._bytes_read += len(chunk)
                     if self._bytes_read - dropped_cache > DROP_CACHE_WINDOW:
                         self._drop_cache(self._fp.fileno(), dropped_cache,
@@ -2560,7 +2581,79 @@ class DiskFileManager(BaseDiskFileManager):
 
 
 class ECDiskFileReader(BaseDiskFileReader):
-    pass
+    def __init__(self, fp, data_file, obj_size, etag,
+                 disk_chunk_size, keep_cache_size, device_path, logger,
+                 quarantine_hook, use_splice, pipe_size, diskfile,
+                 keep_cache=False):
+        super(ECDiskFileReader, self).__init__(
+            fp, data_file, obj_size, etag,
+            disk_chunk_size, keep_cache_size, device_path, logger,
+            quarantine_hook, use_splice, pipe_size, diskfile, keep_cache)
+        self.frag_buf = None
+        self.frag_offset = 0
+        self.frag_size = self._diskfile.policy.fragment_size
+
+    def _init_checks(self):
+        super(ECDiskFileReader, self)._init_checks()
+        # for a multi-range GET this will be called at the start of each range;
+        # only initialise the frag_buf for reads starting at 0.
+        # TODO: reset frag buf to '' if tell() shows that start is on a frag
+        # boundary so that we check frags selected by a range not starting at 0
+        if self._started_at_0:
+            self.frag_buf = ''
+        else:
+            self.frag_buf = None
+
+    def _check_frag(self, frag):
+        if not frag:
+            return
+        if not isinstance(frag, six.binary_type):
+            # ECInvalidParameter can be returned if the frag violates the input
+            # format so for safety, check the input chunk if it's binary to
+            # avoid quarantining a valid fragment archive.
+            self._diskfile._logger.warn(
+                _('Unexpected fragment data type (not quarantined)'
+                  '%(datadir)s: %(type)s at offset 0x%(offset)x'),
+                {'datadir': self._diskfile._datadir,
+                 'type': type(frag),
+                 'offset': self.frag_offset})
+            return
+
+        try:
+            self._diskfile.policy.pyeclib_driver.get_metadata(frag)
+        except (ECInvalidFragmentMetadata, ECBadFragmentChecksum,
+                ECInvalidParameter):
+            # Any of these exceptions may be returned from ECDriver with a
+            # corrupted fragment.
+            msg = 'Invalid EC metadata at offset 0x%x' % self.frag_offset
+            self._quarantine(msg)
+            # We have to terminate the response iter with an exception but it
+            # can't be StopIteration, this will produce a STDERR traceback in
+            # eventlet.wsgi if you have eventlet_debug turned on; but any
+            # attempt to finish the iterator cleanly won't trigger the needful
+            # error handling cleanup - failing to do so, and yet still failing
+            # to deliver all promised bytes will hang the HTTP connection
+            raise DiskFileQuarantined(msg)
+        except ECDriverError as err:
+            self._diskfile._logger.warn(
+                _('Problem checking EC fragment %(datadir)s: %(err)s'),
+                {'datadir': self._diskfile._datadir, 'err': err})
+
+    def _update_checks(self, chunk):
+        super(ECDiskFileReader, self)._update_checks(chunk)
+        if self.frag_buf is not None:
+            self.frag_buf += chunk
+            cursor = 0
+            while len(self.frag_buf) >= cursor + self.frag_size:
+                self._check_frag(self.frag_buf[cursor:cursor + self.frag_size])
+                cursor += self.frag_size
+                self.frag_offset += self.frag_size
+            if cursor:
+                self.frag_buf = self.frag_buf[cursor:]
+
+    def _handle_close_quarantine(self):
+        super(ECDiskFileReader, self)._handle_close_quarantine()
+        self._check_frag(self.frag_buf)
 
 
 class ECDiskFileWriter(BaseDiskFileWriter):

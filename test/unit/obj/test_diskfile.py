@@ -36,13 +36,14 @@ from tempfile import mkdtemp
 from hashlib import md5
 from contextlib import closing, contextmanager
 from gzip import GzipFile
+import pyeclib.ec_iface
 
 from eventlet import hubs, timeout, tpool
-from swift.obj.diskfile import MD5_OF_EMPTY_STRING
+from swift.obj.diskfile import MD5_OF_EMPTY_STRING, update_auditor_status
 from test.unit import (FakeLogger, mock as unit_mock, temptree,
                        patch_policies, debug_logger, EMPTY_ETAG,
                        make_timestamp_iter, DEFAULT_TEST_EC_TYPE,
-                       requires_o_tmpfile_support)
+                       requires_o_tmpfile_support, encode_frag_archive_bodies)
 from nose import SkipTest
 from swift.obj import diskfile
 from swift.common import utils
@@ -57,7 +58,7 @@ from swift.common.exceptions import DiskFileNotExist, DiskFileQuarantined, \
 from swift.common.storage_policy import (
     POLICIES, get_policy_string, StoragePolicy, ECStoragePolicy,
     BaseStoragePolicy, REPL_POLICY, EC_POLICY)
-
+from test.unit.obj.common import write_diskfile
 
 test_policies = [
     StoragePolicy(0, name='zero', is_default=True),
@@ -470,10 +471,13 @@ class TestObjectAuditLocationGenerator(unittest.TestCase):
             os.makedirs(os.path.join(tmpdir, "sdf", "objects", "1", "a", "b"))
             os.makedirs(os.path.join(tmpdir, "sdf", "objects", "2", "a", "b"))
 
-            # Auditor starts, there are two partitions to check
-            gen = diskfile.object_audit_location_generator(tmpdir, False)
-            gen.next()
-            gen.next()
+            # Pretend that some time passed between each partition
+            with mock.patch('os.stat') as mock_stat:
+                mock_stat.return_value.st_mtime = time() - 60
+                # Auditor starts, there are two partitions to check
+                gen = diskfile.object_audit_location_generator(tmpdir, False)
+                gen.next()
+                gen.next()
 
             # Auditor stopped for some reason without raising StopIterator in
             # the generator and restarts There is now only one remaining
@@ -498,6 +502,43 @@ class TestObjectAuditLocationGenerator(unittest.TestCase):
             gen = diskfile.object_audit_location_generator(tmpdir, False)
             gen.next()
             gen.next()
+
+    def test_update_auditor_status_throttle(self):
+        # If there are a lot of nearly empty partitions, the
+        # update_auditor_status will write the status file many times a second,
+        # creating some unexpected high write load. This test ensures that the
+        # status file is only written once a minute.
+        with temptree([]) as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "sdf", "objects", "1", "a", "b"))
+            with mock.patch('__builtin__.open') as mock_open:
+                # File does not exist yet - write expected
+                update_auditor_status(tmpdir, None, ['42'], "ALL")
+                self.assertEqual(1, mock_open.call_count)
+
+                mock_open.reset_mock()
+
+                # File exists, updated just now - no write expected
+                with mock.patch('os.stat') as mock_stat:
+                    mock_stat.return_value.st_mtime = time()
+                    update_auditor_status(tmpdir, None, ['42'], "ALL")
+                    self.assertEqual(0, mock_open.call_count)
+
+                mock_open.reset_mock()
+
+                # File exists, updated just now, but empty partition list. This
+                # is a finalizing call, write expected
+                with mock.patch('os.stat') as mock_stat:
+                    mock_stat.return_value.st_mtime = time()
+                    update_auditor_status(tmpdir, None, [], "ALL")
+                    self.assertEqual(1, mock_open.call_count)
+
+                mock_open.reset_mock()
+
+                # File updated more than 60 seconds ago - write expected
+                with mock.patch('os.stat') as mock_stat:
+                    mock_stat.return_value.st_mtime = time() - 61
+                    update_auditor_status(tmpdir, None, ['42'], "ALL")
+                    self.assertEqual(1, mock_open.call_count)
 
 
 class TestDiskFileRouter(unittest.TestCase):
@@ -2277,6 +2318,10 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         if timestamp is None:
             timestamp = time()
         timestamp = Timestamp(timestamp)
+
+        if df.policy.policy_type == EC_POLICY:
+            data = encode_frag_archive_bodies(df.policy, data)[df._frag_index]
+
         with df.create() as writer:
             new_metadata = {
                 'ETag': md5(data).hexdigest(),
@@ -2288,7 +2333,7 @@ class DiskFileMixin(BaseDiskFileTestMixin):
             writer.put(new_metadata)
             writer.commit(timestamp)
         df.open()
-        return df
+        return df, data
 
     def test_get_dev_path(self):
         self.df_mgr.devices = '/srv'
@@ -2348,7 +2393,8 @@ class DiskFileMixin(BaseDiskFileTestMixin):
 
     def test_get_metadata(self):
         timestamp = self.ts().internal
-        df = self._create_test_file('1234567890', timestamp=timestamp)
+        df, df_data = self._create_test_file('1234567890',
+                                             timestamp=timestamp)
         md = df.get_metadata()
         self.assertEqual(md['X-Timestamp'], timestamp)
 
@@ -2381,8 +2427,8 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         ts_data = next(ts_iter)
         metadata = {'X-Object-Meta-Test': 'test1',
                     'X-Object-Sysmeta-Test': 'test1'}
-        df = self._create_test_file(body, timestamp=ts_data.internal,
-                                    metadata=metadata)
+        df, df_data = self._create_test_file(body, timestamp=ts_data.internal,
+                                             metadata=metadata)
         expected = df.get_metadata()
         ts_meta = next(ts_iter)
         df.write_metadata({'X-Timestamp': ts_meta.internal,
@@ -2405,8 +2451,8 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         ts_data = next(ts_iter)
         metadata = {'X-Object-Meta-Test': 'test1',
                     'X-Object-Sysmeta-Test': 'test1'}
-        df = self._create_test_file(body, timestamp=ts_data.internal,
-                                    metadata=metadata)
+        df, df_data = self._create_test_file(body, timestamp=ts_data.internal,
+                                             metadata=metadata)
         self.assertIsNone(df.get_metafile_metadata())
 
         # now create a meta file
@@ -2437,7 +2483,12 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         df = self._get_open_disk_file(ts=self.ts().internal,
                                       extra_metadata=orig_metadata)
         with df.open():
-            self.assertEqual('1024', df._metadata['Content-Length'])
+            if df.policy.policy_type == EC_POLICY:
+                expected = df.policy.pyeclib_driver.get_segment_info(
+                    1024, df.policy.ec_segment_size)['fragment_size']
+            else:
+                expected = 1024
+            self.assertEqual(str(expected), df._metadata['Content-Length'])
         # write some new metadata (fast POST, don't send orig meta, at t0+1)
         df = self._simple_get_diskfile()
         df.write_metadata({'X-Timestamp': self.ts().internal,
@@ -2462,7 +2513,12 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         df = self._get_open_disk_file(ts=self.ts().internal,
                                       extra_metadata=orig_metadata)
         with df.open():
-            self.assertEqual('1024', df._metadata['Content-Length'])
+            if df.policy.policy_type == EC_POLICY:
+                expected = df.policy.pyeclib_driver.get_segment_info(
+                    1024, df.policy.ec_segment_size)['fragment_size']
+            else:
+                expected = 1024
+            self.assertEqual(str(expected), df._metadata['Content-Length'])
         # write some new metadata (fast POST, don't send orig meta, at t0+1s)
         df = self._simple_get_diskfile()
         df.write_metadata({'X-Timestamp': self.ts().internal,
@@ -2476,14 +2532,14 @@ class DiskFileMixin(BaseDiskFileTestMixin):
             self.assertEqual('Value1', df._metadata['X-Object-Sysmeta-Key1'])
 
     def test_disk_file_reader_iter(self):
-        df = self._create_test_file('1234567890')
+        df, df_data = self._create_test_file('1234567890')
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
-        self.assertEqual(''.join(reader), '1234567890')
+        self.assertEqual(''.join(reader), df_data)
         self.assertEqual(quarantine_msgs, [])
 
     def test_disk_file_reader_iter_w_quarantine(self):
-        df = self._create_test_file('1234567890')
+        df, df_data = self._create_test_file('1234567890')
 
         def raise_dfq(m):
             raise DiskFileQuarantined(m)
@@ -2493,94 +2549,96 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         self.assertRaises(DiskFileQuarantined, ''.join, reader)
 
     def test_disk_file_app_iter_corners(self):
-        df = self._create_test_file('1234567890')
+        df, df_data = self._create_test_file('1234567890')
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
         self.assertEqual(''.join(reader.app_iter_range(0, None)),
-                         '1234567890')
+                         df_data)
         self.assertEqual(quarantine_msgs, [])
         df = self._simple_get_diskfile()
         with df.open():
             reader = df.reader()
-            self.assertEqual(''.join(reader.app_iter_range(5, None)), '67890')
+            self.assertEqual(''.join(reader.app_iter_range(5, None)),
+                             df_data[5:])
 
     def test_disk_file_app_iter_range_w_none(self):
-        df = self._create_test_file('1234567890')
+        df, df_data = self._create_test_file('1234567890')
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
         self.assertEqual(''.join(reader.app_iter_range(None, None)),
-                         '1234567890')
+                         df_data)
         self.assertEqual(quarantine_msgs, [])
 
     def test_disk_file_app_iter_partial_closes(self):
-        df = self._create_test_file('1234567890')
+        df, df_data = self._create_test_file('1234567890')
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
         it = reader.app_iter_range(0, 5)
-        self.assertEqual(''.join(it), '12345')
+        self.assertEqual(''.join(it), df_data[:5])
         self.assertEqual(quarantine_msgs, [])
         self.assertTrue(reader._fp is None)
 
     def test_disk_file_app_iter_ranges(self):
-        df = self._create_test_file('012345678911234567892123456789')
+        df, df_data = self._create_test_file('012345678911234567892123456789')
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
         it = reader.app_iter_ranges([(0, 10), (10, 20), (20, 30)],
                                     'plain/text',
-                                    '\r\n--someheader\r\n', 30)
+                                    '\r\n--someheader\r\n', len(df_data))
         value = ''.join(it)
-        self.assertIn('0123456789', value)
-        self.assertIn('1123456789', value)
-        self.assertIn('2123456789', value)
+        self.assertIn(df_data[:10], value)
+        self.assertIn(df_data[10:20], value)
+        self.assertIn(df_data[20:30], value)
         self.assertEqual(quarantine_msgs, [])
 
     def test_disk_file_app_iter_ranges_w_quarantine(self):
-        df = self._create_test_file('012345678911234567892123456789')
+        df, df_data = self._create_test_file('012345678911234567892123456789')
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
+        self.assertEqual(len(df_data), reader._obj_size)  # sanity check
         reader._obj_size += 1
-        it = reader.app_iter_ranges([(0, 30)],
+        it = reader.app_iter_ranges([(0, len(df_data))],
                                     'plain/text',
-                                    '\r\n--someheader\r\n', 30)
+                                    '\r\n--someheader\r\n', len(df_data))
         value = ''.join(it)
-        self.assertIn('0123456789', value)
-        self.assertIn('1123456789', value)
-        self.assertIn('2123456789', value)
+        self.assertIn(df_data, value)
         self.assertEqual(quarantine_msgs,
-                         ["Bytes read: 30, does not match metadata: 31"])
+                         ["Bytes read: %s, does not match metadata: %s" %
+                          (len(df_data), len(df_data) + 1)])
 
     def test_disk_file_app_iter_ranges_w_no_etag_quarantine(self):
-        df = self._create_test_file('012345678911234567892123456789')
+        df, df_data = self._create_test_file('012345678911234567892123456789')
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
         it = reader.app_iter_ranges([(0, 10)],
                                     'plain/text',
-                                    '\r\n--someheader\r\n', 30)
+                                    '\r\n--someheader\r\n', len(df_data))
         value = ''.join(it)
-        self.assertIn('0123456789', value)
+        self.assertIn(df_data[:10], value)
         self.assertEqual(quarantine_msgs, [])
 
     def test_disk_file_app_iter_ranges_edges(self):
-        df = self._create_test_file('012345678911234567892123456789')
+        df, df_data = self._create_test_file('012345678911234567892123456789')
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
         it = reader.app_iter_ranges([(3, 10), (0, 2)], 'application/whatever',
-                                    '\r\n--someheader\r\n', 30)
+                                    '\r\n--someheader\r\n', len(df_data))
         value = ''.join(it)
-        self.assertIn('3456789', value)
-        self.assertIn('01', value)
+        self.assertIn(df_data[3:10], value)
+        self.assertIn(df_data[:2], value)
         self.assertEqual(quarantine_msgs, [])
 
     def test_disk_file_large_app_iter_ranges(self):
         # This test case is to make sure that the disk file app_iter_ranges
         # method all the paths being tested.
         long_str = '01234567890' * 65536
-        target_strs = ['3456789', long_str[0:65590]]
-        df = self._create_test_file(long_str)
+        df, df_data = self._create_test_file(long_str)
+        target_strs = [df_data[3:10], df_data[0:65590]]
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
         it = reader.app_iter_ranges([(3, 10), (0, 65590)], 'plain/text',
-                                    '5e816ff8b8b8e9a5d355497e5d9e0301', 655360)
+                                    '5e816ff8b8b8e9a5d355497e5d9e0301',
+                                    len(df_data))
 
         # The produced string actually missing the MIME headers
         # need to add these headers to make it as real MIME message.
@@ -2601,11 +2659,11 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         # This test case tests when empty value passed into app_iter_ranges
         # When ranges passed into the method is either empty array or None,
         # this method will yield empty string
-        df = self._create_test_file('012345678911234567892123456789')
+        df, df_data = self._create_test_file('012345678911234567892123456789')
         quarantine_msgs = []
         reader = df.reader(_quarantine_hook=quarantine_msgs.append)
         it = reader.app_iter_ranges([], 'application/whatever',
-                                    '\r\n--someheader\r\n', 100)
+                                    '\r\n--someheader\r\n', len(df_data))
         self.assertEqual(''.join(it), '')
 
         df = self._simple_get_diskfile()
@@ -2636,6 +2694,13 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         df = self._simple_get_diskfile(obj=obj_name, policy=policy,
                                        frag_index=frag_index)
         data = data or '0' * fsize
+        if policy.policy_type == EC_POLICY:
+            archives = encode_frag_archive_bodies(policy, data)
+            try:
+                data = archives[df._frag_index]
+            except IndexError:
+                data = archives[0]
+
         etag = md5()
         if ts:
             timestamp = Timestamp(ts)
@@ -2742,7 +2807,7 @@ class DiskFileMixin(BaseDiskFileTestMixin):
                 pass
             self.assertFalse(boo.called)
 
-        df = self._get_open_disk_file(fsize=5 * 1024, csize=256)
+        df = self._get_open_disk_file(fsize=50 * 1024, csize=256)
         with mock.patch("swift.obj.diskfile.drop_buffer_cache") as goo:
             for _ in df.reader(keep_cache=True):
                 pass
@@ -2934,8 +2999,8 @@ class DiskFileMixin(BaseDiskFileTestMixin):
                 self._get_open_disk_file)
 
     def test_quarantine_hashdir_not_a_directory(self):
-        df = self._create_test_file('1234567890', account="abc",
-                                    container='123', obj='xyz')
+        df, df_data = self._create_test_file('1234567890', account="abc",
+                                             container='123', obj='xyz')
         hashdir = df._datadir
         rmtree(hashdir)
         with open(hashdir, 'w'):
@@ -3028,7 +3093,7 @@ class DiskFileMixin(BaseDiskFileTestMixin):
                 pass
 
     def test_write_metadata(self):
-        df = self._create_test_file('1234567890')
+        df, df_data = self._create_test_file('1234567890')
         file_count = len(os.listdir(df._datadir))
         timestamp = Timestamp(time()).internal
         metadata = {'X-Timestamp': timestamp, 'X-Object-Meta-test': 'data'}
@@ -3040,7 +3105,7 @@ class DiskFileMixin(BaseDiskFileTestMixin):
 
     def test_write_metadata_with_content_type(self):
         # if metadata has content-type then its time should be in file name
-        df = self._create_test_file('1234567890')
+        df, df_data = self._create_test_file('1234567890')
         file_count = len(os.listdir(df._datadir))
         timestamp = Timestamp(time())
         metadata = {'X-Timestamp': timestamp.internal,
@@ -3057,7 +3122,8 @@ class DiskFileMixin(BaseDiskFileTestMixin):
     def test_write_metadata_with_older_content_type(self):
         # if metadata has content-type then its time should be in file name
         ts_iter = make_timestamp_iter()
-        df = self._create_test_file('1234567890', timestamp=ts_iter.next())
+        df, df_data = self._create_test_file('1234567890',
+                                             timestamp=ts_iter.next())
         file_count = len(os.listdir(df._datadir))
         timestamp = ts_iter.next()
         timestamp2 = ts_iter.next()
@@ -3077,7 +3143,8 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         # a meta file without content-type should be cleaned up in favour of
         # a meta file at same time with content-type
         ts_iter = make_timestamp_iter()
-        df = self._create_test_file('1234567890', timestamp=ts_iter.next())
+        df, df_data = self._create_test_file('1234567890',
+                                             timestamp=ts_iter.next())
         file_count = len(os.listdir(df._datadir))
         timestamp = ts_iter.next()
         timestamp2 = ts_iter.next()
@@ -3102,7 +3169,8 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         # file with content-type should be cleaned up in favour of a meta file
         # at newer time with content-type
         ts_iter = make_timestamp_iter()
-        df = self._create_test_file('1234567890', timestamp=ts_iter.next())
+        df, df_data = self._create_test_file('1234567890',
+                                             timestamp=ts_iter.next())
         file_count = len(os.listdir(df._datadir))
         timestamp = ts_iter.next()
         timestamp2 = ts_iter.next()
@@ -3381,9 +3449,10 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         self.assertFalse(os.path.exists(ts_fullpath))
 
     def test_from_audit_location(self):
-        hashdir = self._create_test_file(
+        df, df_data = self._create_test_file(
             'blah blah',
-            account='three', container='blind', obj='mice')._datadir
+            account='three', container='blind', obj='mice')
+        hashdir = df._datadir
         df = self.df_mgr.get_diskfile_from_audit_location(
             diskfile.AuditLocation(hashdir, self.existing_device, '0',
                                    policy=POLICIES.default))
@@ -3391,9 +3460,10 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         self.assertEqual(df._name, '/three/blind/mice')
 
     def test_from_audit_location_with_mismatched_hash(self):
-        hashdir = self._create_test_file(
+        df, df_data = self._create_test_file(
             'blah blah',
-            account='this', container='is', obj='right')._datadir
+            account='this', container='is', obj='right')
+        hashdir = df._datadir
         datafilename = [f for f in os.listdir(hashdir)
                         if f.endswith('.data')][0]
         datafile = os.path.join(hashdir, datafilename)
@@ -3638,7 +3708,12 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         self._get_open_disk_file()
         df = self._simple_get_diskfile()
         with df.open():
-            self.assertEqual(df.content_length, 1024)
+            if df.policy.policy_type == EC_POLICY:
+                expected = df.policy.pyeclib_driver.get_segment_info(
+                    1024, df.policy.ec_segment_size)['fragment_size']
+            else:
+                expected = 1024
+            self.assertEqual(df.content_length, expected)
 
     def test_diskfile_timestamp_not_open(self):
         df = self._simple_get_diskfile()
@@ -3789,14 +3864,18 @@ class DiskFileMixin(BaseDiskFileTestMixin):
         self.conf['keep_cache_size'] = 16384
         self.conf['disk_chunk_size'] = 4096
 
-        df = self._get_open_disk_file(fsize=16385)
+        df = self._get_open_disk_file(fsize=163840)
         reader = df.reader()
         self.assertTrue(reader.can_zero_copy_send())
         with mock.patch("swift.obj.diskfile.drop_buffer_cache") as dbc:
             with mock.patch("swift.obj.diskfile.DROP_CACHE_WINDOW", 4095):
                 with open('/dev/null', 'w') as devnull:
                     reader.zero_copy_send(devnull.fileno())
-                self.assertEqual(len(dbc.mock_calls), 5)
+                if df.policy.policy_type == EC_POLICY:
+                    expected = 4 + 1
+                else:
+                    expected = (4 * 10) + 1
+                self.assertEqual(len(dbc.mock_calls), expected)
 
     def test_zero_copy_turns_off_when_md5_sockets_not_supported(self):
         if not self._system_can_zero_copy():
@@ -4861,6 +4940,156 @@ class TestECDiskFile(DiskFileMixin, unittest.TestCase):
             except DiskFileError as e:
                 self.assertIn('frag_prefs', str(e))
 
+    def test_disk_file_app_iter_ranges_checks_only_aligned_frag_data(self):
+        policy = POLICIES.default
+        frag_size = policy.fragment_size
+        # make sure there are two fragment size worth of data on disk
+        data = 'ab' * policy.ec_segment_size
+        df, df_data = self._create_test_file(data)
+        quarantine_msgs = []
+        reader = df.reader(_quarantine_hook=quarantine_msgs.append)
+        # each range uses a fresh reader app_iter_range which triggers a disk
+        # read at the range offset - make sure each of those disk reads will
+        # fetch an amount of data from disk that is greater than but not equal
+        # to a fragment size
+        reader._disk_chunk_size = int(frag_size * 1.5)
+        with mock.patch.object(
+                reader._diskfile.policy.pyeclib_driver, 'get_metadata')\
+                as mock_get_metadata:
+            it = reader.app_iter_ranges(
+                [(0, 10), (10, 20),
+                 (frag_size + 20, frag_size + 30)],
+                'plain/text', '\r\n--someheader\r\n', len(df_data))
+            value = ''.join(it)
+        # check that only first range which starts at 0 triggers a frag check
+        self.assertEqual(1, mock_get_metadata.call_count)
+        self.assertIn(df_data[:10], value)
+        self.assertIn(df_data[10:20], value)
+        self.assertIn(df_data[frag_size + 20:frag_size + 30], value)
+        self.assertEqual(quarantine_msgs, [])
+
+    def test_reader_quarantines_corrupted_ec_archive(self):
+        # This has same purpose as
+        # TestAuditor.test_object_audit_checks_EC_fragments just making
+        # sure that checks happen in DiskFileReader layer.
+        policy = POLICIES.default
+        df, df_data = self._create_test_file('x' * policy.ec_segment_size,
+                                             timestamp=self.ts())
+
+        def do_test(corrupted_frag_body, expected_offset, expected_read):
+            # expected_offset is offset at which corruption should be reported
+            # expected_read is number of bytes that should be read before the
+            # exception is raised
+            ts = self.ts()
+            write_diskfile(df, ts, corrupted_frag_body)
+
+            # at the open for the diskfile, no error occurred
+            # reading first corrupt frag is sufficient to detect the corruption
+            df.open()
+            with self.assertRaises(DiskFileQuarantined) as cm:
+                reader = df.reader()
+                reader._disk_chunk_size = int(policy.fragment_size)
+                bytes_read = 0
+                for chunk in reader:
+                    bytes_read += len(chunk)
+
+            with self.assertRaises(DiskFileNotExist):
+                df.open()
+
+            self.assertEqual(expected_read, bytes_read)
+            self.assertEqual('Invalid EC metadata at offset 0x%x' %
+                             expected_offset, cm.exception.message)
+
+        # TODO with liberasurecode < 1.2.0 the EC metadata verification checks
+        # only the magic number at offset 59 bytes into the frag so we'll
+        # corrupt up to and including that. Once liberasurecode >= 1.2.0 is
+        # required we should be able to reduce the corruption length.
+        corruption_length = 64
+        # corrupted first frag can be detected
+        corrupted_frag_body = (' ' * corruption_length +
+                               df_data[corruption_length:])
+        do_test(corrupted_frag_body, 0, 0)
+
+        # corrupted the second frag can be also detected
+        corrupted_frag_body = (df_data + ' ' * corruption_length +
+                               df_data[corruption_length:])
+        do_test(corrupted_frag_body, len(df_data), len(df_data))
+
+        # if the second frag is shorter than frag size then corruption is
+        # detected when the reader is closed
+        corrupted_frag_body = (df_data + ' ' * corruption_length +
+                               df_data[corruption_length:-10])
+        do_test(corrupted_frag_body, len(df_data), len(corrupted_frag_body))
+
+    def test_reader_ec_exception_causes_quarantine(self):
+        policy = POLICIES.default
+
+        def do_test(exception):
+            df, df_data = self._create_test_file('x' * policy.ec_segment_size,
+                                                 timestamp=self.ts())
+            df.manager.logger.clear()
+
+            with mock.patch.object(df.policy.pyeclib_driver, 'get_metadata',
+                                   side_effect=exception):
+                df.open()
+                with self.assertRaises(DiskFileQuarantined) as cm:
+                    for chunk in df.reader():
+                        pass
+
+            with self.assertRaises(DiskFileNotExist):
+                df.open()
+
+            self.assertEqual('Invalid EC metadata at offset 0x0',
+                             cm.exception.message)
+            log_lines = df.manager.logger.get_lines_for_level('warning')
+            self.assertIn('Quarantined object', log_lines[0])
+            self.assertIn('Invalid EC metadata at offset 0x0', log_lines[0])
+
+        do_test(pyeclib.ec_iface.ECInvalidFragmentMetadata('testing'))
+        do_test(pyeclib.ec_iface.ECBadFragmentChecksum('testing'))
+        do_test(pyeclib.ec_iface.ECInvalidParameter('testing'))
+
+    def test_reader_ec_exception_does_not_cause_quarantine(self):
+        # ECDriverError should not cause quarantine, only certain subclasses
+        policy = POLICIES.default
+
+        df, df_data = self._create_test_file('x' * policy.ec_segment_size,
+                                             timestamp=self.ts())
+
+        with mock.patch.object(
+                df.policy.pyeclib_driver, 'get_metadata',
+                side_effect=pyeclib.ec_iface.ECDriverError('testing')):
+            df.open()
+            read_data = ''.join([d for d in df.reader()])
+        self.assertEqual(df_data, read_data)
+        log_lines = df.manager.logger.get_lines_for_level('warning')
+        self.assertIn('Problem checking EC fragment', log_lines[0])
+
+        df.open()  # not quarantined
+
+    def test_reader_frag_check_does_not_quarantine_if_its_not_binary(self):
+        # This may look weird but for super-safety, check the
+        # ECDiskFileReader._frag_check doesn't quarantine when non-binary
+        # type chunk incomming (that would occurre only from coding bug)
+        policy = POLICIES.default
+
+        df, df_data = self._create_test_file('x' * policy.ec_segment_size,
+                                             timestamp=self.ts())
+        df.open()
+        for invalid_type_chunk in (None, [], [[]], 1):
+            reader = df.reader()
+            reader._check_frag(invalid_type_chunk)
+
+        # None and [] are just skipped and [[]] and 1 are detected as invalid
+        # chunks
+        log_lines = df.manager.logger.get_lines_for_level('warning')
+        self.assertEqual(2, len(log_lines))
+        for log_line in log_lines:
+            self.assertIn(
+                'Unexpected fragment data type (not quarantined)', log_line)
+
+        df.open()  # not quarantined
+
 
 @patch_policies(with_ec_default=True)
 class TestSuffixHashes(unittest.TestCase):
@@ -5248,9 +5477,11 @@ class TestSuffixHashes(unittest.TestCase):
             self.assertFalse(os.path.exists(hashes_file))
             self.assertFalse(os.path.exists(inv_file))
 
-    def test_invalidate_hash_file_exists(self):
+    def test_invalidate_hash_empty_file_exists(self):
         for policy in self.iter_policies():
             df_mgr = self.df_router[policy]
+            hashes = df_mgr.get_hashes('sda1', '0', [], policy)
+            self.assertEqual(hashes, {})
             # create something to hash
             df = df_mgr.get_diskfile('sda1', '0', 'a', 'c', 'o',
                                      policy=policy)
@@ -5259,6 +5490,34 @@ class TestSuffixHashes(unittest.TestCase):
             suffix = os.path.basename(suffix_dir)
             hashes = df_mgr.get_hashes('sda1', '0', [], policy)
             self.assertIn(suffix, hashes)  # sanity
+
+    def test_invalidate_hash_consolidation(self):
+        def assert_consolidation(suffixes):
+            # verify that suffixes are invalidated after consolidation
+            with mock.patch('swift.obj.diskfile.lock_path') as mock_lock:
+                hashes = df_mgr.consolidate_hashes(part_path)
+            self.assertTrue(mock_lock.called)
+            for suffix in suffixes:
+                self.assertIn(suffix, hashes)
+                self.assertIsNone(hashes[suffix])
+            with open(hashes_file, 'rb') as f:
+                self.assertEqual(hashes, pickle.load(f))
+            with open(invalidations_file, 'rb') as f:
+                self.assertEqual("", f.read())
+            return hashes
+
+        for policy in self.iter_policies():
+            df_mgr = self.df_router[policy]
+            # create something to hash
+            df = df_mgr.get_diskfile('sda1', '0', 'a', 'c', 'o',
+                                     policy=policy)
+            df.delete(self.ts())
+            suffix_dir = os.path.dirname(df._datadir)
+            suffix = os.path.basename(suffix_dir)
+            original_hashes = df_mgr.get_hashes('sda1', '0', [], policy)
+            self.assertIn(suffix, original_hashes)  # sanity
+            self.assertIsNotNone(original_hashes[suffix])
+
             # sanity check hashes file
             part_path = os.path.join(self.devices, 'sda1',
                                      diskfile.get_data_dir(policy), '0')
@@ -5266,24 +5525,57 @@ class TestSuffixHashes(unittest.TestCase):
             invalidations_file = os.path.join(
                 part_path, diskfile.HASH_INVALIDATIONS_FILE)
             with open(hashes_file, 'rb') as f:
-                self.assertEqual(hashes, pickle.load(f))
+                self.assertEqual(original_hashes, pickle.load(f))
+            self.assertFalse(os.path.exists(invalidations_file))
 
             # invalidate the hash
             with mock.patch('swift.obj.diskfile.lock_path') as mock_lock:
                 df_mgr.invalidate_hash(suffix_dir)
             self.assertTrue(mock_lock.called)
+            # suffix should be in invalidations file
             with open(invalidations_file, 'rb') as f:
                 self.assertEqual(suffix + "\n", f.read())
+            # hashes file is unchanged
+            with open(hashes_file, 'rb') as f:
+                self.assertEqual(original_hashes, pickle.load(f))
 
             # consolidate the hash and the invalidations
-            with mock.patch('swift.obj.diskfile.lock_path') as mock_lock:
-                hashes = df_mgr.consolidate_hashes(part_path)
-            self.assertIsNone(hashes.get(suffix))
+            hashes = assert_consolidation([suffix])
 
+            # invalidate a different suffix hash in same partition but not in
+            # existing hashes.pkl
+            i = 0
+            while True:
+                df2 = df_mgr.get_diskfile('sda1', '0', 'a', 'c', 'o%d' % i,
+                                          policy=policy)
+                i += 1
+                suffix_dir2 = os.path.dirname(df2._datadir)
+                if suffix_dir != suffix_dir2:
+                    break
+
+            df2.delete(self.ts())
+            suffix2 = os.path.basename(suffix_dir2)
+            # suffix2 should be in invalidations file
+            with open(invalidations_file, 'rb') as f:
+                self.assertEqual(suffix2 + "\n", f.read())
+            # hashes file is not yet changed
             with open(hashes_file, 'rb') as f:
                 self.assertEqual(hashes, pickle.load(f))
+
+            # consolidate hashes
+            hashes = assert_consolidation([suffix, suffix2])
+
+            # invalidating suffix2 multiple times is ok
+            df2.delete(self.ts())
+            df2.delete(self.ts())
+            # suffix2 should be in invalidations file
             with open(invalidations_file, 'rb') as f:
-                self.assertEqual("", f.read())
+                self.assertEqual("%s\n%s\n" % (suffix2, suffix2), f.read())
+            # hashes file is not yet changed
+            with open(hashes_file, 'rb') as f:
+                self.assertEqual(hashes, pickle.load(f))
+            # consolidate hashes
+            assert_consolidation([suffix, suffix2])
 
     # invalidate_hash tests - error handling
 
@@ -5426,63 +5718,88 @@ class TestSuffixHashes(unittest.TestCase):
             hashes = df_mgr.get_hashes('sda1', '0', [], policy)
             self.assertEqual(hashes, {})
 
-    def test_hash_suffix_one_reclaim_tombstone_with_hash_pkl(self):
+    def test_hash_suffix_ts_cleanup_after_recalc(self):
         for policy in self.iter_policies():
             df_mgr = self.df_router[policy]
             df = df_mgr.get_diskfile(
                 'sda1', '0', 'a', 'c', 'o', policy=policy)
             suffix_dir = os.path.dirname(df._datadir)
-            part_dir = os.path.dirname(suffix_dir)
-            hash_file = os.path.join(part_dir, diskfile.HASH_FILE)
+            suffix = os.path.basename(suffix_dir)
 
             # scale back reclaim age a bit
             df_mgr.reclaim_age = 1000
-            # write a tombstone that's just a *little* older
-            old_time = time() - 1001
+            # write a valid tombstone
+            old_time = time() - 500
             timestamp = Timestamp(old_time)
             df.delete(timestamp.internal)
             hashes = df_mgr.get_hashes('sda1', '0', [], policy)
-            # sanity
-            self.assertEqual(hashes, {})
-            self.assertFalse(os.path.exists(df._datadir))
+            self.assertIn(suffix, hashes)
+            self.assertIsNotNone(hashes[suffix])
 
-            hash_timestamp = os.stat(hash_file).st_mtime
-
-            # if hash.pkl exists, that .ts file is not reclaimed
-            df = df_mgr.get_diskfile(
-                'sda1', '0', 'a', 'c', 'o', policy=policy)
-            df.delete(timestamp.internal)
-
-            hashes = df_mgr.get_hashes('sda1', '0', [], policy)
-            # This was a cached value so the value looks empty
-            self.assertEqual(hashes, {})
-            # and the hash.pkl is not touched
-            self.assertEqual(hash_timestamp, os.stat(hash_file).st_mtime)
-            # and we still have tombstone entry
+            # we have tombstone entry
             tombstone = '%s.ts' % timestamp.internal
             self.assertTrue(os.path.exists(df._datadir))
             self.assertIn(tombstone, os.listdir(df._datadir))
+
+            # lower reclaim age to force tombstone reclaiming
+            df_mgr.reclaim_age = 200
+
+            # not cleaning up because suffix not invalidated
+            hashes = df_mgr.get_hashes('sda1', '0', [], policy)
+            self.assertTrue(os.path.exists(df._datadir))
+            self.assertIn(tombstone, os.listdir(df._datadir))
+            self.assertIn(suffix, hashes)
+            self.assertIsNotNone(hashes[suffix])
+
+            # recalculating suffix hash cause cleanup
+            hashes = df_mgr.get_hashes('sda1', '0', [suffix], policy)
+
+            self.assertEqual(hashes, {})
+            self.assertFalse(os.path.exists(df._datadir))
+
+    def test_hash_suffix_ts_cleanup_after_invalidate_hash(self):
+        for policy in self.iter_policies():
+            df_mgr = self.df_router[policy]
+            df = df_mgr.get_diskfile(
+                'sda1', '0', 'a', 'c', 'o', policy=policy)
+            suffix_dir = os.path.dirname(df._datadir)
+            suffix = os.path.basename(suffix_dir)
+
+            # scale back reclaim age a bit
+            df_mgr.reclaim_age = 1000
+            # write a valid tombstone
+            old_time = time() - 500
+            timestamp = Timestamp(old_time)
+            df.delete(timestamp.internal)
+            hashes = df_mgr.get_hashes('sda1', '0', [], policy)
+            self.assertIn(suffix, hashes)
+            self.assertIsNotNone(hashes[suffix])
+
+            # we have tombstone entry
+            tombstone = '%s.ts' % timestamp.internal
+            self.assertTrue(os.path.exists(df._datadir))
+            self.assertIn(tombstone, os.listdir(df._datadir))
+
+            # lower reclaim age to force tombstone reclaiming
+            df_mgr.reclaim_age = 200
+
+            # not cleaning up because suffix not invalidated
+            hashes = df_mgr.get_hashes('sda1', '0', [], policy)
+            self.assertTrue(os.path.exists(df._datadir))
+            self.assertIn(tombstone, os.listdir(df._datadir))
+            self.assertIn(suffix, hashes)
+            self.assertIsNotNone(hashes[suffix])
 
             # However if we call invalidate_hash for the suffix dir,
             # get_hashes can reclaim the tombstone
             with mock.patch('swift.obj.diskfile.lock_path'):
                 df_mgr.invalidate_hash(suffix_dir)
 
+            # updating invalidated hashes cause cleanup
             hashes = df_mgr.get_hashes('sda1', '0', [], policy)
 
             self.assertEqual(hashes, {})
-            # If we have no other objects in the suffix, get_hashes
-            # doesn't reclaim anything
-            self.assertTrue(os.path.exists(df._datadir))
-            self.assertIn(tombstone, os.listdir(df._datadir))
-            self.assertEqual(hash_timestamp, os.stat(hash_file).st_mtime)
-
-            # *BUT* if suffix value is given to recalc, it can force to recaim!
-            suffix = os.path.dirname(suffix_dir)
-            hashes = df_mgr.get_hashes('sda1', '0', [suffix], policy)
             self.assertFalse(os.path.exists(df._datadir))
-            # hash.pkl was updated
-            self.assertGreater(os.stat(hash_file).st_mtime, hash_timestamp)
 
     def test_hash_suffix_one_reclaim_and_one_valid_tombstone(self):
         for policy in self.iter_policies():
