@@ -1,0 +1,9 @@
+Code-Review+1: Travis McPeak <tmcpeak@us.ibm.com>
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 20 Dec 2016 19:45:21 +0000
+Reviewed-on: https://review.openstack.org/364892
+Project: openstack/deb-swift
+Branch: refs/heads/master
