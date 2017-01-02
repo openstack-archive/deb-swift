@@ -5,3 +5,6 @@ Depends: swift-proxy,
          swift-account,
          swift-object-expirer,
          swift-drive-audit,
+
+Test-Command: set -e ; for py in $(pyversions -r 2>/dev/null) ; do cd "$ADTTMP" ; echo "Testing with $py:" ; $py -c "import swift; print swift" ; done
+Depends: python-all, python-swift
