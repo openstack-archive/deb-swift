@@ -1,0 +1,88 @@
+#!/bin/bash
+#----------------
+# Testing daemons
+#----------------
+
+set -e
+
+export SYSTEMD_PAGER=
+
+# Daemons to test
+DAEMONS=(
+    swift-account
+    swift-account-auditor
+    swift-account-reaper
+    swift-account-replicator
+    swift-container
+    swift-container-auditor
+    swift-container-reconciler
+    swift-container-replicator
+    swift-container-sync
+    swift-container-updater
+    swift-object
+    swift-object-auditor
+    swift-object-expirer
+    swift-object-reconstructor
+    swift-object-replicator
+    swift-object-updater
+    swift-proxy
+)
+
+
+echo "##### Create rings #####"
+mkdir -p /srv/node/sda1
+chown swift:swift /srv/node/sda1
+cd /etc/swift
+
+swift-ring-builder account.builder create 4 1 1
+swift-ring-builder object.builder create 4 1 1
+swift-ring-builder container.builder create 4 1 1
+
+swift-ring-builder account.builder add r1z1-127.0.0.1:6202/sda1 1
+swift-ring-builder container.builder add r1z1-127.0.0.1:6201/sda1 1
+swift-ring-builder object.builder add r1z1-127.0.0.1:6200/sda1 1
+
+swift-ring-builder account.builder rebalance
+swift-ring-builder container.builder rebalance
+swift-ring-builder object.builder rebalance
+
+echo "##### Start all daemons #####"
+for DAEMON in "${DAEMONS[@]}"; do
+    service "$DAEMON" restart
+done
+
+echo "##### Waiting for start #####"
+# Swift daemons sometimes crash after couple of seconds from start
+sleep 10
+
+echo "##### HTTP GET #####"
+echo -n "Object: "
+wget --no-verbose -t 5 --retry-connrefused --no-proxy -O - \
+    http://127.0.0.1:6200/recon/version 2>&1
+echo ""
+echo -n "Container: "
+wget --no-verbose -t 5 --retry-connrefused --no-proxy -O - \
+    http://127.0.0.1:6201/recon/version 2>&1
+echo ""
+echo -n "Account: "
+wget --no-verbose -t 5 --retry-connrefused --no-proxy -O - \
+    http://127.0.0.1:6202/recon/version 2>&1
+echo ""
+echo -n "Proxy: "
+wget --no-verbose -t 5 --retry-connrefused --no-proxy -O - \
+    http://127.0.0.1:8080/info 2>&1
+echo ""
+
+echo "##### Check all daemons #####"
+for DAEMON in "${DAEMONS[@]}"; do
+    service "$DAEMON" status </dev/null
+done
+
+echo "##### Stop all daemons #####"
+for DAEMON in "${DAEMONS[@]}"; do
+    service "$DAEMON" stop
+done
+
+echo "##### ALL DONE #####"
+
+exit 0
