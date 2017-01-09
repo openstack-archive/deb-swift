@@ -1,0 +1,10 @@
+Code-Review-1: Alistair Coles <alistair.coles@hpe.com>
+Code-Review-1: Janie Richling <jrichli@us.ibm.com>
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 06 Jan 2017 18:00:26 +0000
+Reviewed-on: https://review.openstack.org/416577
+Project: openstack/deb-swift
+Branch: refs/heads/master
