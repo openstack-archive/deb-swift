@@ -1,0 +1,11 @@
+Code-Review+1: Kazuhiro MIYAHARA <miyahara.kazuhiro@lab.ntt.co.jp>
+Code-Review+1: lixinhu <lixinhu@inspur.com>
+Code-Review+2: Kota Tsuyuzaki <tsuyuzaki.kota@lab.ntt.co.jp>
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Workflow+1: Tim Burke <tim@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 11 Jan 2017 18:58:36 +0000
+Reviewed-on: https://review.openstack.org/398523
+Project: openstack/deb-swift
+Branch: refs/heads/master
