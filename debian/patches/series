@@ -1,2 +1,4 @@
 sphinx_reproducible_build.patch
 syslog_log_name.patch
+Quarantine_malformed_database_schema_SQLite_errors.patch
+For_any_part_only_one_replica_can_move_in_a_rebalance.patch

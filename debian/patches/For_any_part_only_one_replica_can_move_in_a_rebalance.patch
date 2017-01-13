@@ -1,0 +1,234 @@
+From e5dd050113646a93a0fe7fb1aed4f1cafdc9139f Mon Sep 17 00:00:00 2001
+From: cheng <shcli@cn.ibm.com>
+Date: Sun, 24 Jul 2016 01:10:36 +0000
+Subject: [PATCH] For any part, only one replica can move in a rebalance
+
+With a min_part_hours of zero, it's possible to move more than one
+replicas of the same part in a single rebalance.
+
+This change in behavior only effects min_part_hour zero rings, which
+are understood to be uncommon in production mostly because of this
+very specific and strange behavior of min_part_hour zero rings.
+
+With this change, no matter how small your min_part_hours it will
+always require at least N rebalances to move N part-replicas of the
+same part.
+
+To supplement the existing persisted _last_part_moves structure to
+enforce min_part_hours, this change adds a _part_moved_bitmap that
+exists only during the life of the rebalance, to track when rebalance
+moves a part in order to prevent another replicas of the same part
+from being moved in the same rebalance.
+
+Add authors: Clay Gerrard, clay.gerrard@gmail.com
+             Christian Schwede, cschwede@redhat.com
+
+Closes-bug: #1586167
+
+Change-Id: Ia1629abd5ce6e1b3acc2e94f818ed8223eed993a
+(cherry picked from commit ce26e78)
+---
+
+diff --git a/swift/common/ring/builder.py b/swift/common/ring/builder.py
+index ef4f095..f4f2a83 100644
+--- a/swift/common/ring/builder.py
++++ b/swift/common/ring/builder.py
+@@ -108,6 +108,8 @@
+         # a device overrides this behavior as it's assumed that's only
+         # done because of device failure.
+         self._last_part_moves = None
++        # _part_moved_bitmap record parts have been moved
++        self._part_moved_bitmap = None
+         # _last_part_moves_epoch indicates the time the offsets in
+         # _last_part_moves is based on.
+         self._last_part_moves_epoch = 0
+@@ -124,6 +126,19 @@
+             self.logger.disabled = True
+             # silence "no handler for X" error messages
+             self.logger.addHandler(NullHandler())
++
++    def _set_part_moved(self, part):
++        self._last_part_moves[part] = 0
++        byte, bit = divmod(part, 8)
++        self._part_moved_bitmap[byte] |= (128 >> bit)
++
++    def _has_part_moved(self, part):
++        byte, bit = divmod(part, 8)
++        return bool(self._part_moved_bitmap[byte] & (128 >> bit))
++
++    def _can_part_move(self, part):
++        return (self._last_part_moves[part] >= self.min_part_hours and
++                not self._has_part_moved(part))
+ 
+     @contextmanager
+     def debug(self):
+@@ -437,6 +452,7 @@
+         if self._last_part_moves is None:
+             self.logger.debug("New builder; performing initial balance")
+             self._last_part_moves = array('B', itertools.repeat(0, self.parts))
++        self._part_moved_bitmap = bytearray(max(2 ** (self.part_power - 3), 1))
+         self._update_last_part_moves()
+ 
+         replica_plan = self._build_replica_plan()
+@@ -876,7 +892,7 @@
+                     dev_id = self._replica2part2dev[replica][part]
+                     if dev_id in dev_ids:
+                         self._replica2part2dev[replica][part] = NONE_DEV
+-                        self._last_part_moves[part] = 0
++                        self._set_part_moved(part)
+                         assign_parts[part].append(replica)
+                         self.logger.debug(
+                             "Gathered %d/%d from dev %d [dev removed]",
+@@ -964,7 +980,7 @@
+         # Now we gather partitions that are "at risk" because they aren't
+         # currently sufficient spread out across the cluster.
+         for part in range(self.parts):
+-            if self._last_part_moves[part] < self.min_part_hours:
++            if (not self._can_part_move(part)):
+                 continue
+             # First, add up the count of replicas at each tier for each
+             # partition.
+@@ -996,7 +1012,7 @@
+                 # has more than one replica of a part assigned to it - which
+                 # would have only been possible on rings built with an older
+                 # version of the code
+-                if (self._last_part_moves[part] < self.min_part_hours and
++                if (not self._can_part_move(part) and
+                         not replicas_at_tier[dev['tiers'][-1]] > 1):
+                     continue
+                 dev['parts_wanted'] += 1
+@@ -1008,7 +1024,7 @@
+                 self._replica2part2dev[replica][part] = NONE_DEV
+                 for tier in dev['tiers']:
+                     replicas_at_tier[tier] -= 1
+-                self._last_part_moves[part] = 0
++                self._set_part_moved(part)
+ 
+     def _gather_parts_for_balance_can_disperse(self, assign_parts, start,
+                                                replica_plan):
+@@ -1025,7 +1041,7 @@
+         # they have more partitions than their parts_wanted.
+         for offset in range(self.parts):
+             part = (start + offset) % self.parts
+-            if self._last_part_moves[part] < self.min_part_hours:
++            if (not self._can_part_move(part)):
+                 continue
+             # For each part we'll look at the devices holding those parts and
+             # see if any are overweight, keeping track of replicas_at_tier as
+@@ -1048,7 +1064,7 @@
+             overweight_dev_replica.sort(
+                 key=lambda dr: dr[0]['parts_wanted'])
+             for dev, replica in overweight_dev_replica:
+-                if self._last_part_moves[part] < self.min_part_hours:
++                if (not self._can_part_move(part)):
+                     break
+                 if any(replica_plan[tier]['min'] <=
+                        replicas_at_tier[tier] <
+@@ -1067,7 +1083,7 @@
+                 self._replica2part2dev[replica][part] = NONE_DEV
+                 for tier in dev['tiers']:
+                     replicas_at_tier[tier] -= 1
+-                self._last_part_moves[part] = 0
++                self._set_part_moved(part)
+ 
+     def _gather_parts_for_balance(self, assign_parts, replica_plan):
+         """
+@@ -1107,7 +1123,7 @@
+         """
+         for offset in range(self.parts):
+             part = (start + offset) % self.parts
+-            if self._last_part_moves[part] < self.min_part_hours:
++            if (not self._can_part_move(part)):
+                 continue
+             overweight_dev_replica = []
+             for replica in self._replicas_for_part(part):
+@@ -1124,7 +1140,7 @@
+             overweight_dev_replica.sort(
+                 key=lambda dr: dr[0]['parts_wanted'])
+             for dev, replica in overweight_dev_replica:
+-                if self._last_part_moves[part] < self.min_part_hours:
++                if (not self._can_part_move(part)):
+                     break
+                 # this is the most overweight_device holding a replica of this
+                 # part we don't know where it's going to end up - but we'll
+@@ -1136,7 +1152,7 @@
+                     "Gathered %d/%d from dev %d [weight forced]",
+                     part, replica, dev['id'])
+                 self._replica2part2dev[replica][part] = NONE_DEV
+-                self._last_part_moves[part] = 0
++                self._set_part_moved(part)
+ 
+     def _reassign_parts(self, reassign_parts, replica_plan):
+         """
+diff --git a/test/unit/common/ring/test_builder.py b/test/unit/common/ring/test_builder.py
+index 9702730..0007f10 100644
+--- a/test/unit/common/ring/test_builder.py
++++ b/test/unit/common/ring/test_builder.py
+@@ -723,7 +723,7 @@
+                     "Partition %d not in zones 0 and 1 (got %r)" %
+                     (part, zones))
+ 
+-    def test_min_part_hours_zero_will_move_whatever_it_takes(self):
++    def test_min_part_hours_zero_will_move_one_replica(self):
+         rb = ring.RingBuilder(8, 3, 0)
+         # there'll be at least one replica in z0 and z1
+         rb.add_dev({'id': 0, 'region': 0, 'zone': 0, 'weight': 0.5,
+@@ -747,6 +747,33 @@
+         rb.validate()
+ 
+         self.assertEqual(0, rb.dispersion)
++        # Only one replica could move, so some zones are quite unbalanced
++        self.assertAlmostEqual(rb.get_balance(), 66.66, delta=0.5)
++
++        # There was only zone 0 and 1 before adding more devices. Only one
++        # replica should have been moved, therefore we expect 256 parts in zone
++        # 0 and 1, and a total of 256 in zone 2,3, and 4
++        expected = defaultdict(int, {0: 256, 1: 256, 2: 86, 3: 85, 4: 85})
++        self.assertEqual(expected, self._partition_counts(rb, key='zone'))
++
++        parts_with_moved_count = defaultdict(int)
++        for part in range(rb.parts):
++            zones = set()
++            for replica in range(rb.replicas):
++                zones.add(rb.devs[rb._replica2part2dev[replica][part]]['zone'])
++            moved_replicas = len(zones - {0, 1})
++            parts_with_moved_count[moved_replicas] += 1
++
++        # We expect that every partition moved exactly one replica
++        expected = {1: 256}
++        self.assertEqual(parts_with_moved_count, expected)
++
++        # After rebalancing two more times, we expect that everything is in a
++        # good state
++        rb.rebalance(seed=3)
++        rb.rebalance(seed=3)
++
++        self.assertEqual(0, rb.dispersion)
+         # a balance of w/i a 1% isn't too bad for 3 replicas on 7
+         # devices when part power is only 8
+         self.assertAlmostEqual(rb.get_balance(), 0, delta=0.5)
+diff --git a/test/unit/common/ring/test_utils.py b/test/unit/common/ring/test_utils.py
+index c6d6b21..c40ce85 100644
+--- a/test/unit/common/ring/test_utils.py
++++ b/test/unit/common/ring/test_utils.py
+@@ -664,11 +664,18 @@
+                     'ip': '127.0.0.3', 'port': 10003, 'device': 'sdd1'})
+ 
+         # when the biggest tier has the smallest devices things get ugly
++        # can't move all the part-replicas in one rebalance
+         rb.rebalance(seed=100)
+         report = dispersion_report(rb, verbose=True)
+-        self.assertEqual(rb.dispersion, 70.3125)
++        self.assertEqual(rb.dispersion, 9.375)
++        self.assertEqual(report['worst_tier'], 'r1z1-127.0.0.1')
++        self.assertEqual(report['max_dispersion'], 7.18562874251497)
++        # do a sencond rebalance
++        rb.rebalance(seed=100)
++        report = dispersion_report(rb, verbose=True)
++        self.assertEqual(rb.dispersion, 50.0)
+         self.assertEqual(report['worst_tier'], 'r1z0-127.0.0.3')
+-        self.assertEqual(report['max_dispersion'], 88.23529411764706)
++        self.assertEqual(report['max_dispersion'], 50.0)
+ 
+         # ... but overload can square it
+         rb.set_overload(rb.get_required_overload())
