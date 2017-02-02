@@ -1,0 +1,9 @@
+Code-Review+2: Matthew Oliver <matt@oliver.net.au>
+Code-Review+2: Janie Richling <jrichli@us.ibm.com>
+Workflow+1: Janie Richling <jrichli@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 31 Jan 2017 14:05:54 +0000
+Reviewed-on: https://review.openstack.org/425496
+Project: openstack/deb-swift
+Branch: refs/heads/master
