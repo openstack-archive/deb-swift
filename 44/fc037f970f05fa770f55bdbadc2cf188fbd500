@@ -1,0 +1,9 @@
+Code-Review+1: Sachin Patil <psachin@redhat.com>
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Workflow+1: Tim Burke <tim@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 06 Feb 2017 22:44:18 +0000
+Reviewed-on: https://review.openstack.org/429554
+Project: openstack/deb-swift
+Branch: refs/heads/master
