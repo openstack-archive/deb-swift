@@ -1,0 +1,10 @@
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+2: Janie Richling <jrichli@us.ibm.com>
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Workflow+1: Thiago da Silva <thiago@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 12 Feb 2017 02:44:23 +0000
+Reviewed-on: https://review.openstack.org/432439
+Project: openstack/deb-swift
+Branch: refs/heads/master
