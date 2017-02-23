@@ -37,8 +37,8 @@ Build-Depends-Indep: python-coverage,
                      python-swiftclient,
                      python-xattr (>= 0.4),
 Standards-Version: 3.9.8
-Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-swift?h=debian%2Fnewton
-Vcs-Git: https://git.openstack.org/openstack/deb-swift -b debian/newton
+Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-swift?h=debian%2Focata
+Vcs-Git: https://git.openstack.org/openstack/deb-swift -b debian/ocata
 Homepage: https://github.com/openstack/swift
 
 Package: python-swift
