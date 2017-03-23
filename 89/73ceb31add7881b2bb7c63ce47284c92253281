@@ -1,0 +1,9 @@
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+2: Janie Richling <jrichli@us.ibm.com>
+Workflow+1: Janie Richling <jrichli@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 20 Feb 2017 21:55:27 +0000
+Reviewed-on: https://review.openstack.org/427476
+Project: openstack/deb-swift
+Branch: refs/heads/master

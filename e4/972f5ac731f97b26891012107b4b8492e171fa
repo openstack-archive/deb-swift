@@ -1,0 +1,10 @@
+Code-Review+2: Kota Tsuyuzaki <tsuyuzaki.kota@lab.ntt.co.jp>
+Code-Review+1: Mahati Chamarthy <mahati.chamarthy@gmail.com>
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Workflow+1: Tim Burke <tim@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 03 Mar 2017 23:08:34 +0000
+Reviewed-on: https://review.openstack.org/438231
+Project: openstack/deb-swift
+Branch: refs/heads/master

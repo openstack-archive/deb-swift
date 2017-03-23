@@ -1,0 +1,9 @@
+Code-Review+2: Mahati Chamarthy <mahati.chamarthy@gmail.com>
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Workflow+1: Tim Burke <tim@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 21 Mar 2017 17:37:12 +0000
+Reviewed-on: https://review.openstack.org/444604
+Project: openstack/deb-swift
+Branch: refs/heads/master

@@ -1,0 +1,9 @@
+Code-Review+1: Kazuhiro MIYAHARA <miyahara.kazuhiro@lab.ntt.co.jp>
+Code-Review+2: Alistair Coles <alistairncoles@gmail.com>
+Workflow+1: Alistair Coles <alistairncoles@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 14 Mar 2017 14:18:34 +0000
+Reviewed-on: https://review.openstack.org/429750
+Project: openstack/deb-swift
+Branch: refs/heads/master
