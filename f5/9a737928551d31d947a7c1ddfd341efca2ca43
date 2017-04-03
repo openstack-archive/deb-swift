@@ -1,0 +1,9 @@
+Code-Review+1: Jay Bryant <jungleboyj@electronicjungle.net>
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 03 Apr 2017 22:27:48 +0000
+Reviewed-on: https://review.openstack.org/449836
+Project: openstack/deb-swift
+Branch: refs/heads/stable/newton
