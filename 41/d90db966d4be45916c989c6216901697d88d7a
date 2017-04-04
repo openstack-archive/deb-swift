@@ -1,0 +1,9 @@
+Code-Review+1: Kazuhiro MIYAHARA <miyahara.kazuhiro@lab.ntt.co.jp>
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 04 Apr 2017 00:55:28 +0000
+Reviewed-on: https://review.openstack.org/448854
+Project: openstack/deb-swift
+Branch: refs/heads/stable/newton
