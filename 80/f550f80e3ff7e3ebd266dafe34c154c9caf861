@@ -1,0 +1,10 @@
+Code-Review+1: Matthew Oliver <matt@oliver.net.au>
+Code-Review+1: Sachin Patil <psachin@redhat.com>
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 17 Apr 2017 05:36:07 +0000
+Reviewed-on: https://review.openstack.org/456093
+Project: openstack/deb-swift
+Branch: refs/heads/stable/newton
