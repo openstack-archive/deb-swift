@@ -1,0 +1,26 @@
+From cc8ddf97b666ab91d48f6bc382f6bbdde52cc931 Mon Sep 17 00:00:00 2001
+From: Ondřej Nový <ondrej.novy@firma.seznam.cz>
+Date: Thu, 20 Apr 2017 16:57:15 +0200
+Subject: [PATCH] Fix unit tests on i386 and other archs
+Forwarded: https://review.openstack.org/#/c/458653/
+
+Change-Id: I4f84b725e220e28919570fd7f296b63b34d0375d
+---
+
+diff --git a/test/unit/common/test_utils.py b/test/unit/common/test_utils.py
+index c412b95..a00faf9 100644
+--- a/test/unit/common/test_utils.py
++++ b/test/unit/common/test_utils.py
+@@ -3591,6 +3591,12 @@
+         def _fake_syscall(*args):
+             called['syscall'] = args
+ 
++        # Test if current architecture supports changing of priority
++        try:
++            utils.NR_ioprio_set()
++        except OSError as e:
++            return unittest.skip(e)
++
+         with patch('swift.common.utils._libc_setpriority',
+                    _fake_setpriority), \
+                 patch('swift.common.utils._posix_syscall', _fake_syscall):
