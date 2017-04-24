@@ -1,0 +1,8 @@
+Code-Review+2: Christian Schwede <cschwede@redhat.com>
+Workflow+1: Christian Schwede <cschwede@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 24 Apr 2017 12:29:10 +0000
+Reviewed-on: https://review.openstack.org/456801
+Project: openstack/deb-swift
+Branch: refs/heads/master

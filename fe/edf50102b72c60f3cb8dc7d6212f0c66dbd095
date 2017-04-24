@@ -1,0 +1,9 @@
+Code-Review+2: Alistair Coles <alistairncoles@gmail.com>
+Workflow+1: Alistair Coles <alistairncoles@gmail.com>
+Code-Review+1: Christian Schwede <cschwede@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 24 Apr 2017 12:31:06 +0000
+Reviewed-on: https://review.openstack.org/456804
+Project: openstack/deb-swift
+Branch: refs/heads/master
