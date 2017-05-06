@@ -1,0 +1,8 @@
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 06 May 2017 10:17:18 +0000
+Reviewed-on: https://review.openstack.org/462983
+Project: openstack/deb-swift
+Branch: refs/heads/master
