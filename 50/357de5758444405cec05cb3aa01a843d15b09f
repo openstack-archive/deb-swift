@@ -1,0 +1,9 @@
+Code-Review+2: Alistair Coles <alistairncoles@gmail.com>
+Code-Review+2: Pete Zaitcev <zaitcev@kotori.zaitcev.us>
+Workflow+1: Pete Zaitcev <zaitcev@kotori.zaitcev.us>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 10 May 2017 14:51:35 +0000
+Reviewed-on: https://review.openstack.org/460346
+Project: openstack/deb-swift
+Branch: refs/heads/master
