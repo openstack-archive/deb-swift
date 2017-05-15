@@ -1,0 +1,10 @@
+Code-Review+1: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+1: Tim Burke <tim@swiftstack.com>
+Workflow+1: John Dickinson <me@not.mn>
+Code-Review+2: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 15 May 2017 19:17:15 +0000
+Reviewed-on: https://review.openstack.org/458485
+Project: openstack/deb-swift
+Branch: refs/heads/stable/newton
