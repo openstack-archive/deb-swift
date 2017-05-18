@@ -1,0 +1,11 @@
+Code-Review+2: Alistair Coles <alistairncoles@gmail.com>
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+1: Tim Burke <tim@swiftstack.com>
+Code-Review+2: Kota Tsuyuzaki <tsuyuzaki.kota@lab.ntt.co.jp>
+Workflow+1: Kota Tsuyuzaki <tsuyuzaki.kota@lab.ntt.co.jp>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 18 May 2017 10:18:31 +0000
+Reviewed-on: https://review.openstack.org/441921
+Project: openstack/deb-swift
+Branch: refs/heads/master
