@@ -1,0 +1,9 @@
+Code-Review+1: Tim Burke <tim@swiftstack.com>
+Code-Review+2: John Dickinson <me@not.mn>
+Workflow+1: John Dickinson <me@not.mn>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 26 May 2017 01:02:07 +0000
+Reviewed-on: https://review.openstack.org/458476
+Project: openstack/deb-swift
+Branch: refs/heads/stable/ocata
