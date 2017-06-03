@@ -139,7 +139,7 @@ from swift.common import utils
 from swift.common.utils import get_logger, \
     config_true_value, FileLikeIter, read_conf_dir, close_if_possible
 from swift.common.swob import Request, HTTPPreconditionFailed, \
-    HTTPRequestEntityTooLarge, HTTPBadRequest
+    HTTPRequestEntityTooLarge, HTTPBadRequest, HTTPException
 from swift.common.http import HTTP_MULTIPLE_CHOICES, HTTP_CREATED, \
     is_success, HTTP_OK
 from swift.common.constraints import check_account_format, MAX_FILE_SIZE
@@ -318,21 +318,25 @@ class ServerSideCopyMiddleware(object):
         self.container_name = container
         self.object_name = obj
 
-        # Save off original request method (COPY/POST) in case it gets mutated
-        # into PUT during handling. This way logging can display the method
-        # the client actually sent.
-        req.environ['swift.orig_req_method'] = req.method
+        try:
+            # In some cases, save off original request method since it gets
+            # mutated into PUT during handling. This way logging can display
+            # the method the client actually sent.
+            if req.method == 'PUT' and req.headers.get('X-Copy-From'):
+                return self.handle_PUT(req, start_response)
+            elif req.method == 'COPY':
+                req.environ['swift.orig_req_method'] = req.method
+                return self.handle_COPY(req, start_response)
+            elif req.method == 'POST' and self.object_post_as_copy:
+                req.environ['swift.orig_req_method'] = req.method
+                return self.handle_object_post_as_copy(req, start_response)
+            elif req.method == 'OPTIONS':
+                # Does not interfere with OPTIONS response from
+                # (account,container) servers and /info response.
+                return self.handle_OPTIONS(req, start_response)
 
-        if req.method == 'PUT' and req.headers.get('X-Copy-From'):
-            return self.handle_PUT(req, start_response)
-        elif req.method == 'COPY':
-            return self.handle_COPY(req, start_response)
-        elif req.method == 'POST' and self.object_post_as_copy:
-            return self.handle_object_post_as_copy(req, start_response)
-        elif req.method == 'OPTIONS':
-            # Does not interfere with OPTIONS response from (account,container)
-            # servers and /info response.
-            return self.handle_OPTIONS(req, start_response)
+        except HTTPException as e:
+            return e(req.environ, start_response)
 
         return self.app(env, start_response)
 

@@ -150,13 +150,15 @@ class TestServerSideCopyMiddleware(unittest.TestCase):
         self.assertEqual(len(self.authorized), 1)
         self.assertRequestEqual(req, self.authorized[0])
 
-    def test_object_delete_pass_through(self):
-        self.app.register('DELETE', '/v1/a/c/o', swob.HTTPOk, {})
-        req = Request.blank('/v1/a/c/o', method='DELETE')
-        status, headers, body = self.call_ssc(req)
-        self.assertEqual(status, '200 OK')
-        self.assertEqual(len(self.authorized), 1)
-        self.assertRequestEqual(req, self.authorized[0])
+    def test_object_pass_through_methods(self):
+        for method in ['DELETE', 'GET', 'HEAD', 'REPLICATE']:
+            self.app.register(method, '/v1/a/c/o', swob.HTTPOk, {})
+            req = Request.blank('/v1/a/c/o', method=method)
+            status, headers, body = self.call_ssc(req)
+            self.assertEqual(status, '200 OK')
+            self.assertEqual(len(self.authorized), 1)
+            self.assertRequestEqual(req, self.authorized[0])
+            self.assertNotIn('swift.orig_req_method', req.environ)
 
     def test_POST_as_COPY_simple(self):
         self.app.register('GET', '/v1/a/c/o', swob.HTTPOk, {}, 'passed')
@@ -166,6 +168,8 @@ class TestServerSideCopyMiddleware(unittest.TestCase):
         self.assertEqual(status, '202 Accepted')
         self.assertEqual(len(self.authorized), 1)
         self.assertRequestEqual(req, self.authorized[0])
+        # For basic test cases, assert orig_req_method behavior
+        self.assertEqual(req.environ['swift.orig_req_method'], 'POST')
 
     def test_POST_as_COPY_201_return_202(self):
         self.app.register('GET', '/v1/a/c/o', swob.HTTPOk, {}, 'passed')
@@ -256,6 +260,8 @@ class TestServerSideCopyMiddleware(unittest.TestCase):
         self.assertEqual('/v1/a/c/o', self.authorized[0].path)
         self.assertEqual('PUT', self.authorized[1].method)
         self.assertEqual('/v1/a/c/o2', self.authorized[1].path)
+        # For basic test cases, assert orig_req_method behavior
+        self.assertNotIn('swift.orig_req_method', req.environ)
 
     def test_static_large_object_manifest(self):
         self.app.register('GET', '/v1/a/c/o', swob.HTTPOk,
@@ -521,24 +527,16 @@ class TestServerSideCopyMiddleware(unittest.TestCase):
         req = Request.blank('/v1/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
                             headers={'Content-Length': '0',
                                      'X-Copy-From': '/c'})
-        try:
-            status, headers, body = self.call_ssc(req)
-        except HTTPException as resp:
-            self.assertEqual("412 Precondition Failed", str(resp))
-        else:
-            self.fail("Expecting HTTPException.")
+        status, headers, body = self.call_ssc(req)
+        self.assertEqual(status, '412 Precondition Failed')
 
     def test_copy_with_no_object_in_x_copy_from_and_account(self):
         req = Request.blank('/v1/a/c/o', environ={'REQUEST_METHOD': 'PUT'},
                             headers={'Content-Length': '0',
                                      'X-Copy-From': '/c',
                                      'X-Copy-From-Account': 'a'})
-        try:
-            status, headers, body = self.call_ssc(req)
-        except HTTPException as resp:
-            self.assertEqual("412 Precondition Failed", str(resp))
-        else:
-            self.fail("Expecting HTTPException.")
+        status, headers, body = self.call_ssc(req)
+        self.assertEqual(status, '412 Precondition Failed')
 
     def test_copy_with_bad_x_copy_from_account(self):
         req = Request.blank('/v1/a/c/o',
@@ -546,12 +544,8 @@ class TestServerSideCopyMiddleware(unittest.TestCase):
                             headers={'Content-Length': '0',
                                      'X-Copy-From': '/c/o',
                                      'X-Copy-From-Account': '/i/am/bad'})
-        try:
-            status, headers, body = self.call_ssc(req)
-        except HTTPException as resp:
-            self.assertEqual("412 Precondition Failed", str(resp))
-        else:
-            self.fail("Expecting HTTPException.")
+        status, headers, body = self.call_ssc(req)
+        self.assertEqual(status, '412 Precondition Failed')
 
     def test_copy_server_error_reading_source(self):
         self.app.register('GET', '/v1/a/c/o', swob.HTTPServiceUnavailable, {})
@@ -673,6 +667,8 @@ class TestServerSideCopyMiddleware(unittest.TestCase):
             ('PUT', '/v1/a/c/o-copy')])
         self.assertIn('etag', self.app.headers[1])
         self.assertEqual(self.app.headers[1]['etag'], 'is sent')
+        # For basic test cases, assert orig_req_method behavior
+        self.assertEqual(req.environ['swift.orig_req_method'], 'COPY')
 
     def test_basic_DLO(self):
         self.app.register('GET', '/v1/a/c/o', swob.HTTPOk, {
@@ -992,36 +988,27 @@ class TestServerSideCopyMiddleware(unittest.TestCase):
         req = Request.blank('/v1/a/c/o',
                             environ={'REQUEST_METHOD': 'COPY'},
                             headers={'Destination': 'c_o'})
-        try:
-            status, headers, body = self.call_ssc(req)
-        except HTTPException as resp:
-            self.assertEqual("412 Precondition Failed", str(resp))
-        else:
-            self.fail("Expecting HTTPException.")
+        status, headers, body = self.call_ssc(req)
+
+        self.assertEqual(status, '412 Precondition Failed')
 
     def test_COPY_account_no_object_in_destination(self):
         req = Request.blank('/v1/a/c/o',
                             environ={'REQUEST_METHOD': 'COPY'},
                             headers={'Destination': 'c_o',
                                      'Destination-Account': 'a1'})
-        try:
-            status, headers, body = self.call_ssc(req)
-        except HTTPException as resp:
-            self.assertEqual("412 Precondition Failed", str(resp))
-        else:
-            self.fail("Expecting HTTPException.")
+        status, headers, body = self.call_ssc(req)
+
+        self.assertEqual(status, '412 Precondition Failed')
 
     def test_COPY_account_bad_destination_account(self):
         req = Request.blank('/v1/a/c/o',
                             environ={'REQUEST_METHOD': 'COPY'},
                             headers={'Destination': '/c/o',
                                      'Destination-Account': '/i/am/bad'})
-        try:
-            status, headers, body = self.call_ssc(req)
-        except HTTPException as resp:
-            self.assertEqual("412 Precondition Failed", str(resp))
-        else:
-            self.fail("Expecting HTTPException.")
+        status, headers, body = self.call_ssc(req)
+
+        self.assertEqual(status, '412 Precondition Failed')
 
     def test_COPY_server_error_reading_source(self):
         self.app.register('GET', '/v1/a/c/o', swob.HTTPServiceUnavailable, {})
@@ -1210,6 +1197,8 @@ class TestServerSideCopyMiddleware(unittest.TestCase):
         self.assertEqual(len(self.authorized), 1)
         self.assertEqual('OPTIONS', self.authorized[0].method)
         self.assertEqual('/v1/a/c/o', self.authorized[0].path)
+        # For basic test cases, assert orig_req_method behavior
+        self.assertNotIn('swift.orig_req_method', req.environ)
 
     def test_COPY_in_OPTIONS_response_CORS(self):
         self.app.register('OPTIONS', '/v1/a/c/o', swob.HTTPOk,

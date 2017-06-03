@@ -1,3 +1,13 @@
+swift (2.10.2-1) unstable; urgency=medium
+
+  * New upstream stable release
+  * Removed patches applied upstream:
+    - Quarantine_malformed_database_schema_SQLite_errors.patch
+    - For_any_part_only_one_replica_can_move_in_a_rebalance.patch
+    - FTBFS_i386.patch
+
+ -- Ondřej Nový <onovy@debian.org>  Sat, 03 Jun 2017 13:35:44 +0200
+
 swift (2.10.1-3) unstable; urgency=medium
 
   * d/patches/FTBFS_i386.patch: Fix FTBFS on i386 (Closes: #860638)
