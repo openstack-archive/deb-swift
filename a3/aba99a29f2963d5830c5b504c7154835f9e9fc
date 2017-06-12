@@ -1,0 +1,9 @@
+Code-Review+2: Alistair Coles <alistairncoles@gmail.com>
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Workflow+1: Tim Burke <tim@swiftstack.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 12 Jun 2017 19:18:47 +0000
+Reviewed-on: https://review.openstack.org/469880
+Project: openstack/deb-swift
+Branch: refs/heads/master
