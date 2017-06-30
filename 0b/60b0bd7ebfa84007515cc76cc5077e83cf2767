@@ -1,0 +1,10 @@
+Code-Review+1: Romain LE DISEZ <romain.le-disez@corp.ovh.com>
+Code-Review+2: Clay Gerrard <clay.gerrard@gmail.com>
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Workflow+1: Thiago da Silva <thiago@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 30 Jun 2017 18:44:44 +0000
+Reviewed-on: https://review.openstack.org/307937
+Project: openstack/deb-swift
+Branch: refs/heads/master
