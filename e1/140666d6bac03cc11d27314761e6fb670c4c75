@@ -1,0 +1,10 @@
+Code-Review+2: Tim Burke <tim@swiftstack.com>
+Code-Review+2: Pete Zaitcev <zaitcev@kotori.zaitcev.us>
+Code-Review+2: Matthew Oliver <matt@oliver.net.au>
+Workflow+1: Matthew Oliver <matt@oliver.net.au>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 05 Jul 2017 14:40:42 +0000
+Reviewed-on: https://review.openstack.org/337297
+Project: openstack/deb-swift
+Branch: refs/heads/master
