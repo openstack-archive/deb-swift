@@ -1,0 +1,9 @@
+Code-Review+2: Mahati Chamarthy <mahati.chamarthy@gmail.com>
+Code-Review+2: Thiago da Silva <thiago@redhat.com>
+Workflow+1: Thiago da Silva <thiago@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 18 Jul 2017 03:28:08 +0000
+Reviewed-on: https://review.openstack.org/482488
+Project: openstack/deb-swift
+Branch: refs/heads/master
