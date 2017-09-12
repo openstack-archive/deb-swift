@@ -1,8 +1,0 @@
-{
-    "endpoints": [
-        "http://storage02.swiftdrive:6202/d2/617/AUTH_dev",
-        "http://storage01.swiftdrive:6202/d8/617/AUTH_dev",
-        "http://storage01.swiftdrive:6202/d11/617/AUTH_dev"
-    ],
-    "headers": {}
-}

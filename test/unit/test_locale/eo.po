@@ -1,2 +1,0 @@
-msgid "test message"
-msgstr "prova mesaĝo"
